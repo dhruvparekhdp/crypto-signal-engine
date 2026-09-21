@@ -68,6 +68,15 @@ async def restore_database(backup_file: str, target_url: str) -> None:
     if backup_file.endswith(".gz"):
         with gzip.open(backup_file, "rt", encoding="utf-8") as f:
             data = json.load(f)
+    elif backup_file.endswith(".zip"):
+        import zipfile
+        with zipfile.ZipFile(backup_file, "r") as zf:
+            json_files = [name for name in zf.namelist() if name.endswith(".json")]
+            if not json_files:
+                raise ValueError(f"No .json file found in zip archive: {zf.namelist()}")
+            print(f" Found '{json_files[0]}' inside zip archive.")
+            with zf.open(json_files[0]) as f:
+                data = json.load(f)
     else:
         with open(backup_file, "r", encoding="utf-8") as f:
             data = json.load(f)
