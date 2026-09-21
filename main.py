@@ -32,14 +32,18 @@ async def main() -> None:
     configure_logging()
     log.info("crypto_signal_engine_starting")
 
-    await init_db()
-    log.info("database_initialised")
-
-    # Render injects PORT; fall back to 8080 locally
+    # Render/EC2 injects PORT; fall back to 8080 locally
     port = int(os.environ.get("PORT", 8080))
 
     runner = AppRunner()
     health_runner = await start_health_server(runner, port=port)
+    log.info("web_server_started", port=port, health_url=f"http://0.0.0.0:{port}/health")
+
+    try:
+        await init_db()
+        log.info("database_initialised")
+    except Exception:
+        log.exception("database_initialisation_failed")
 
     stop_event = asyncio.Event()
 
