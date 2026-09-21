@@ -1,0 +1,47 @@
+name: Deploy to EC2
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    name: Auto Deploy to AWS EC2
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Deploy via SSH
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.EC2_HOST }}
+          username: ${{ secrets.EC2_USER || 'ubuntu' }}
+          key: ${{ secrets.EC2_SSH_KEY }}
+          port: ${{ secrets.EC2_PORT || 22 }}
+          script_stop: true
+          script: |
+            set -e
+            echo "🚀 [Deploy] Pulling latest changes on EC2..."
+            cd ~/crypto-signal-engine
+
+            # Ensure git repo is clean and up-to-date with main
+            git fetch origin main
+            git reset --hard origin/main
+
+            # Activate virtual environment and update packages
+            source .venv/bin/activate
+            pip install --upgrade pip
+            pip install -r requirements.txt
+
+            # Restart the background systemd service if installed
+            if systemctl is-active --quiet crypto-engine; then
+              echo "🔄 [Deploy] Restarting crypto-engine service..."
+              sudo systemctl restart crypto-engine
+              sudo systemctl status crypto-engine --no-pager -n 5
+            else
+              echo "ℹ️ [Notice] crypto-engine systemd service not yet active. Run: bash deploy/setup_ec2.sh"
+            fi
+
+            echo "✅ [Deploy] Deployment completed successfully!"
