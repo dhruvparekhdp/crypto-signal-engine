@@ -689,8 +689,9 @@ class AppRunner:
                     st = states.get(sig.symbol.lower())
                     if st is None or not st.candles_1m:
                         continue
+                    sig_ts = sig.timestamp.replace(tzinfo=None) if sig.timestamp.tzinfo else sig.timestamp
                     after = [c for c in st.candles_1m
-                             if c.timestamp.replace(tzinfo=None) > sig.timestamp]
+                             if (c.timestamp.replace(tzinfo=None) if c.timestamp.tzinfo else c.timestamp) > sig_ts]
                     if not after:
                         continue
 
@@ -720,7 +721,8 @@ class AppRunner:
                             break
 
                         # Signal is still running. Only expire if past maximum hold time
-                        span = (after[-1].timestamp.replace(tzinfo=None) - sig.timestamp)
+                        last_c_ts = after[-1].timestamp.replace(tzinfo=None) if after[-1].timestamp.tzinfo else after[-1].timestamp
+                        span = last_c_ts - sig_ts
                         paper_max_hold_minutes = pcfg.max_hold_minutes
                         if span.total_seconds() / 60 < paper_max_hold_minutes:
                             continue

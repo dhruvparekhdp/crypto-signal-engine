@@ -419,7 +419,7 @@ async def _api_predict(runner, request: web.Request) -> web.Response:
         rel = ind.relative_volume([c.volume for c in closed]) if closed else None
         newest = candles[-1].timestamp if candles else None
         lag = (None if newest is None else
-               round((datetime.now(UTC) - newest.replace(tzinfo=UTC)).total_seconds() / 60, 1))
+               round((datetime.now(UTC) - (newest if newest.tzinfo else newest.replace(tzinfo=UTC))).total_seconds() / 60, 1))
         row = {
             "symbol": st.symbol.upper(),
             "price": st.current_price,
@@ -482,7 +482,7 @@ async def _api_debug_signals(runner, request: web.Request) -> web.Response:
     feed = {"source": "binance klines (REST)"}
     if kl is not None:
         age = (None if kl.last_success is None else
-               round((datetime.now(UTC) - kl.last_success).total_seconds() / 60, 1))
+               round((datetime.now(UTC) - (kl.last_success if kl.last_success.tzinfo else kl.last_success.replace(tzinfo=UTC))).total_seconds() / 60, 1))
         feed.update({
             "host": kl.host or "none answered",
             "last_success_minutes_ago": age,
@@ -554,7 +554,8 @@ async def _api_debug_signals(runner, request: web.Request) -> web.Response:
                                   f"about {bar:.0f}x")
         last = st.candles_1m[-1].timestamp if st.candles_1m else None
         if last is not None:
-            lag = (datetime.now(UTC) - last.replace(tzinfo=UTC)).total_seconds() / 60
+            last_aware = last if last.tzinfo else last.replace(tzinfo=UTC)
+            lag = (datetime.now(UTC) - last_aware).total_seconds() / 60
             row["newest_candle_minutes_ago"] = round(lag, 1)
             if lag > 30:
                 row["stale_warning"] = ("newest candle is "

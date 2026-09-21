@@ -7,7 +7,8 @@ from storage.database import Base
 
 
 def _now_utc() -> datetime:
-    return datetime.now(UTC)
+    """Return current UTC time as naive datetime for TIMESTAMP WITHOUT TIME ZONE compatibility."""
+    return datetime.now(UTC).replace(tzinfo=None)
 
 
 class Match(Base):

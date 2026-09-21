@@ -47,7 +47,7 @@ class TestResolutionRules(unittest.IsolatedAsyncioTestCase):
     async def test_an_old_pending_signal_is_offered(self):
         repo = self.Repository(self.maker())
         row = await self._log(repo)
-        row.timestamp = datetime.now(UTC) - timedelta(hours=8)
+        row.timestamp = datetime.now(UTC).replace(tzinfo=None) - timedelta(hours=8)
         await repo.session.commit()
         self.assertEqual(len(await repo.pending_crypto_signals(older_than_minutes=240)), 1)
 
@@ -62,7 +62,7 @@ class TestResolutionRules(unittest.IsolatedAsyncioTestCase):
     async def test_a_resolved_signal_is_no_longer_pending(self):
         repo = self.Repository(self.maker())
         row = await self._log(repo)
-        row.timestamp = datetime.now(UTC) - timedelta(hours=8)
+        row.timestamp = datetime.now(UTC).replace(tzinfo=None) - timedelta(hours=8)
         await repo.session.commit()
         await repo.resolve_crypto_signal(row.id, "lost", -1.0)
         self.assertEqual(await repo.pending_crypto_signals(older_than_minutes=240), [])
@@ -71,7 +71,7 @@ class TestResolutionRules(unittest.IsolatedAsyncioTestCase):
         repo = self.Repository(self.maker())
         recent = await self._log(repo)
         old = await self._log(repo, current_price=1800.0)
-        old.timestamp = datetime.now(UTC) - timedelta(days=20)
+        old.timestamp = datetime.now(UTC).replace(tzinfo=None) - timedelta(days=20)
         await repo.session.commit()
 
         live = await repo.crypto_signals_between(7)

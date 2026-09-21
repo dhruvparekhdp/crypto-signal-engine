@@ -18,6 +18,11 @@ from storage.models import (
 )
 
 
+def _now_utc() -> datetime:
+    """Current UTC time as naive datetime for TIMESTAMP WITHOUT TIME ZONE database compatibility."""
+    return datetime.now(UTC).replace(tzinfo=None)
+
+
 class Repository:
     def __init__(self, session: AsyncSession) -> None:
         self.session = session
@@ -33,14 +38,14 @@ class Repository:
                 tournament=tournament, surface=surface,
             ))
         else:
-            result.last_updated = datetime.now(UTC)
+            result.last_updated = _now_utc()
         await self.session.commit()
 
     async def mark_match_finished(self, match_id: str) -> None:
         match = await self.session.get(Match, match_id)
         if match:
             match.is_finished = True
-            match.last_updated = datetime.now(UTC)
+            match.last_updated = _now_utc()
             await self.session.commit()
 
     # ── OddsSnapshot ───────────────────────────────────────────
@@ -48,12 +53,12 @@ class Repository:
     async def save_odds_snapshot(self, match_id: str, odds_p1: float, odds_p2: float) -> None:
         self.session.add(OddsSnapshot(
             match_id=match_id, odds_p1=odds_p1, odds_p2=odds_p2,
-            timestamp=datetime.now(UTC),
+            timestamp=_now_utc(),
         ))
         await self.session.commit()
 
     async def get_recent_odds(self, match_id: str, minutes: int = 10) -> list[OddsSnapshot]:
-        since = datetime.now(UTC) - timedelta(minutes=minutes)
+        since = _now_utc() - timedelta(minutes=minutes)
         result = await self.session.execute(
             select(OddsSnapshot)
             .where(OddsSnapshot.match_id == match_id)
@@ -85,7 +90,7 @@ class Repository:
             sets_p1_at_signal=sets_p1, sets_p2_at_signal=sets_p2,
             games_p1_at_signal=games_p1, games_p2_at_signal=games_p2,
             outcome="pending", match_winner=0,
-            timestamp=datetime.now(UTC),
+            timestamp=_now_utc(),
         ))
         await self.session.commit()
 
@@ -120,7 +125,7 @@ class Repository:
         return result.scalar_one_or_none()
 
     async def get_recent_signals(self, hours: int = 24) -> list[SignalLog]:
-        since = datetime.now(UTC) - timedelta(hours=hours)
+        since = _now_utc() - timedelta(hours=hours)
         result = await self.session.execute(
             select(SignalLog)
             .where(SignalLog.timestamp >= since)
@@ -174,7 +179,7 @@ class Repository:
             serve_pct_p2=serve_pct_p2,
             game_log_json=json.dumps(game_log),
             winner=0,
-            timestamp=datetime.now(UTC),
+            timestamp=_now_utc(),
         ))
         await self.session.commit()
 
@@ -221,7 +226,7 @@ class Repository:
             total_games=total_games,
             total_signals_fired=total_signals,
             signals_correct=signals_correct,
-            completed_at=datetime.now(UTC),
+            completed_at=_now_utc(),
         ))
         await self.session.commit()
 
@@ -257,7 +262,7 @@ class Repository:
             match_progress=features.match_progress,
             p1_opening_implied=features.p1_opening_implied,
             winner=winner,
-            recorded_at=datetime.now(UTC),
+            recorded_at=_now_utc(),
         ))
         await self.session.commit()
 
@@ -280,7 +285,7 @@ class Repository:
     # ── Maintenance ────────────────────────────────────────────
 
     async def delete_old_odds_snapshots(self, days: int = 7) -> None:
-        cutoff = datetime.now(UTC) - timedelta(days=days)
+        cutoff = _now_utc() - timedelta(days=days)
         result = await self.session.execute(
             select(OddsSnapshot).where(OddsSnapshot.timestamp < cutoff)
         )
@@ -295,7 +300,7 @@ class Repository:
         for every watchlist symbol — left unbounded they'd eventually fill a
         free-tier Postgres instance, same as odds_snapshots would without this.
         """
-        cutoff = datetime.now(UTC) - timedelta(days=days)
+        cutoff = _now_utc() - timedelta(days=days)
         await self.session.execute(delete(CryptoSnapshot).where(CryptoSnapshot.timestamp < cutoff))
         await self.session.execute(delete(CommoditySnapshot).where(CommoditySnapshot.timestamp < cutoff))
         await self.session.execute(delete(CryptoSignalLog).where(CryptoSignalLog.timestamp < cutoff))
@@ -449,7 +454,7 @@ class Repository:
             bollinger_lower=bollinger_lower,
             atr_14=atr_14,
             sentiment_score=sentiment_score,
-            timestamp=datetime.now(UTC),
+            timestamp=_now_utc(),
         ))
         await self.session.commit()
 
@@ -465,7 +470,7 @@ class Repository:
             price=price,
             rsi_14=rsi_14,
             atr_14=atr_14,
-            timestamp=datetime.now(UTC),
+            timestamp=_now_utc(),
         ))
         await self.session.commit()
 
@@ -501,12 +506,12 @@ class Repository:
             indicators_summary=indicators_summary,
             outcome="pending",
             pnl_pct=0.0,
-            timestamp=datetime.now(UTC),
+            timestamp=_now_utc(),
         ))
         await self.session.commit()
 
     async def get_recent_crypto_signals(self, hours: int = 24) -> list[CryptoSignalLog]:
-        since = datetime.now(UTC) - timedelta(hours=hours)
+        since = _now_utc() - timedelta(hours=hours)
         result = await self.session.execute(
             select(CryptoSignalLog)
             .where(CryptoSignalLog.timestamp >= since)
@@ -525,7 +530,7 @@ class Repository:
         sym = symbol.strip().lower()
         existing = await self.session.get(CryptoWatchlistEntry, sym)
         if existing is None:
-            self.session.add(CryptoWatchlistEntry(symbol=sym, added_at=datetime.now(UTC)))
+            self.session.add(CryptoWatchlistEntry(symbol=sym, added_at=_now_utc()))
             await self.session.commit()
 
     async def remove_crypto_watchlist_symbol(self, symbol: str) -> None:
@@ -546,7 +551,7 @@ class Repository:
             return existing
         symbols = [s.strip().lower() for s in default_symbols if s.strip()]
         for sym in symbols:
-            self.session.add(CryptoWatchlistEntry(symbol=sym, added_at=datetime.now(UTC)))
+            self.session.add(CryptoWatchlistEntry(symbol=sym, added_at=_now_utc()))
         await self.session.commit()
         return symbols
 
@@ -581,7 +586,7 @@ class Repository:
         month still knows the leverage and risk it was actually run with.
         """
         cycle = PaperCycle(
-            started_at=datetime.now(UTC),
+            started_at=_now_utc(),
             starting_wallet=starting_wallet,
             target_wallet=target_wallet,
             wallet=starting_wallet,
@@ -616,7 +621,7 @@ class Repository:
             return
         cycle.status = status
         cycle.note = note
-        cycle.ended_at = datetime.now(UTC)
+        cycle.ended_at = _now_utc()
         await self.session.commit()
 
     async def get_open_positions(self, cycle_id: int) -> list[PaperPosition]:
@@ -768,7 +773,7 @@ class Repository:
             return False, None
         token = secrets.token_hex(32)
         auth.session_token = token
-        auth.updated_at = datetime.now(UTC)
+        auth.updated_at = _now_utc()
         await self.session.commit()
         return True, token
 
@@ -798,7 +803,7 @@ class Repository:
             auth.password_hash = p_hash
             auth.salt = salt
             auth.session_token = None
-            auth.updated_at = datetime.now(UTC)
+            auth.updated_at = _now_utc()
         await self.session.commit()
 
     # ── External news sentiment ───────────────────────────────────────────
@@ -839,7 +844,7 @@ class Repository:
         return accepted, duplicates
 
     async def recent_news_sentiment(self, symbol: str, hours: int = 6) -> list[NewsSentiment]:
-        cutoff = datetime.now(UTC) - timedelta(hours=hours)
+        cutoff = _now_utc() - timedelta(hours=hours)
         res = await self.session.execute(
             select(NewsSentiment)
             .where(NewsSentiment.published_at >= cutoff)
@@ -856,7 +861,7 @@ class Repository:
         Signals inside a window. `older_than_days` carves out the recent end,
         which is what splits the live dashboard from the archive.
         """
-        now = datetime.now(UTC)
+        now = _now_utc()
         q = select(CryptoSignalLog).where(
             CryptoSignalLog.timestamp >= now - timedelta(days=newer_than_days))
         if older_than_days:
@@ -873,7 +878,7 @@ class Repository:
         The age floor matters: resolving a signal the moment it fires would
         record whatever the first tick did, which is noise rather than outcome.
         """
-        cutoff = datetime.now(UTC) - timedelta(minutes=older_than_minutes)
+        cutoff = _now_utc() - timedelta(minutes=older_than_minutes)
         res = await self.session.execute(
             select(CryptoSignalLog)
             .where(CryptoSignalLog.outcome == "pending")
@@ -914,4 +919,4 @@ def _parse_dt(value) -> datetime:
             return datetime.fromisoformat(value.replace("Z", "+00:00")).replace(tzinfo=None)
         except ValueError:
             pass
-    return datetime.now(UTC).replace(tzinfo=None)
+    return _now_utc()
