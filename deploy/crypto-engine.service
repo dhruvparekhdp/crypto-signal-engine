@@ -6,6 +6,7 @@ After=network.target
 Type=simple
 User=ubuntu
 WorkingDirectory=/home/ubuntu/crypto-signal-engine
+EnvironmentFile=-/home/ubuntu/crypto-signal-engine/.env
 ExecStart=/home/ubuntu/crypto-signal-engine/.venv/bin/python main.py
 Restart=always
 RestartSec=5

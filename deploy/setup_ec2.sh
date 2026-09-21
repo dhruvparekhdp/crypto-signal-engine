@@ -15,7 +15,7 @@ sudo cp "${REPO_DIR}/deploy/${SERVICE_NAME}.service" "/etc/systemd/system/${SERV
 
 # 2. Allow ubuntu user to restart crypto-engine without password prompt (needed for GitHub Actions)
 echo "-> Configuring passwordless systemctl restart for ubuntu..."
-echo "ubuntu ALL=(ALL) NOPASSWD: /bin/systemctl restart ${SERVICE_NAME}, /bin/systemctl status ${SERVICE_NAME}, /bin/systemctl stop ${SERVICE_NAME}, /bin/systemctl start ${SERVICE_NAME}" | sudo tee "/etc/sudoers.d/${SERVICE_NAME}" > /dev/null
+echo "ubuntu ALL=(ALL) NOPASSWD: /bin/systemctl restart ${SERVICE_NAME}, /usr/bin/systemctl restart ${SERVICE_NAME}, /bin/systemctl status ${SERVICE_NAME}, /usr/bin/systemctl status ${SERVICE_NAME}, /bin/systemctl stop ${SERVICE_NAME}, /usr/bin/systemctl stop ${SERVICE_NAME}, /bin/systemctl start ${SERVICE_NAME}, /usr/bin/systemctl start ${SERVICE_NAME}" | sudo tee "/etc/sudoers.d/${SERVICE_NAME}" > /dev/null
 sudo chmod 0440 "/etc/sudoers.d/${SERVICE_NAME}"
 
 # 3. Reload systemd daemon and enable service
