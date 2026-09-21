@@ -11,7 +11,7 @@ Limitations:
 """
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta, timezone
 
 import httpx
 import structlog
@@ -269,5 +269,5 @@ class FootballESPNCollector:
             period=period,
             is_scheduled=is_scheduled_status,
             kickoff_time=kickoff_time,
-            timestamp=datetime.utcnow(),
+            timestamp=datetime.now(UTC),
         )

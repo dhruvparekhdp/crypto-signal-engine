@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 
 import structlog
 
@@ -64,7 +64,7 @@ class FootballEngine:
         return fired
 
     def get_recent_signals(self, hours: int = 24) -> list[FootballSignal]:
-        cutoff = datetime.utcnow() - timedelta(hours=hours)
+        cutoff = datetime.now(UTC) - timedelta(hours=hours)
         return [s for s in self._recent_signals if s.timestamp >= cutoff]
 
     def _is_on_cooldown(self, match_id: str, signal_type: str) -> bool:
@@ -72,7 +72,7 @@ class FootballEngine:
         last = self._cooldowns.get(key)
         if last is None:
             return False
-        return datetime.utcnow() - last < timedelta(minutes=settings.signal_cooldown_minutes)
+        return datetime.now(UTC) - last < timedelta(minutes=settings.signal_cooldown_minutes)
 
     def _set_cooldown(self, match_id: str, signal_type: str) -> None:
-        self._cooldowns[(match_id, signal_type)] = datetime.utcnow()
+        self._cooldowns[(match_id, signal_type)] = datetime.now(UTC)

@@ -15,7 +15,7 @@ Endpoints used:
 """
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import UTC, datetime
 
 import httpx
 import structlog
@@ -185,7 +185,7 @@ class BetsAPICollector(BaseCollector):
 
         if odds_p1 > 1.0 and odds_p2 > 1.0:
             odds_history.append(OddsPoint(odds_p1=odds_p1, odds_p2=odds_p2,
-                                          timestamp=datetime.utcnow()))
+                                          timestamp=datetime.now(UTC)))
 
         log.info("betsapi_live_match",
                  match_id=match_id, home=home_name, away=away_name,
@@ -211,5 +211,5 @@ class BetsAPICollector(BaseCollector):
             odds_history=odds_history,
             game_log=game_log,
             match_duration_mins=0,
-            timestamp=datetime.utcnow(),
+            timestamp=datetime.now(UTC),
         )

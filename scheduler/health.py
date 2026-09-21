@@ -9,7 +9,7 @@ from aiohttp import web
 from analysis.scalp_levels import ScalpConfig
 from config.settings import settings as _SETTINGS
 
-_start_time = datetime.utcnow()
+_start_time = datetime.now(UTC)
 
 # One cost model for the page and the engine. The dashboard used to carry its
 # own copy of the fee arithmetic in JavaScript, which drifted the moment the
@@ -18,6 +18,13 @@ _SCALP = ScalpConfig()
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
+
+def _dt_sort_key(dt: datetime | None) -> datetime:
+    if dt is None:
+        return datetime.now(UTC)
+    if dt.tzinfo is None:
+        return dt.replace(tzinfo=UTC)
+    return dt
 
 def _reconstruct_sets(
     game_log: list[int],
@@ -60,7 +67,7 @@ def _settings_sports_enabled() -> bool:
 async def _api_status(runner, request: web.Request) -> web.Response:
     status = runner.get_status()
     count = await runner.store.count()
-    uptime = int((datetime.utcnow() - _start_time).total_seconds())
+    uptime = int((datetime.now(UTC) - _start_time).total_seconds())
     return web.Response(
         text=json.dumps({
             "uptime_seconds": uptime,
@@ -79,7 +86,7 @@ async def _api_matches(runner, request: web.Request) -> web.Response:
     live = [s for s in states if not s.is_scheduled]
     soon = sorted(
         [s for s in states if s.is_scheduled],
-        key=lambda s: s.start_time or datetime.utcnow(),
+        key=lambda s: _dt_sort_key(s.start_time),
     )
     matches = []
     for s in live + soon:
@@ -130,7 +137,7 @@ async def _api_football_matches(runner, request: web.Request) -> web.Response:
     live = [s for s in states if not s.is_scheduled]
     soon = sorted(
         [s for s in states if s.is_scheduled],
-        key=lambda s: s.kickoff_time or datetime.utcnow(),
+        key=lambda s: _dt_sort_key(s.kickoff_time),
     )
     matches = []
     for s in live + soon:
@@ -412,7 +419,7 @@ async def _api_predict(runner, request: web.Request) -> web.Response:
         rel = ind.relative_volume([c.volume for c in closed]) if closed else None
         newest = candles[-1].timestamp if candles else None
         lag = (None if newest is None else
-               round((datetime.now(UTC) - newest.replace(tzinfo=UTC)).total_seconds() / 60, 1))
+               round((datetime.now(UTC) - (newest if newest.tzinfo else newest.replace(tzinfo=UTC))).total_seconds() / 60, 1))
         row = {
             "symbol": st.symbol.upper(),
             "price": st.current_price,
@@ -475,7 +482,7 @@ async def _api_debug_signals(runner, request: web.Request) -> web.Response:
     feed = {"source": "binance klines (REST)"}
     if kl is not None:
         age = (None if kl.last_success is None else
-               round((datetime.now(UTC) - kl.last_success).total_seconds() / 60, 1))
+               round((datetime.now(UTC) - (kl.last_success if kl.last_success.tzinfo else kl.last_success.replace(tzinfo=UTC))).total_seconds() / 60, 1))
         feed.update({
             "host": kl.host or "none answered",
             "last_success_minutes_ago": age,
@@ -547,7 +554,8 @@ async def _api_debug_signals(runner, request: web.Request) -> web.Response:
                                   f"about {bar:.0f}x")
         last = st.candles_1m[-1].timestamp if st.candles_1m else None
         if last is not None:
-            lag = (datetime.now(UTC) - last.replace(tzinfo=UTC)).total_seconds() / 60
+            last_aware = last if last.tzinfo else last.replace(tzinfo=UTC)
+            lag = (datetime.now(UTC) - last_aware).total_seconds() / 60
             row["newest_candle_minutes_ago"] = round(lag, 1)
             if lag > 30:
                 row["stale_warning"] = ("newest candle is "
@@ -940,7 +948,7 @@ async def _api_paper(runner, request: web.Request) -> web.Response:
             "mark": mark,
             "margin": round(r.margin, 2),
             "stop": r.stop_price,
-            "target": r.target_price,
+            "target": (None if (r.target_price is None or math.isinf(r.target_price)) else r.target_price),
             "liq": r.liq_price,
             "trailing": r.trail_active,
             "confidence": round(r.confidence * 100),
@@ -1028,9 +1036,11 @@ async def _api_crypto_forecasts(runner, request: web.Request) -> web.Response:
 async def _api_crypto_watchlist_add(runner, request: web.Request) -> web.Response:
     """POST /api/crypto/watchlist/add  body: {"symbol": "dogeusdt"}"""
     from scheduler.security import check_bearer_auth
-    denied = check_bearer_auth(request, _SETTINGS.api_auth_token)
-    if denied is not None:
-        return denied
+    is_admin = await _verify_admin_session(request)
+    if not is_admin:
+        denied = check_bearer_auth(request, _SETTINGS.api_auth_token)
+        if denied is not None:
+            return denied
     try:
         body = await request.json()
         symbol = str(body.get("symbol", "")).strip().lower()
@@ -1048,9 +1058,11 @@ async def _api_crypto_watchlist_add(runner, request: web.Request) -> web.Respons
 async def _api_crypto_watchlist_remove(runner, request: web.Request) -> web.Response:
     """POST /api/crypto/watchlist/remove  body: {"symbol": "dogeusdt"}"""
     from scheduler.security import check_bearer_auth
-    denied = check_bearer_auth(request, _SETTINGS.api_auth_token)
-    if denied is not None:
-        return denied
+    is_admin = await _verify_admin_session(request)
+    if not is_admin:
+        denied = check_bearer_auth(request, _SETTINGS.api_auth_token)
+        if denied is not None:
+            return denied
     try:
         body = await request.json()
         symbol = str(body.get("symbol", "")).strip().lower()
@@ -1188,7 +1200,7 @@ async def _api_ingest(runner, request: web.Request) -> web.Response:
     pushed_ids: set[str] = set()
     for m in matches:
         try:
-            ts = datetime.fromisoformat(m["timestamp"]) if m.get("timestamp") else datetime.utcnow()
+            ts = datetime.fromisoformat(m["timestamp"]) if m.get("timestamp") else datetime.now(UTC)
             st = datetime.fromisoformat(m["start_time"]) if m.get("start_time") else None
             sp1 = m.get("serve_stats_p1", {})
             sp2 = m.get("serve_stats_p2", {})
@@ -1247,7 +1259,7 @@ async def _api_debug(runner, request: web.Request) -> web.Response:
     """Diagnostic endpoint — returns collector state, all stored match IDs, and timing."""
     states = await runner.store.get_all()
     fb_states = await runner.football_store.get_all()
-    uptime = int((datetime.utcnow() - _start_time).total_seconds())
+    uptime = int((datetime.now(UTC) - _start_time).total_seconds())
     return web.Response(
         text=json.dumps({
             "uptime_seconds": uptime,
@@ -1280,7 +1292,7 @@ async def _api_debug(runner, request: web.Request) -> web.Response:
 
 async def _health(runner, request: web.Request) -> web.Response:
     count = await runner.store.count()
-    uptime = int((datetime.utcnow() - _start_time).total_seconds())
+    uptime = int((datetime.now(UTC) - _start_time).total_seconds())
     return web.Response(
         text=json.dumps({"status": "ok", "matches_tracked": count, "uptime_seconds": uptime}),
         content_type="application/json",
@@ -3207,6 +3219,7 @@ function fmtDelta(d, ref){
   return d.toFixed(6);
 }
 function fmtPrice(p){
+  if(p == null || !isFinite(p)) return '—';
   if(p>=1000) return p.toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2});
   if(p>=1) return p.toFixed(4);
   return p.toFixed(6);
@@ -3645,7 +3658,7 @@ async def _api_collectors_debug(runner, request: web.Request) -> web.Response:
 
     out: dict = {
         "generated_at_ist": (
-            datetime.utcnow().replace(tzinfo=UTC)
+            datetime.now(UTC)
             .astimezone(__import__("zoneinfo").ZoneInfo("Asia/Kolkata"))
             .strftime("%Y-%m-%d %H:%M:%S IST")
         ),
@@ -3733,7 +3746,7 @@ async def _api_collectors_debug(runner, request: web.Request) -> web.Response:
         import httpx as _httpx
         key = settings.sportradar_api_key
         try:
-            today = datetime.utcnow().strftime("%Y-%m-%d")
+            today = datetime.now(UTC).strftime("%Y-%m-%d")
             async with _httpx.AsyncClient(timeout=12) as c:
                 live_r = await c.get(
                     "https://api.sportradar.com/tennis/trial/v3/en/schedules/live/summaries.json",
@@ -3867,7 +3880,7 @@ async def _api_tables(runner, request: web.Request) -> web.Response:
     except ValueError:
         limit = 100
 
-    out: dict = {"generated_at": datetime.utcnow().isoformat() + "Z", "limit": limit,
+    out: dict = {"generated_at": _iso(datetime.now(UTC)), "limit": limit,
                  "tables": []}
 
     async with engine.connect() as conn:
@@ -3941,12 +3954,183 @@ async def _api_auth_verify(runner, request: web.Request) -> web.Response:
     return web.json_response({"ok": True})
 
 
+async def _verify_admin_session(request: web.Request) -> bool:
+    """Check X-Settings-Token header, Bearer token, or query param against DB."""
+    token = request.headers.get("X-Settings-Token") or ""
+    if not token:
+        auth_hdr = request.headers.get("Authorization") or ""
+        if auth_hdr.startswith("Bearer "):
+            token = auth_hdr[7:].strip()
+    if not token:
+        token = request.query.get("token") or ""
+    if not token:
+        return False
+    from storage.database import AsyncSessionFactory
+    from storage.repository import Repository
+    try:
+        async with AsyncSessionFactory() as session:
+            return await Repository(session).validate_session_token(token)
+    except Exception:
+        return False
+
+
+async def _api_settings_auth_login(runner, request: web.Request) -> web.Response:
+    try:
+        body = await request.json()
+        password = str(body.get("password") or "")
+        if not password:
+            return web.json_response({"ok": False, "error": "Password required"}, status=400)
+        from storage.database import AsyncSessionFactory
+        from storage.repository import Repository
+        async with AsyncSessionFactory() as session:
+            repo = Repository(session)
+            ok, token = await repo.verify_admin_password(password)
+            if not ok or not token:
+                return web.json_response({"ok": False, "error": "Invalid password"}, status=401)
+            return web.json_response({"ok": True, "token": token})
+    except Exception as exc:
+        return web.json_response({"ok": False, "error": str(exc)}, status=500)
+
+
+async def _api_settings_auth_status(runner, request: web.Request) -> web.Response:
+    ok = await _verify_admin_session(request)
+    return web.json_response({"authenticated": ok})
+
+
+async def _api_settings_auth_logout(runner, request: web.Request) -> web.Response:
+    token = request.headers.get("X-Settings-Token") or ""
+    if not token:
+        auth_hdr = request.headers.get("Authorization") or ""
+        if auth_hdr.startswith("Bearer "):
+            token = auth_hdr[7:].strip()
+    if token:
+        from storage.database import AsyncSessionFactory
+        from storage.repository import Repository
+        try:
+            async with AsyncSessionFactory() as session:
+                await Repository(session).invalidate_session_token(token)
+        except Exception:
+            pass
+    return web.json_response({"ok": True})
+
+
+async def _api_paper_config_get(runner, request: web.Request) -> web.Response:
+    from storage.database import AsyncSessionFactory
+    from storage.repository import Repository
+    async with AsyncSessionFactory() as session:
+        cfg = await Repository(session).get_paper_config()
+        return web.json_response({
+            "starting_wallet": cfg.starting_wallet,
+            "target_wallet": cfg.target_wallet,
+            "leverage": cfg.leverage,
+            "stop_pct_of_margin": cfg.stop_pct_of_margin,
+            "reward_risk": cfg.reward_risk,
+            "min_confidence": cfg.min_confidence,
+            "max_concurrent": cfg.max_concurrent,
+            "max_hold_minutes": cfg.max_hold_minutes,
+            "scaled_sizing": cfg.scaled_sizing,
+            "trailing_enabled": cfg.trailing_enabled,
+            "scaled_leverage": cfg.scaled_leverage,
+            "ladder_enabled": cfg.ladder_enabled,
+            "ladder_tight": cfg.ladder_tight,
+            "max_leverage": cfg.max_leverage,
+            "usdt_inr": cfg.usdt_inr,
+            "alert_telegram": cfg.alert_telegram,
+            "enabled": _SETTINGS.paper_trading_enabled,
+        })
+
+
+async def _api_paper_config_post(runner, request: web.Request) -> web.Response:
+    is_admin = await _verify_admin_session(request)
+    if not is_admin:
+        return web.json_response({"error": "unauthorized"}, status=401)
+    try:
+        body = await request.json()
+        from storage.database import AsyncSessionFactory
+        from storage.repository import Repository
+        async with AsyncSessionFactory() as session:
+            repo = Repository(session)
+            cfg = await repo.update_paper_config(
+                starting_wallet=float(body["starting_wallet"]) if "starting_wallet" in body else None,
+                target_wallet=float(body["target_wallet"]) if "target_wallet" in body else None,
+                leverage=float(body["leverage"]) if "leverage" in body else None,
+                stop_pct_of_margin=float(body["stop_pct_of_margin"]) if "stop_pct_of_margin" in body else None,
+                reward_risk=float(body["reward_risk"]) if "reward_risk" in body else None,
+                min_confidence=float(body["min_confidence"]) if "min_confidence" in body else None,
+                max_concurrent=int(body["max_concurrent"]) if "max_concurrent" in body else None,
+                max_hold_minutes=int(body["max_hold_minutes"]) if "max_hold_minutes" in body else None,
+                scaled_sizing=bool(body["scaled_sizing"]) if "scaled_sizing" in body else None,
+                trailing_enabled=bool(body["trailing_enabled"]) if "trailing_enabled" in body else None,
+                scaled_leverage=bool(body["scaled_leverage"]) if "scaled_leverage" in body else None,
+                ladder_enabled=bool(body["ladder_enabled"]) if "ladder_enabled" in body else None,
+                ladder_tight=bool(body["ladder_tight"]) if "ladder_tight" in body else None,
+                max_leverage=float(body["max_leverage"]) if "max_leverage" in body else None,
+                usdt_inr=float(body["usdt_inr"]) if "usdt_inr" in body else None,
+                alert_telegram=bool(body["alert_telegram"]) if "alert_telegram" in body else None,
+            )
+            return web.json_response({"ok": True, "starting_wallet": cfg.starting_wallet})
+    except Exception as exc:
+        return web.json_response({"error": str(exc)}, status=400)
+
+
+async def _api_strategy_config_get(runner, request: web.Request) -> web.Response:
+    from storage.database import AsyncSessionFactory
+    from storage.repository import Repository
+    async with AsyncSessionFactory() as session:
+        cfg = await Repository(session).get_strategy_config()
+        return web.json_response({
+            "crypto_min_confidence": cfg.crypto_min_confidence,
+            "high_conviction_only": cfg.high_conviction_only,
+            "crypto_volume_spike_enabled": cfg.crypto_volume_spike_enabled,
+            "crypto_htf_filter_enabled": cfg.crypto_htf_filter_enabled,
+            "binance_klines_enabled": cfg.binance_klines_enabled,
+            "binance_oi_enabled": cfg.binance_oi_enabled,
+            "orderflow_enabled": cfg.orderflow_enabled,
+            "groq_signal_review_enabled": cfg.groq_signal_review_enabled,
+            "groq_model": cfg.groq_model,
+            "sports_enabled": cfg.sports_enabled,
+            "bank_size": cfg.bank_size,
+            "min_confidence": cfg.min_confidence,
+        })
+
+
+async def _api_strategy_config_post(runner, request: web.Request) -> web.Response:
+    is_admin = await _verify_admin_session(request)
+    if not is_admin:
+        return web.json_response({"error": "unauthorized"}, status=401)
+    try:
+        body = await request.json()
+        from storage.database import AsyncSessionFactory
+        from storage.repository import Repository
+        async with AsyncSessionFactory() as session:
+            repo = Repository(session)
+            cfg = await repo.update_strategy_config(
+                crypto_min_confidence=float(body["crypto_min_confidence"]) if "crypto_min_confidence" in body else None,
+                high_conviction_only=bool(body["high_conviction_only"]) if "high_conviction_only" in body else None,
+                crypto_volume_spike_enabled=bool(body["crypto_volume_spike_enabled"]) if "crypto_volume_spike_enabled" in body else None,
+                crypto_htf_filter_enabled=bool(body["crypto_htf_filter_enabled"]) if "crypto_htf_filter_enabled" in body else None,
+                binance_klines_enabled=bool(body["binance_klines_enabled"]) if "binance_klines_enabled" in body else None,
+                binance_oi_enabled=bool(body["binance_oi_enabled"]) if "binance_oi_enabled" in body else None,
+                orderflow_enabled=bool(body["orderflow_enabled"]) if "orderflow_enabled" in body else None,
+                groq_signal_review_enabled=bool(body["groq_signal_review_enabled"]) if "groq_signal_review_enabled" in body else None,
+                groq_model=str(body["groq_model"]) if "groq_model" in body else None,
+                sports_enabled=bool(body["sports_enabled"]) if "sports_enabled" in body else None,
+                bank_size=float(body["bank_size"]) if "bank_size" in body else None,
+                min_confidence=float(body["min_confidence"]) if "min_confidence" in body else None,
+            )
+            return web.json_response({"ok": True, "groq_model": cfg.groq_model})
+    except Exception as exc:
+        return web.json_response({"error": str(exc)}, status=400)
+
+
 async def _api_collector_toggle(runner, request: web.Request) -> web.Response:
     """POST /api/settings/toggle  body: {"collector": "sportradar", "enabled": true}"""
     from scheduler.security import check_bearer_auth
-    denied = check_bearer_auth(request, _SETTINGS.api_auth_token)
-    if denied is not None:
-        return denied
+    is_admin = await _verify_admin_session(request)
+    if not is_admin:
+        denied = check_bearer_auth(request, _SETTINGS.api_auth_token)
+        if denied is not None:
+            return denied
     try:
         body = await request.json()
         collector = str(body.get("collector", ""))
@@ -4048,23 +4232,25 @@ _SETTINGS_HTML = """<!DOCTYPE html>
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Collector Settings — Tennis Bet</title>
+<title>System Settings — Signal Engine</title>
 <style>
 *{box-sizing:border-box;margin:0;padding:0}
 body{background:#0d1117;color:#e6edf3;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;min-height:100vh}
-.topbar{background:#161b22;border-bottom:1px solid #30363d;padding:12px 20px;display:flex;align-items:center;gap:16px}
-.topbar a{color:#58a6ff;text-decoration:none;font-size:14px;padding:6px 12px;border-radius:6px;border:1px solid #30363d}
+.topbar{background:#161b22;border-bottom:1px solid #30363d;padding:12px 20px;display:flex;align-items:center;gap:12px;position:sticky;top:0;z-index:100}
+.topbar a{color:#58a6ff;text-decoration:none;font-size:13.5px;padding:6px 12px;border-radius:6px;border:1px solid #30363d;transition:background .2s}
 .topbar a:hover{background:#21262d}
-.topbar h1{font-size:16px;font-weight:600;color:#e6edf3;margin-left:8px}
-.container{max-width:760px;margin:32px auto;padding:0 16px}
-h2{font-size:20px;font-weight:700;margin-bottom:6px}
-.subtitle{color:#8b949e;font-size:13px;margin-bottom:28px}
-.card{background:#161b22;border:1px solid #30363d;border-radius:12px;padding:20px 24px;margin-bottom:16px;transition:border-color .2s}
+.topbar h1{font-size:16px;font-weight:600;color:#e6edf3;margin-left:4px}
+.btn-lock{margin-left:auto;background:#21262d;border:1px solid #30363d;color:#f85149;padding:6px 14px;border-radius:6px;cursor:pointer;font-size:13px;font-weight:600;transition:all .2s;display:flex;align-items:center;gap:6px}
+.btn-lock:hover{background:#3d0a0a;border-color:#f85149}
+.container{max-width:820px;margin:32px auto;padding:0 16px;padding-bottom:60px}
+h2{font-size:19px;font-weight:700;margin-bottom:6px;display:flex;align-items:center;gap:8px}
+.subtitle{color:#8b949e;font-size:13px;margin-bottom:22px;line-height:1.5}
+.card{background:#161b22;border:1px solid #30363d;border-radius:12px;padding:22px 24px;margin-bottom:24px;transition:border-color .2s}
 .card.active{border-color:#238636}
 .card.paused{border-color:#f85149;opacity:.85}
 .card-header{display:flex;align-items:center;justify-content:space-between;margin-bottom:14px}
 .card-title{display:flex;align-items:center;gap:10px}
-.card-name{font-size:16px;font-weight:600}
+.card-name{font-size:15.5px;font-weight:600}
 .badge{font-size:11px;padding:2px 8px;border-radius:20px;font-weight:600}
 .badge-green{background:#0d4429;color:#3fb950}
 .badge-red{background:#3d0a0a;color:#f85149}
@@ -4078,43 +4264,68 @@ h2{font-size:20px;font-weight:700;margin-bottom:6px}
 .quota-fill.safe{background:#238636}
 .quota-fill.warn{background:#e3b341}
 .quota-fill.danger{background:#f85149}
-/* Toggle */
+/* Form Controls */
+.form-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(230px,1fr));gap:16px;margin-top:16px}
+.form-group{display:flex;flex-direction:column;gap:6px}
+.form-group label{font-size:11.5px;color:#8b949e;text-transform:uppercase;font-weight:700;letter-spacing:0.5px}
+.form-group input,.form-group select{background:#0d1117;border:1px solid #30363d;border-radius:8px;color:#e6edf3;padding:10px 12px;font-size:13.5px;outline:none;transition:border-color .2s}
+.form-group input:focus,.form-group select:focus{border-color:#58a6ff}
+.toggle-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:12px;margin-top:20px;padding-top:16px;border-top:1px solid #21262d}
+.toggle-item{display:flex;align-items:center;justify-content:space-between;background:#0d1117;padding:12px 14px;border-radius:8px;border:1px solid #21262d}
+.toggle-item span{font-size:13px;font-weight:500;color:#e6edf3}
+/* Toggle Switch */
 .toggle-wrap{display:flex;align-items:center;gap:8px}
-.toggle-label{font-size:13px;color:#8b949e;min-width:44px;text-align:right}
+.toggle-label{font-size:12px;color:#8b949e;min-width:36px;text-align:right}
 .toggle{position:relative;width:44px;height:24px;cursor:pointer}
 .toggle input{opacity:0;width:0;height:0}
 .slider{position:absolute;inset:0;background:#30363d;border-radius:24px;transition:.3s}
 .slider:before{content:'';position:absolute;width:18px;height:18px;left:3px;bottom:3px;background:#e6edf3;border-radius:50%;transition:.3s}
 input:checked+.slider{background:#238636}
 input:checked+.slider:before{transform:translateX(20px)}
-.warn-box{background:#2d1f00;border:1px solid #e3b341;border-radius:8px;padding:12px 16px;font-size:13px;color:#e3b341;margin-top:14px;display:none}
-.warn-box.show{display:block}
-.save-btn{background:#238636;border:none;color:#fff;font-size:14px;font-weight:600;padding:10px 24px;border-radius:8px;cursor:pointer;margin-top:24px;width:100%;transition:background .2s}
+.save-btn{background:#238636;border:none;color:#fff;font-size:14px;font-weight:600;padding:11px 24px;border-radius:8px;cursor:pointer;margin-top:20px;width:100%;transition:background .2s}
 .save-btn:hover{background:#2ea043}
-.toast{position:fixed;bottom:24px;right:24px;background:#238636;color:#fff;padding:12px 20px;border-radius:8px;font-size:14px;opacity:0;transition:opacity .3s;pointer-events:none;z-index:999}
+.toast{position:fixed;bottom:24px;right:24px;background:#238636;color:#fff;padding:12px 20px;border-radius:8px;font-size:14px;opacity:0;transition:opacity .3s;pointer-events:none;z-index:9999}
 .toast.show{opacity:1}
 .toast.err{background:#f85149}
-
+.theme-row{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:32px}
+.theme-sw{background:#161b22;border:1px solid #30363d;color:#c9d1d9;padding:6px 12px;border-radius:6px;font-size:12px;cursor:pointer;display:flex;align-items:center;gap:6px;transition:all .2s}
+.theme-sw:hover{border-color:#58a6ff;color:#fff}
+.theme-sw.on{border-color:#58a6ff;background:#1f242c;color:#fff}
+.theme-sw .sw{width:10px;height:10px;border-radius:50%;display:inline-block}
+/* Lock Overlay */
+.lock-overlay{position:fixed;inset:0;background:rgba(13,17,23,0.96);backdrop-filter:blur(10px);display:flex;align-items:center;justify-content:center;z-index:10000}
+.lock-box{background:#161b22;border:1px solid #30363d;border-radius:16px;padding:36px 32px;max-width:380px;width:90%;text-align:center;box-shadow:0 20px 40px rgba(0,0,0,0.6)}
+.lock-box input{width:100%;background:#0d1117;border:1px solid #30363d;border-radius:8px;color:#e6edf3;padding:12px 14px;font-size:16px;margin-top:18px;text-align:center;letter-spacing:3px;outline:none}
+.lock-box input:focus{border-color:#58a6ff}
+.lock-err{color:#f85149;font-size:13px;margin-top:12px;display:none}
 @media(max-width:640px){
-  html{-webkit-text-size-adjust:100%}
-  body{padding:12px}
-  table{font-size:12px}
-  th,td{padding:7px 8px}
-  input,select,textarea,button{min-height:40px;font-size:16px}
-  .grid,.cards{grid-template-columns:1fr !important}
-  pre{font-size:11px;overflow-x:auto}
+  .form-grid{grid-template-columns:1fr !important}
+  .toggle-grid{grid-template-columns:1fr !important}
+  .container{padding:12px}
 }
 </style>
 </head>
 <body>
 
-<div class="topbar">
-  <a href="/">← Home</a>
-  <a href="/data">📊 History</a>
-  <h1>⚙️ Collector Settings</h1>
+<div id="lock-screen" class="lock-overlay">
+  <div class="lock-box">
+    <div style="font-size:44px;margin-bottom:12px">🔒</div>
+    <h2 style="justify-content:center;font-size:21px">Settings Locked</h2>
+    <p style="color:#8b949e;font-size:13px;line-height:1.5;margin-top:6px">Enter your administrator password to unlock and manage configuration.</p>
+    <input type="password" id="admin-pwd" placeholder="Enter password" autocomplete="off" onkeydown="if(event.key==='Enter')login()">
+    <div id="login-err" class="lock-err"></div>
+    <button class="save-btn" style="margin-top:18px" onclick="login()">Unlock Settings</button>
+  </div>
 </div>
 
-<div class="container">
+<div class="topbar">
+  <a href="/">← Dashboard</a>
+  <a href="/data">📊 History</a>
+  <h1>⚙️ System Settings</h1>
+  <button class="btn-lock" onclick="logout()"><span>🔒</span> Lock & Logout</button>
+</div>
+
+<div class="container" id="settings-content" style="display:none">
   <h2>🎨 Site Theme</h2>
   <p class="subtitle">Applies instantly across all pages — saved in this browser.</p>
   <div class="theme-row">
@@ -4128,225 +4339,304 @@ input:checked+.slider:before{transform:translateX(20px)}
   </div>
   <script>setSiteTheme(localStorage.getItem('site_theme')||'amber');</script>
 
-  <h2>Data Source Controls</h2>
-  <p class="subtitle">Toggle collectors on/off to manage API quota. Changes take effect immediately — no redeploy needed.</p>
+  <h2>📈 Paper Trading Configuration</h2>
+  <p class="subtitle">Stored directly in database — updates apply live to simulator cycle without redeployment.</p>
+  <div class="card">
+    <div class="form-grid">
+      <div class="form-group">
+        <label>Starting Wallet (₹)</label>
+        <input type="number" id="p-starting-wallet" step="100">
+      </div>
+      <div class="form-group">
+        <label>Target Wallet (₹)</label>
+        <input type="number" id="p-target-wallet" step="500">
+      </div>
+      <div class="form-group">
+        <label>USDT / INR Rate (₹)</label>
+        <input type="number" id="p-usdt-inr" step="0.1">
+      </div>
+      <div class="form-group">
+        <label>Base Leverage (x)</label>
+        <input type="number" id="p-leverage" step="1" min="1" max="100">
+      </div>
+      <div class="form-group">
+        <label>Max Leverage (x)</label>
+        <input type="number" id="p-max-leverage" step="1" min="1" max="100">
+      </div>
+      <div class="form-group">
+        <label>Stop Loss (% of Margin)</label>
+        <input type="number" id="p-stop-pct" step="0.01" min="0.01" max="1.0">
+      </div>
+      <div class="form-group">
+        <label>Reward / Risk Ratio</label>
+        <input type="number" id="p-reward-risk" step="0.1" min="0.5">
+      </div>
+      <div class="form-group">
+        <label>Min Confidence (0.50 - 0.95)</label>
+        <input type="number" id="p-min-confidence" step="0.01" min="0.50" max="0.99">
+      </div>
+      <div class="form-group">
+        <label>Max Concurrent Trades</label>
+        <input type="number" id="p-max-concurrent" step="1" min="1" max="20">
+      </div>
+      <div class="form-group">
+        <label>Max Hold Duration (mins)</label>
+        <input type="number" id="p-max-hold" step="10" min="10">
+      </div>
+    </div>
 
-  <div id="cards">Loading...</div>
+    <div class="toggle-grid">
+      <div class="toggle-item">
+        <span>Scaled Position Sizing (Tiering)</span>
+        <label class="toggle"><input type="checkbox" id="p-scaled-sizing"><span class="slider"></span></label>
+      </div>
+      <div class="toggle-item">
+        <span>Trailing Stop Loss</span>
+        <label class="toggle"><input type="checkbox" id="p-trailing"><span class="slider"></span></label>
+      </div>
+      <div class="toggle-item">
+        <span>Dynamic Conviction Leverage</span>
+        <label class="toggle"><input type="checkbox" id="p-scaled-leverage"><span class="slider"></span></label>
+      </div>
+      <div class="toggle-item">
+        <span>Profit Ladder Ratchet</span>
+        <label class="toggle"><input type="checkbox" id="p-ladder"><span class="slider"></span></label>
+      </div>
+      <div class="toggle-item">
+        <span>Tight Ladder Mode</span>
+        <label class="toggle"><input type="checkbox" id="p-ladder-tight"><span class="slider"></span></label>
+      </div>
+      <div class="toggle-item">
+        <span>Telegram Fill & Exit Alerts</span>
+        <label class="toggle"><input type="checkbox" id="p-telegram"><span class="slider"></span></label>
+      </div>
+    </div>
+    <button class="save-btn" onclick="savePaperConfig()">💾 Save Paper Trading Configuration</button>
+  </div>
+
+  <h2>🤖 Strategy, AI Review & Market Data</h2>
+  <p class="subtitle">Core engine conviction thresholds, Groq pre-signal review, and institutional orderflow feeds.</p>
+  <div class="card">
+    <div class="form-grid">
+      <div class="form-group">
+        <label>Groq AI Model</label>
+        <input type="text" id="s-groq-model" placeholder="qwen/qwen3.8-27b">
+      </div>
+      <div class="form-group">
+        <label>Crypto Min Confidence (0.50 - 0.95)</label>
+        <input type="number" id="s-min-confidence" step="0.01" min="0.50" max="0.99">
+      </div>
+      <div class="form-group">
+        <label>Scalp Bank Size (₹)</label>
+        <input type="number" id="s-bank-size" step="500">
+      </div>
+    </div>
+
+    <div class="toggle-grid">
+      <div class="toggle-item">
+        <span>Groq Pre-Signal AI Review</span>
+        <label class="toggle"><input type="checkbox" id="s-groq-review"><span class="slider"></span></label>
+      </div>
+      <div class="toggle-item">
+        <span>High Conviction Mode (5x Edge)</span>
+        <label class="toggle"><input type="checkbox" id="s-high-conviction"><span class="slider"></span></label>
+      </div>
+      <div class="toggle-item">
+        <span>Binance Futures Open Interest (OI)</span>
+        <label class="toggle"><input type="checkbox" id="s-binance-oi"><span class="slider"></span></label>
+      </div>
+      <div class="toggle-item">
+        <span>Order Flow & CVD Absorption</span>
+        <label class="toggle"><input type="checkbox" id="s-orderflow"><span class="slider"></span></label>
+      </div>
+      <div class="toggle-item">
+        <span>Binance 1m True OHLC Klines</span>
+        <label class="toggle"><input type="checkbox" id="s-binance-klines"><span class="slider"></span></label>
+      </div>
+      <div class="toggle-item">
+        <span>Volume Spike Confirmation</span>
+        <label class="toggle"><input type="checkbox" id="s-volume-spike"><span class="slider"></span></label>
+      </div>
+      <div class="toggle-item">
+        <span>HTF Trend Filter</span>
+        <label class="toggle"><input type="checkbox" id="s-htf-filter"><span class="slider"></span></label>
+      </div>
+      <div class="toggle-item">
+        <span>Sports Betting Engine (Tennis/Football)</span>
+        <label class="toggle"><input type="checkbox" id="s-sports-enabled"><span class="slider"></span></label>
+      </div>
+    </div>
+    <button class="save-btn" onclick="saveStrategyConfig()">💾 Save Strategy & AI Configuration</button>
+  </div>
+
+  <h2>📡 Collector Data Sources</h2>
+  <p class="subtitle">Toggle individual third-party feeds on/off to conserve external quota.</p>
+  <div id="cards">Loading collectors...</div>
 </div>
 
 <div class="toast" id="toast"></div>
 
 <script>
-const _IST = {timeZone:'Asia/Kolkata'};
-
 const SOURCES = [
-  {
-    id: 'sportradar',
-    name: 'Sportradar Tennis',
-    icon: '🎾',
-    desc: 'Live + scheduled matches, all tours (ATP, WTA, ITF, Challengers)',
-    quota_label: 'Trial quota',
-    quota_total: 1000,
-    can_toggle: true,
-    warning: 'At 5-min interval, Sportradar uses ~720 calls/month. Trial limit is 1,000. Toggle OFF when not actively monitoring to save credits.',
-  },
-  {
-    id: 'odds_api',
-    name: 'Odds API',
-    icon: '💰',
-    desc: 'Pre-match odds for French Open, ATP, WTA (free tier: 500 req/month)',
-    quota_label: 'Monthly quota',
-    quota_total: 500,
-    can_toggle: true,
-    warning: 'Free tier has 500 requests/month. Toggle OFF when quota is low to preserve remaining credits.',
-  },
-  {
-    id: 'espn',
-    name: 'ESPN',
-    icon: '📡',
-    desc: 'Live scores backup, always cloud-safe, unlimited',
-    quota_label: 'Unlimited',
-    quota_total: null,
-    can_toggle: true,
-    warning: null,
-  },
-  {
-    id: 'bets_api',
-    name: 'BetsAPI',
-    icon: '📈',
-    desc: 'Live in-play odds (requires paid token)',
-    quota_label: 'Paid plan',
-    quota_total: null,
-    can_toggle: true,
-    warning: null,
-  },
-  {
-    id: 'api_sports',
-    name: 'API-Sports',
-    icon: '🏆',
-    desc: 'Live scores (100 req/day free)',
-    quota_label: 'Daily quota',
-    quota_total: 100,
-    can_toggle: true,
-    warning: null,
-  },
-  {
-    id: 'sportsdata',
-    name: 'SportsData.io',
-    icon: '📊',
-    desc: 'Live + scheduled tennis (250 req/day free trial)',
-    quota_label: 'Daily quota',
-    quota_total: 250,
-    can_toggle: true,
-    warning: 'Free trial gives 250 req/day. At 10-min interval = 144 calls/day ✅ Safe. Toggle OFF to save quota.',
-  },
-  {
-    id: 'api_tennis',
-    name: 'API-Tennis.com',
-    icon: '🎯',
-    desc: 'Live + scheduled tennis (no hard quota limits)',
-    quota_label: 'Unlimited',
-    quota_total: null,
-    can_toggle: true,
-    warning: null,
-  },
-  {
-    id: 'coindcx',
-    name: 'CoinDCX',
-    icon: '🪙',
-    desc: 'Crypto price polling — preferred source, exact exchange prices (public API, no key needed)',
-    quota_label: 'Free, unlimited',
-    quota_total: null,
-    can_toggle: true,
-    warning: null,
-  },
-  {
-    id: 'coingecko',
-    name: 'CoinGecko',
-    icon: '🦎',
-    desc: "Crypto price polling — fallback for any symbol CoinDCX doesn't list (public API, no key needed)",
-    quota_label: 'Free tier',
-    quota_total: null,
-    can_toggle: true,
-    warning: null,
-  },
-  {
-    id: 'binance_ws',
-    name: 'Binance WebSocket',
-    icon: '🚫',
-    desc: "Real-time crypto streaming — OFF by default: Binance returns HTTP 451 (geoblocked) from Render's IPs and will just reconnect forever burning CPU. Only enable if you deploy outside a blocked region.",
-    quota_label: 'Continuous stream',
-    quota_total: null,
-    can_toggle: true,
-    warning: "Geoblocked (HTTP 451) on Render — enabling this will loop reconnect attempts without ever connecting. CoinGecko above is the working default.",
-  },
-  {
-    id: 'twelvedata_ws',
-    name: 'Twelve Data (Commodities)',
-    icon: '🥇',
-    desc: 'Gold / Silver / Crude Oil live prices (requires free API key)',
-    quota_label: 'Free tier',
-    quota_total: null,
-    can_toggle: true,
-    warning: null,
-  },
+  {id:'sportradar',name:'Sportradar Tennis',icon:'🎾',desc:'Live + scheduled matches, all tours (ATP, WTA, ITF, Challengers)',quota_total:1000},
+  {id:'odds_api',name:'Odds API',icon:'💰',desc:'Pre-match odds for French Open, ATP, WTA (free tier: 500 req/month)',quota_total:500},
+  {id:'espn',name:'ESPN',icon:'📡',desc:'Live scores backup, cloud-safe, unlimited',quota_total:null},
+  {id:'bets_api',name:'BetsAPI',icon:'📈',desc:'Live in-play odds (requires paid token)',quota_total:null},
+  {id:'api_sports',name:'API-Sports',icon:'🏆',desc:'Live scores (100 req/day free)',quota_total:100},
+  {id:'sportsdata',name:'SportsData.io',icon:'📊',desc:'Live + scheduled tennis (250 req/day free trial)',quota_total:250},
+  {id:'api_tennis',name:'API-Tennis.com',icon:'🎯',desc:'Live + scheduled tennis (no hard quota limits)',quota_total:null},
+  {id:'coindcx',name:'CoinDCX',icon:'🪙',desc:'Crypto price polling — preferred source, exact exchange prices',quota_total:null},
+  {id:'coingecko',name:'CoinGecko',icon:'🦎',desc:'Crypto price polling — fallback for unlisted symbols',quota_total:null},
+  {id:'binance_ws',name:'Binance WebSocket',icon:'🚫',desc:'Real-time crypto streaming (OFF by default on Render)',quota_total:null},
+  {id:'twelvedata_ws',name:'Twelve Data',icon:'🥇',desc:'Gold / Silver / Crude Oil live prices',quota_total:null},
 ];
 
 let states = {};
 
-async function load() {
+async function apiFetch(url, opts) {
+  opts = opts || {};
+  opts.headers = Object.assign({}, opts.headers);
+  const token = sessionStorage.getItem('settings_token');
+  if (token) {
+    opts.headers['X-Settings-Token'] = token;
+    opts.headers['Authorization'] = 'Bearer ' + token;
+  }
+  const res = await fetch(url, opts);
+  if (res.status === 401) {
+    sessionStorage.removeItem('settings_token');
+    showLockScreen('Session expired or unauthorized. Please re-enter password.');
+  }
+  return res;
+}
+
+function showLockScreen(errMsg) {
+  document.getElementById('lock-screen').style.display = 'flex';
+  document.getElementById('settings-content').style.display = 'none';
+  const errEl = document.getElementById('login-err');
+  if (errMsg) {
+    errEl.textContent = errMsg;
+    errEl.style.display = 'block';
+  } else {
+    errEl.style.display = 'none';
+  }
+  const pwdInput = document.getElementById('admin-pwd');
+  pwdInput.value = '';
+  setTimeout(() => pwdInput.focus(), 100);
+}
+
+function unlockScreen() {
+  document.getElementById('lock-screen').style.display = 'none';
+  document.getElementById('settings-content').style.display = 'block';
+  loadAll();
+}
+
+async function login() {
+  const pwd = document.getElementById('admin-pwd').value.trim();
+  const errEl = document.getElementById('login-err');
+  if (!pwd) {
+    errEl.textContent = 'Please enter password';
+    errEl.style.display = 'block';
+    return;
+  }
   try {
-    const r = await fetch('/api/settings');
-    states = await r.json();
-    render();
+    const res = await fetch('/api/settings/auth/login', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({password: pwd}),
+    });
+    const data = await res.json();
+    if (data.ok && data.token) {
+      sessionStorage.setItem('settings_token', data.token);
+      unlockScreen();
+      showToast('Settings unlocked ✓');
+    } else {
+      errEl.textContent = data.error || 'Invalid password';
+      errEl.style.display = 'block';
+    }
   } catch(e) {
-    document.getElementById('cards').innerHTML = '<p style="color:#f85149">Failed to load settings</p>';
+    errEl.textContent = 'Network connection failed';
+    errEl.style.display = 'block';
   }
 }
 
-function render() {
+async function logout() {
+  try {
+    await apiFetch('/api/settings/auth/logout', {method: 'POST'});
+  } catch(e){}
+  sessionStorage.removeItem('settings_token');
+  showLockScreen();
+  showToast('Settings locked');
+}
+
+async function checkAuth() {
+  const token = sessionStorage.getItem('settings_token');
+  if (!token) {
+    showLockScreen();
+    return;
+  }
+  try {
+    const res = await fetch('/api/settings/auth/status', {
+      headers: {'X-Settings-Token': token}
+    });
+    const data = await res.json();
+    if (data.authenticated) {
+      unlockScreen();
+    } else {
+      sessionStorage.removeItem('settings_token');
+      showLockScreen();
+    }
+  } catch(e) {
+    showLockScreen();
+  }
+}
+
+async function loadAll() {
+  loadCollectors();
+  loadPaperConfig();
+  loadStrategyConfig();
+}
+
+async function loadCollectors() {
+  try {
+    const r = await fetch('/api/settings');
+    states = await r.json();
+    renderCollectors();
+  } catch(e) {
+    document.getElementById('cards').innerHTML = '<p style="color:#f85149">Failed to load collectors</p>';
+  }
+}
+
+function renderCollectors() {
   const el = document.getElementById('cards');
   el.innerHTML = SOURCES.map(src => {
     const st = states[src.id] || {};
     const enabled = st.enabled !== false;
-    const keySet = st.key_set !== false;
-
-    // Quota calc
-    let quotaHtml = '';
-    if (src.id === 'sportradar' && st.est_calls_per_month != null) {
-      const used = st.est_calls_per_month;
-      const total = src.quota_total;
-      const pct = Math.min(100, Math.round(used / total * 100));
-      const cls = pct < 60 ? 'safe' : pct < 85 ? 'warn' : 'danger';
-      quotaHtml = `
-        <div class="meta-row"><span class="meta-label">Interval</span><span class="meta-value">${st.poll_interval_secs}s (${Math.round(st.poll_interval_secs/60)}min)</span></div>
-        <div class="meta-row"><span class="meta-label">Est. calls/month</span><span class="meta-value">${used} / ${total} (${pct}%)</span></div>
-        <div class="quota-bar"><div class="quota-fill ${cls}" style="width:${pct}%"></div></div>`;
-    } else if (src.id === 'odds_api') {
-      const used = st.quota_used != null ? st.quota_used : '?';
-      const rem = st.quota_remaining != null ? st.quota_remaining : '?';
-      const pct = st.quota_used != null ? Math.min(100, Math.round(st.quota_used / src.quota_total * 100)) : 0;
-      const cls = pct < 60 ? 'safe' : pct < 85 ? 'warn' : 'danger';
-      quotaHtml = `
-        <div class="meta-row"><span class="meta-label">Used this month</span><span class="meta-value">${used} / ${src.quota_total}</span></div>
-        <div class="meta-row"><span class="meta-label">Remaining</span><span class="meta-value">${rem} credits</span></div>
-        <div class="quota-bar"><div class="quota-fill ${cls}" style="width:${pct}%"></div></div>`;
-    } else if (src.id === 'api_sports') {
-      const rem = st.quota_remaining != null ? st.quota_remaining : '?';
-      const pct = rem !== '?' ? Math.min(100, Math.round((src.quota_total - rem) / src.quota_total * 100)) : 0;
-      const cls = pct < 60 ? 'safe' : pct < 85 ? 'warn' : 'danger';
-      quotaHtml = `
-        <div class="meta-row"><span class="meta-label">Remaining today</span><span class="meta-value">${rem} / ${src.quota_total} req</span></div>
-        <div class="quota-bar"><div class="quota-fill ${cls}" style="width:${pct}%"></div></div>`;
-    } else if (src.id === 'sportsdata') {
-      const rem = st.quota_remaining != null ? st.quota_remaining : '?';
-      const pct = rem !== '?' ? Math.min(100, Math.round((src.quota_total - rem) / src.quota_total * 100)) : 0;
-      const cls = pct < 60 ? 'safe' : pct < 85 ? 'warn' : 'danger';
-      quotaHtml = `
-        <div class="meta-row"><span class="meta-label">Remaining today</span><span class="meta-value">${rem} / ${src.quota_total} req</span></div>
-        <div class="quota-bar"><div class="quota-fill ${cls}" style="width:${pct}%"></div></div>`;
-    } else if (src.id === 'api_tennis') {
-      quotaHtml = `<div class="meta-row"><span class="meta-label">Quota</span><span class="meta-value" style="color:#3fb950">Unlimited ✓</span></div>`;
-    } else if (src.id === 'espn') {
-      quotaHtml = `<div class="meta-row"><span class="meta-label">Quota</span><span class="meta-value" style="color:#3fb950">Unlimited ✓</span></div>`;
-    } else if (src.id === 'bets_api') {
-      quotaHtml = `<div class="meta-row"><span class="meta-label">Status</span><span class="meta-value">${keySet ? 'Token active' : 'No token set'}</span></div>`;
-    }
-
-    const warnShow = enabled && src.warning ? 'show' : '';
     const cardCls = enabled ? 'card active' : 'card paused';
     const badgeTxt = enabled ? 'ACTIVE' : 'PAUSED';
     const badgeCls = enabled ? 'badge badge-green' : 'badge badge-red';
-    const noKey = !keySet ? '<span class="badge badge-yellow">NO KEY</span>' : '';
-
     return `
-    <div class="${cardCls}" id="card-${src.id}">
-      <div class="card-header">
+    <div class="${cardCls}" id="card-${src.id}" style="margin-bottom:12px">
+      <div class="card-header" style="margin-bottom:0">
         <div class="card-title">
           <span style="font-size:22px">${src.icon}</span>
           <div>
-            <div class="card-name">${src.name} ${noKey}</div>
+            <div class="card-name">${src.name} <span class="${badgeCls}">${badgeTxt}</span></div>
             <div style="font-size:12px;color:#8b949e;margin-top:2px">${src.desc}</div>
           </div>
         </div>
         <div class="toggle-wrap">
           <span class="toggle-label" id="lbl-${src.id}">${enabled ? 'ON' : 'OFF'}</span>
           <label class="toggle">
-            <input type="checkbox" id="tog-${src.id}" ${enabled ? 'checked' : ''} onchange="toggle('${src.id}')">
+            <input type="checkbox" id="tog-${src.id}" ${enabled ? 'checked' : ''} onchange="toggleCollector('${src.id}')">
             <span class="slider"></span>
           </label>
         </div>
       </div>
-      <div class="card-meta">
-        <span class="${badgeCls}">${badgeTxt}</span>
-        ${quotaHtml}
-      </div>
-      <div class="warn-box ${warnShow}" id="warn-${src.id}">${src.warning || ''}</div>
     </div>`;
   }).join('');
 }
 
-async function toggle(id) {
+async function toggleCollector(id) {
   const cb = document.getElementById('tog-' + id);
   const enabled = cb.checked;
   try {
@@ -4358,8 +4648,8 @@ async function toggle(id) {
     const data = await r.json();
     if (data.ok) {
       states[id] = {...(states[id] || {}), enabled};
-      render();
-      showToast(enabled ? id + ' enabled ✓' : id + ' paused — saving quota', !enabled);
+      renderCollectors();
+      showToast(enabled ? id + ' enabled ✓' : id + ' paused', !enabled);
     } else {
       showToast('Error: ' + (data.error || 'unknown'), true);
       cb.checked = !enabled;
@@ -4370,6 +4660,112 @@ async function toggle(id) {
   }
 }
 
+async function loadPaperConfig() {
+  try {
+    const r = await fetch('/api/paper/config');
+    const c = await r.json();
+    document.getElementById('p-starting-wallet').value = c.starting_wallet;
+    document.getElementById('p-target-wallet').value = c.target_wallet;
+    document.getElementById('p-usdt-inr').value = c.usdt_inr;
+    document.getElementById('p-leverage').value = c.leverage;
+    document.getElementById('p-max-leverage').value = c.max_leverage;
+    document.getElementById('p-stop-pct').value = c.stop_pct_of_margin;
+    document.getElementById('p-reward-risk').value = c.reward_risk;
+    document.getElementById('p-min-confidence').value = c.min_confidence;
+    document.getElementById('p-max-concurrent').value = c.max_concurrent;
+    document.getElementById('p-max-hold').value = c.max_hold_minutes;
+    document.getElementById('p-scaled-sizing').checked = c.scaled_sizing;
+    document.getElementById('p-trailing').checked = c.trailing_enabled;
+    document.getElementById('p-scaled-leverage').checked = c.scaled_leverage;
+    document.getElementById('p-ladder').checked = c.ladder_enabled;
+    document.getElementById('p-ladder-tight').checked = c.ladder_tight;
+    document.getElementById('p-telegram').checked = c.alert_telegram;
+  } catch(e) {
+    console.error('Failed to load paper config', e);
+  }
+}
+
+async function savePaperConfig() {
+  const payload = {
+    starting_wallet: parseFloat(document.getElementById('p-starting-wallet').value),
+    target_wallet: parseFloat(document.getElementById('p-target-wallet').value),
+    usdt_inr: parseFloat(document.getElementById('p-usdt-inr').value),
+    leverage: parseFloat(document.getElementById('p-leverage').value),
+    max_leverage: parseFloat(document.getElementById('p-max-leverage').value),
+    stop_pct_of_margin: parseFloat(document.getElementById('p-stop-pct').value),
+    reward_risk: parseFloat(document.getElementById('p-reward-risk').value),
+    min_confidence: parseFloat(document.getElementById('p-min-confidence').value),
+    max_concurrent: parseInt(document.getElementById('p-max-concurrent').value),
+    max_hold_minutes: parseInt(document.getElementById('p-max-hold').value),
+    scaled_sizing: document.getElementById('p-scaled-sizing').checked,
+    trailing_enabled: document.getElementById('p-trailing').checked,
+    scaled_leverage: document.getElementById('p-scaled-leverage').checked,
+    ladder_enabled: document.getElementById('p-ladder').checked,
+    ladder_tight: document.getElementById('p-ladder-tight').checked,
+    alert_telegram: document.getElementById('p-telegram').checked,
+  };
+  try {
+    const res = await apiFetch('/api/paper/config', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify(payload),
+    });
+    const d = await res.json();
+    if (d.ok) showToast('Paper Trading configuration updated ✓');
+    else showToast('Save failed: ' + (d.error || 'unknown'), true);
+  } catch(e) {
+    showToast('Network error saving config', true);
+  }
+}
+
+async function loadStrategyConfig() {
+  try {
+    const r = await fetch('/api/strategy/config');
+    const c = await r.json();
+    document.getElementById('s-groq-model').value = c.groq_model || 'qwen/qwen3.8-27b';
+    document.getElementById('s-min-confidence').value = c.crypto_min_confidence;
+    document.getElementById('s-bank-size').value = c.bank_size;
+    document.getElementById('s-groq-review').checked = c.groq_signal_review_enabled;
+    document.getElementById('s-high-conviction').checked = c.high_conviction_only;
+    document.getElementById('s-binance-oi').checked = c.binance_oi_enabled;
+    document.getElementById('s-orderflow').checked = c.orderflow_enabled;
+    document.getElementById('s-binance-klines').checked = c.binance_klines_enabled;
+    document.getElementById('s-volume-spike').checked = c.crypto_volume_spike_enabled;
+    document.getElementById('s-htf-filter').checked = c.crypto_htf_filter_enabled;
+    document.getElementById('s-sports-enabled').checked = c.sports_enabled;
+  } catch(e) {
+    console.error('Failed to load strategy config', e);
+  }
+}
+
+async function saveStrategyConfig() {
+  const payload = {
+    groq_model: document.getElementById('s-groq-model').value.trim(),
+    crypto_min_confidence: parseFloat(document.getElementById('s-min-confidence').value),
+    bank_size: parseFloat(document.getElementById('s-bank-size').value),
+    groq_signal_review_enabled: document.getElementById('s-groq-review').checked,
+    high_conviction_only: document.getElementById('s-high-conviction').checked,
+    binance_oi_enabled: document.getElementById('s-binance-oi').checked,
+    orderflow_enabled: document.getElementById('s-orderflow').checked,
+    binance_klines_enabled: document.getElementById('s-binance-klines').checked,
+    crypto_volume_spike_enabled: document.getElementById('s-volume-spike').checked,
+    crypto_htf_filter_enabled: document.getElementById('s-htf-filter').checked,
+    sports_enabled: document.getElementById('s-sports-enabled').checked,
+  };
+  try {
+    const res = await apiFetch('/api/strategy/config', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify(payload),
+    });
+    const d = await res.json();
+    if (d.ok) showToast('Strategy & AI configuration updated ✓');
+    else showToast('Save failed: ' + (d.error || 'unknown'), true);
+  } catch(e) {
+    showToast('Network error saving strategy config', true);
+  }
+}
+
 function showToast(msg, isErr=false) {
   const t = document.getElementById('toast');
   t.textContent = msg;
@@ -4377,8 +4773,7 @@ function showToast(msg, isErr=false) {
   setTimeout(() => t.className = 'toast', 2800);
 }
 
-load();
-setInterval(load, 30000);
+window.addEventListener('DOMContentLoaded', checkAuth);
 </script>
 </body>
 </html>"""
@@ -4983,7 +5378,7 @@ async function load(){
       <td><span class="pill ${dir}">${dir.toUpperCase()}</span>
         <div class="sub">${m.confidence==null?'':Math.round(m.confidence*100)+'% agreement'}</div></td>
       ${cell(f['1h'],m.price)}${cell(f['4h'],m.price)}
-      <td class="h-24h" style="padding:0">${cell(f['24h'],m.price).replace(/^<td[^>]*>/,'<div class="fc" style="padding:11px 14px">').replace(/<\/td>$/,'</div>')}</td>
+      <td class="h-24h" style="padding:0">${cell(f['24h'],m.price).replace(/^<td[^>]*>/,'<div class="fc" style="padding:11px 14px">').replace(/<\\/td>$/,'</div>')}</td>
     </tr>`;
   }).join('') : '<tr><td colspan="9" class="empty">No markets with enough history yet.</td></tr>';
 }
@@ -5171,47 +5566,60 @@ async def make_app(runner) -> web.Application:
         rate_limit_middleware(lambda: _SETTINGS),
         security_headers_middleware,
     ])
-    app.router.add_get("/", lambda req: _dashboard(req))
-    app.router.add_get("/sports", lambda req: _dashboard(req))
-    app.router.add_get("/data", lambda req: _data_page(req))
-    app.router.add_get("/api/tables", lambda req: _api_tables(runner, req))
-    app.router.add_get("/health", lambda req: _health(runner, req))
-    app.router.add_get("/api/status", lambda req: _api_status(runner, req))
-    app.router.add_get("/api/matches", lambda req: _api_matches(runner, req))
-    app.router.add_get("/api/signals", lambda req: _api_signals(runner, req))
-    app.router.add_get("/api/football/matches", lambda req: _api_football_matches(runner, req))
-    app.router.add_get("/api/football/signals", lambda req: _api_football_signals(runner, req))
+
+    def _bind(handler_fn):
+        async def _bound(req: web.Request) -> web.Response:
+            return await handler_fn(runner, req)
+        return _bound
+
+    app.router.add_get("/", _dashboard)
+    app.router.add_get("/sports", _dashboard)
+    app.router.add_get("/data", _data_page)
+    app.router.add_get("/api/tables", _bind(_api_tables))
+    app.router.add_get("/health", _bind(_health))
+    app.router.add_get("/api/status", _bind(_api_status))
+    app.router.add_get("/api/matches", _bind(_api_matches))
+    app.router.add_get("/api/signals", _bind(_api_signals))
+    app.router.add_get("/api/football/matches", _bind(_api_football_matches))
+    app.router.add_get("/api/football/signals", _bind(_api_football_signals))
     app.router.add_get("/api/football/wc-groups", _api_wc_groups)
-    app.router.add_get("/api/debug", lambda req: _api_debug(runner, req))
-    app.router.add_get("/api/debug/collectors", lambda req: _api_collectors_debug(runner, req))
-    app.router.add_get("/api/h2h", lambda req: _api_h2h(runner, req))
-    app.router.add_get("/api/scalping", lambda req: _api_scalping(runner, req))
-    app.router.add_post("/api/ingest", lambda req: _api_ingest(runner, req))
-    app.router.add_get("/settings", lambda req: _settings_page(req))
-    app.router.add_get("/api/settings", lambda req: _api_collector_states(runner, req))
-    app.router.add_post("/api/auth/verify", lambda req: _api_auth_verify(runner, req))
-    app.router.add_post("/api/settings/toggle", lambda req: _api_collector_toggle(runner, req))
+    app.router.add_get("/api/debug", _bind(_api_debug))
+    app.router.add_get("/api/debug/collectors", _bind(_api_collectors_debug))
+    app.router.add_get("/api/h2h", _bind(_api_h2h))
+    app.router.add_get("/api/scalping", _bind(_api_scalping))
+    app.router.add_post("/api/ingest", _bind(_api_ingest))
+    app.router.add_get("/settings", _settings_page)
+    app.router.add_get("/api/settings", _bind(_api_collector_states))
+    app.router.add_post("/api/auth/verify", _bind(_api_auth_verify))
+    app.router.add_post("/api/settings/auth/login", _bind(_api_settings_auth_login))
+    app.router.add_get("/api/settings/auth/status", _bind(_api_settings_auth_status))
+    app.router.add_post("/api/settings/auth/logout", _bind(_api_settings_auth_logout))
+    app.router.add_get("/api/paper/config", _bind(_api_paper_config_get))
+    app.router.add_post("/api/paper/config", _bind(_api_paper_config_post))
+    app.router.add_get("/api/strategy/config", _bind(_api_strategy_config_get))
+    app.router.add_post("/api/strategy/config", _bind(_api_strategy_config_post))
+    app.router.add_post("/api/settings/toggle", _bind(_api_collector_toggle))
     # Crypto & Commodities Routes
-    app.router.add_get("/api/crypto/coins", lambda req: _api_crypto_coins(runner, req))
-    app.router.add_get("/api/crypto/signals", lambda req: _api_crypto_signals(runner, req))
-    app.router.add_get("/api/crypto/forecasts", lambda req: _api_crypto_forecasts(runner, req))
-    app.router.add_get("/api/paper", lambda req: _api_paper(runner, req))
-    app.router.add_get("/api/debug/coindcx", lambda req: _api_debug_coindcx(runner, req))
-    app.router.add_post("/api/sentiment/ingest", lambda req: _api_sentiment_ingest(runner, req))
-    app.router.add_get("/api/sentiment/recent", lambda req: _api_sentiment_recent(runner, req))
-    app.router.add_get("/api/signals/history", lambda req: _api_signal_history(runner, req))
-    app.router.add_get("/api/debug/signals", lambda req: _api_debug_signals(runner, req))
-    app.router.add_get("/predict", lambda req: _predict_page(req))
-    app.router.add_get("/api/predict", lambda req: _api_predict(runner, req))
-    app.router.add_get("/api/signals/accuracy", lambda req: _api_signal_accuracy(runner, req))
-    app.router.add_get("/audit", lambda req: _audit_page(req))
-    app.router.add_get("/api/audit", lambda req: _api_audit(runner, req))
-    app.router.add_get("/api/audit/methods", lambda req: _api_audit_methods(runner, req))
-    app.router.add_get("/api/debug/volume", lambda req: _api_debug_volume(runner, req))
-    app.router.add_post("/api/crypto/watchlist/add", lambda req: _api_crypto_watchlist_add(runner, req))
-    app.router.add_post("/api/crypto/watchlist/remove", lambda req: _api_crypto_watchlist_remove(runner, req))
-    app.router.add_get("/api/commodities", lambda req: _api_commodities(runner, req))
-    app.router.add_get("/api/debug/binance", lambda req: _api_binance_probe(runner, req))
+    app.router.add_get("/api/crypto/coins", _bind(_api_crypto_coins))
+    app.router.add_get("/api/crypto/signals", _bind(_api_crypto_signals))
+    app.router.add_get("/api/crypto/forecasts", _bind(_api_crypto_forecasts))
+    app.router.add_get("/api/paper", _bind(_api_paper))
+    app.router.add_get("/api/debug/coindcx", _bind(_api_debug_coindcx))
+    app.router.add_post("/api/sentiment/ingest", _bind(_api_sentiment_ingest))
+    app.router.add_get("/api/sentiment/recent", _bind(_api_sentiment_recent))
+    app.router.add_get("/api/signals/history", _bind(_api_signal_history))
+    app.router.add_get("/api/debug/signals", _bind(_api_debug_signals))
+    app.router.add_get("/predict", _predict_page)
+    app.router.add_get("/api/predict", _bind(_api_predict))
+    app.router.add_get("/api/signals/accuracy", _bind(_api_signal_accuracy))
+    app.router.add_get("/audit", _audit_page)
+    app.router.add_get("/api/audit", _bind(_api_audit))
+    app.router.add_get("/api/audit/methods", _bind(_api_audit_methods))
+    app.router.add_get("/api/debug/volume", _bind(_api_debug_volume))
+    app.router.add_post("/api/crypto/watchlist/add", _bind(_api_crypto_watchlist_add))
+    app.router.add_post("/api/crypto/watchlist/remove", _bind(_api_crypto_watchlist_remove))
+    app.router.add_get("/api/commodities", _bind(_api_commodities))
+    app.router.add_get("/api/debug/binance", _bind(_api_binance_probe))
     return app
 
 

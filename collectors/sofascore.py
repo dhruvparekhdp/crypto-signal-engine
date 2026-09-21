@@ -7,7 +7,7 @@ Falls back gracefully when Sofascore returns 403/429.
 """
 import asyncio
 import random
-from datetime import datetime
+from datetime import UTC, datetime, timedelta
 
 import httpx
 import structlog
@@ -75,8 +75,8 @@ class SofascoreCollector(BaseCollector):
     async def fetch(self) -> None:
         """Fetch all live tennis events and update the state store."""
         # Respect back-off window
-        if self._blocked_until and datetime.utcnow() < self._blocked_until:
-            remaining = (self._blocked_until - datetime.utcnow()).seconds
+        if self._blocked_until and datetime.now(UTC) < self._blocked_until:
+            remaining = int((self._blocked_until - datetime.now(UTC)).total_seconds())
             log.debug("sofascore_backoff_active", wait_secs=remaining)
             return
 
@@ -111,9 +111,7 @@ class SofascoreCollector(BaseCollector):
     def _on_failure(self, status_code: int | None = None, error: str | None = None) -> None:
         self._consecutive_failures += 1
         wait = _BACKOFF_SECONDS[min(self._consecutive_failures - 1, len(_BACKOFF_SECONDS) - 1)]
-        self._blocked_until = datetime.utcnow().__class__.utcnow()
-        import datetime as dt
-        self._blocked_until = dt.datetime.utcnow() + dt.timedelta(seconds=wait)
+        self._blocked_until = datetime.now(UTC) + timedelta(seconds=wait)
 
         if status_code == 403:
             log.warning(
@@ -194,7 +192,7 @@ class SofascoreCollector(BaseCollector):
                     game_log.append(2)
 
         if odds_p1 > 1.0 and odds_p2 > 1.0:
-            odds_history.append(OddsPoint(odds_p1=odds_p1, odds_p2=odds_p2, timestamp=datetime.utcnow()))
+            odds_history.append(OddsPoint(odds_p1=odds_p1, odds_p2=odds_p2, timestamp=datetime.now(UTC)))
             if len(odds_history) > 40:
                 odds_history = odds_history[-40:]
 
@@ -218,7 +216,7 @@ class SofascoreCollector(BaseCollector):
             odds_history=odds_history,
             game_log=game_log,
             match_duration_mins=match_duration,
-            timestamp=datetime.utcnow(),
+            timestamp=datetime.now(UTC),
         )
 
     async def _get_match_stats(self, match_id: str) -> dict:

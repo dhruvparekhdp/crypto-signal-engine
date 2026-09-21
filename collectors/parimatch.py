@@ -30,7 +30,7 @@ import asyncio
 import json
 import os
 import re
-from datetime import datetime
+from datetime import UTC, datetime
 
 import structlog
 
@@ -231,7 +231,7 @@ def _try_build_state(ev: dict) -> MatchState | None:
             surface=_infer_surface(str(tournament)),
             tournament=str(tournament),
             current_server=0,
-            timestamp=datetime.utcnow(),
+            timestamp=datetime.now(UTC),
         )
     except Exception:
         return None

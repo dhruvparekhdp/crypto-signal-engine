@@ -155,6 +155,7 @@ class AppRunner:
         self.crypto_engine = CryptoEngine()
         self.groq_sentinel = GroqSentinel()
         self.oi_collector = BinanceFuturesOICollector(self.crypto_store)
+        self._pending_paper_signals: list[tuple[CryptoSignal, object]] = []
         # Cached because it only updates daily; refreshed by its own job.
         self.fear_greed = None
         self.multi_horizon = MultiHorizonPredictor()
@@ -483,19 +484,20 @@ class AppRunner:
         cycle = await repo.get_running_cycle()
         if cycle is not None:
             return cycle
+        pcfg = await repo.get_paper_config()
         cycle = await repo.start_cycle(
-            starting_wallet=settings.paper_starting_wallet,
-            target_wallet=settings.paper_target_wallet,
-            leverage=(settings.paper_max_leverage if settings.paper_scaled_leverage
-                      else settings.paper_leverage),
-            stop_pct_of_margin=settings.paper_stop_pct_of_margin,
-            reward_risk=settings.paper_reward_risk,
-            min_confidence=settings.paper_min_confidence,
-            trailing_enabled=settings.paper_trailing_enabled,
-            scaled_sizing=settings.paper_scaled_sizing,
-            scaled_leverage=settings.paper_scaled_leverage,
-            ladder_enabled=settings.paper_ladder_enabled,
-            ladder_tight=settings.paper_ladder_tight,
+            starting_wallet=pcfg.starting_wallet,
+            target_wallet=pcfg.target_wallet,
+            leverage=(pcfg.max_leverage if pcfg.scaled_leverage
+                      else pcfg.leverage),
+            stop_pct_of_margin=pcfg.stop_pct_of_margin,
+            reward_risk=pcfg.reward_risk,
+            min_confidence=pcfg.min_confidence,
+            trailing_enabled=pcfg.trailing_enabled,
+            scaled_sizing=pcfg.scaled_sizing,
+            scaled_leverage=pcfg.scaled_leverage,
+            ladder_enabled=pcfg.ladder_enabled,
+            ladder_tight=pcfg.ladder_tight,
         )
         log.info("paper_cycle_started", cycle_id=cycle.id,
                  wallet=cycle.starting_wallet, leverage=cycle.leverage)
@@ -544,13 +546,14 @@ class AppRunner:
         try:
             async with AsyncSessionFactory() as session:
                 repo = Repository(session)
+                pcfg = await repo.get_paper_config()
                 cycle = await self._ensure_cycle(repo)
                 if cycle is None:
                     return
 
                 cfg = config_for_cycle(cycle)
-                cfg = replace(cfg, max_concurrent=settings.paper_max_concurrent,
-                              max_hold_minutes=settings.paper_max_hold_minutes)
+                cfg = replace(cfg, max_concurrent=pcfg.max_concurrent,
+                              max_hold_minutes=pcfg.max_hold_minutes)
                 wallet = cycle.wallet
                 now = now_utc()
 
@@ -581,7 +584,7 @@ class AppRunner:
                     log.info("paper_trade_closed", symbol=pos.symbol,
                              reason=trade.reason.value, net=round(trade.net_pnl, 2),
                              wallet=round(wallet, 2))
-                    if settings.paper_alert_telegram:
+                    if pcfg.alert_telegram:
                         await self.notifier.send_text(
                             format_paper_trade(trade, wallet), parse_mode=ParseMode.HTML)
 
@@ -589,29 +592,41 @@ class AppRunner:
                                     peak_wallet=cycle.peak_wallet,
                                     positions=live, position_ids=live_ids)
 
-                # 2. Consider new positions from this tick's signals.
-                for st in states.values():
+                # 2. Consider new positions from queued signals.
+                pending = list(self._pending_paper_signals)
+                self._pending_paper_signals.clear()
+
+                for sig, st in pending:
                     if st.current_price <= 0:
                         continue
-                    for sig in self.crypto_engine.process(st):
-                        sig = self._apply_sentiment(sig, st.funding_rate_per_8h)
-                        ok, _why = should_open(sig, cfg, cstate, now)
-                        if not ok:
-                            continue
-                        atr_pct = (st.atr_14 / st.current_price
-                                   if st.current_price > 0 and st.atr_14 > 0 else None)
-                        pos = open_from_signal(sig, cfg, cstate, now,
-                                               settings.paper_usdt_inr, atr_pct)
-                        if pos is None:
-                            continue
-                        cstate.wallet -= pos.margin
-                        wallet = cstate.wallet
-                        row = await repo.save_position(cycle.id, pos)
-                        cstate.position_ids[len(cstate.positions)] = row.id
-                        cstate.positions.append(pos)
-                        log.info("paper_trade_opened", symbol=pos.symbol,
-                                 side=pos.side.value, margin=round(pos.margin, 2),
-                                 confidence=pos.confidence)
+                    sig = self._apply_sentiment(sig, st.funding_rate_per_8h)
+                    ok, _why = should_open(sig, cfg, cstate, now)
+                    if not ok:
+                        log.info("paper_trade_skipped", symbol=sig.symbol, reason=_why)
+                        continue
+                    atr_pct = (st.atr_14 / st.current_price
+                               if st.current_price > 0 and st.atr_14 > 0 else None)
+                    pos = open_from_signal(sig, cfg, cstate, now,
+                                           pcfg.usdt_inr, atr_pct)
+                    if pos is None:
+                        continue
+                    cstate.wallet -= pos.margin
+                    wallet = cstate.wallet
+                    row = await repo.save_position(cycle.id, pos)
+                    cstate.position_ids[len(cstate.positions)] = row.id
+                    cstate.positions.append(pos)
+                    log.info("paper_trade_opened", symbol=pos.symbol,
+                             side=pos.side.value, margin=round(pos.margin, 2),
+                             confidence=pos.confidence)
+                    if pcfg.alert_telegram:
+                        arrow = "LONG 🟢" if pos.side.value == "long" else "SHORT 🔴"
+                        await self.notifier.send_text(
+                            f"📝 <b>Paper Trade Opened</b>\n"
+                            f"<b>{pos.symbol.upper()}</b> · {arrow}\n"
+                            f"Entry <b>${pos.entry_price:,.4f}</b> · Margin <b>₹{pos.margin:,.0f}</b> ({pos.leverage:.0f}x)\n"
+                            f"Target <b>${pos.target_price:,.4f}</b> · Stop <b>${pos.stop_price:,.4f}</b>",
+                            parse_mode=ParseMode.HTML,
+                        )
 
                 await repo.update_cycle_wallet(cycle.id, wallet)
 
@@ -624,7 +639,7 @@ class AppRunner:
                     log.info("paper_cycle_ended", cycle_id=cycle.id,
                              outcome=outcome, trades=len(trades),
                              wallet=round(wallet, 2))
-                    if settings.paper_alert_telegram:
+                    if pcfg.alert_telegram:
                         await self.notifier.send_text(
                             format_cycle_end(cycle, outcome, summarise(trades, wallet, cfg)),
                             parse_mode=ParseMode.HTML)
@@ -662,6 +677,7 @@ class AppRunner:
                 if not pending:
                     return
 
+                pcfg = await repo.get_paper_config()
                 states = {st.symbol: st for st in await self.crypto_store.get_all()}
                 resolved = 0
                 for sig in pending:
@@ -673,8 +689,9 @@ class AppRunner:
                     st = states.get(sig.symbol.lower())
                     if st is None or not st.candles_1m:
                         continue
+                    sig_ts = sig.timestamp.replace(tzinfo=None) if sig.timestamp.tzinfo else sig.timestamp
                     after = [c for c in st.candles_1m
-                             if c.timestamp.replace(tzinfo=None) > sig.timestamp]
+                             if (c.timestamp.replace(tzinfo=None) if c.timestamp.tzinfo else c.timestamp) > sig_ts]
                     if not after:
                         continue
 
@@ -703,11 +720,11 @@ class AppRunner:
                             pnl = (sig.stop_loss - sig.current_price) / sig.current_price * 100
                             break
 
-                    if outcome is None:
                         # Signal is still running. Only expire if past maximum hold time
-                        span = (after[-1].timestamp.replace(tzinfo=None) - sig.timestamp)
-                        max_hold = settings.paper_max_hold_minutes
-                        if span.total_seconds() / 60 < max_hold:
+                        last_c_ts = after[-1].timestamp.replace(tzinfo=None) if after[-1].timestamp.tzinfo else after[-1].timestamp
+                        span = last_c_ts - sig_ts
+                        paper_max_hold_minutes = pcfg.max_hold_minutes
+                        if span.total_seconds() / 60 < paper_max_hold_minutes:
                             continue
                         outcome = "expired"
                         pnl = (after[-1].close - sig.current_price) / sig.current_price * 100
@@ -784,6 +801,10 @@ class AppRunner:
     async def _crypto_analysis_job(self) -> None:
         """Run crypto signal detection across all symbols in the watchlist."""
         try:
+            async with AsyncSessionFactory() as session:
+                repo = Repository(session)
+                scfg = await repo.get_strategy_config()
+
             states = await self.crypto_store.get_all()
             for state in states:
                 if state.current_price <= 0:
@@ -791,8 +812,11 @@ class AppRunner:
 
                 signals = self.crypto_engine.process(state)
                 for sig in signals:
+                    if scfg.crypto_min_confidence > 0 and sig.confidence < scfg.crypto_min_confidence:
+                        continue
+
                     # Groq AI Pre-Signal Sanity Review (advisory sanity check)
-                    if self.groq_sentinel.is_available and getattr(settings, "groq_signal_review_enabled", True):
+                    if self.groq_sentinel.is_available and scfg.groq_signal_review_enabled:
                         delta, ai_summary = await self.groq_sentinel.review_signal_candidate(sig, state)
                         if ai_summary:
                             sig.ai_review = ai_summary
@@ -801,6 +825,9 @@ class AppRunner:
                     msg = format_crypto_signal(sig)
                     if settings.crypto_alert_telegram:
                         await self.notifier.send_text(msg, parse_mode=ParseMode.HTML)
+
+                    if settings.paper_trading_enabled:
+                        self._pending_paper_signals.append((sig, state))
 
                     # Log to DB
                     try:

@@ -33,7 +33,7 @@ import io
 import sys
 from collections import defaultdict
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Iterator
 
@@ -144,11 +144,11 @@ def _make_state(ctx: _MatchContext, fake_odds: tuple[float, float]) -> MatchStat
         odds_p1=odds_p1,
         odds_p2=odds_p2,
         odds_history=[
-            OddsPoint(odds_p1=odds_p1, odds_p2=odds_p2, timestamp=datetime.utcnow())
+            OddsPoint(odds_p1=odds_p1, odds_p2=odds_p2, timestamp=datetime.now(UTC))
         ],
         game_log=list(ctx.game_log),
         match_duration_mins=max(10, len(ctx.game_log) * 4),
-        timestamp=datetime.utcnow(),
+        timestamp=datetime.now(UTC),
     )
 
 

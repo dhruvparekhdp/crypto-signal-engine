@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import UTC, datetime, timedelta
 
 from analysis.match_state import MatchState, OddsPoint, ServeStats
 from analysis.momentum import MomentumAnalyzer
@@ -22,7 +22,7 @@ def _make_state(**kwargs) -> MatchState:
         odds_history=[],
         game_log=[],
         match_duration_mins=45,
-        timestamp=datetime.utcnow(),
+        timestamp=datetime.now(UTC),
     )
     defaults.update(kwargs)
     return MatchState(**defaults)
@@ -40,7 +40,7 @@ def test_signal_fires_on_3_game_streak():
         game_log=[1, 2, 2, 2, 2, 2, 2],  # 5 consecutive for player 2
         odds_p2=1.60,
         odds_history=[
-            OddsPoint(odds_p1=2.60, odds_p2=1.55, timestamp=datetime.utcnow()),
+            OddsPoint(odds_p1=2.60, odds_p2=1.55, timestamp=datetime.now(UTC)),
         ],
     )
     sig = MomentumAnalyzer().analyze(state)
@@ -52,9 +52,8 @@ def test_signal_fires_on_3_game_streak():
 
 def test_no_signal_when_odds_already_moved():
     """Market already reflected the momentum — no edge."""
-    now = datetime.utcnow()
-    from datetime import timedelta
-    old_time = datetime.utcnow().replace(microsecond=0) - timedelta(minutes=20)
+    now = datetime.now(UTC)
+    old_time = datetime.now(UTC).replace(microsecond=0) - timedelta(minutes=20)
     state = _make_state(
         game_log=[1, 2, 2, 2, 2],
         odds_p2=1.30,  # odds already shortened significantly
@@ -82,7 +81,7 @@ def test_stake_is_positive_when_signal_fires():
     state = _make_state(
         game_log=[2, 2, 2, 2, 2],
         odds_p2=2.00,
-        odds_history=[OddsPoint(odds_p1=1.80, odds_p2=2.00, timestamp=datetime.utcnow())],
+        odds_history=[OddsPoint(odds_p1=1.80, odds_p2=2.00, timestamp=datetime.now(UTC))],
     )
     sig = MomentumAnalyzer().analyze(state)
     if sig:

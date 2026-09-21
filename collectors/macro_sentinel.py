@@ -107,7 +107,7 @@ class GroqSentinel:
         try:
             async with httpx.AsyncClient(timeout=self.timeout) as client:
                 resp = await client.post(GROQ_ENDPOINT, json=payload, headers=headers)
-                if resp.status_code == 404 and payload["model"] != "qwen/qwen3.8-27b":
+                if resp.status_code in (400, 404) and payload["model"] != "qwen/qwen3.8-27b":
                     payload["model"] = "qwen/qwen3.8-27b"
                     resp = await client.post(GROQ_ENDPOINT, json=payload, headers=headers)
 

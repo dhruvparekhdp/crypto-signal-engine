@@ -14,7 +14,7 @@ Soccer endpoint:  /soccer/trial/v4/en/schedules/live/summaries.json
 """
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import UTC, datetime
 
 import httpx
 import structlog
@@ -169,7 +169,7 @@ class SportradarCollector:
             odds_history=existing.odds_history.copy() if existing else [],
             game_log=[],
             match_duration_mins=0,
-            timestamp=datetime.utcnow(),
+            timestamp=datetime.now(UTC),
             is_scheduled=True,
             start_time=start_time,
         )
@@ -300,7 +300,7 @@ class SportradarCollector:
             odds_history=odds_history,
             game_log=game_log,
             match_duration_mins=0,
-            timestamp=datetime.utcnow(),
+            timestamp=datetime.now(UTC),
         )
 
     # ── Soccer ────────────────────────────────────────────────────────────────
@@ -404,5 +404,5 @@ class SportradarCollector:
             is_extra_time=is_extra_time,
             period=period,
             is_scheduled=False,
-            timestamp=datetime.utcnow(),
+            timestamp=datetime.now(UTC),
         )

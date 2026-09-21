@@ -16,7 +16,7 @@ Feed field mapping (discovered June 2026):
   Tournament injected from preceding ZA header record.
 """
 import asyncio
-from datetime import datetime
+from datetime import UTC, datetime
 
 import structlog
 
@@ -225,7 +225,7 @@ class FlashscoreCollector(BaseCollector):
                 odds_history=[],
                 game_log=[],
                 match_duration_mins=0,
-                timestamp=datetime.utcnow(),
+                timestamp=datetime.now(UTC),
             )
         except Exception as exc:
             log.debug("flashscore_parse_match_failed", match_id=match_id, error=str(exc))

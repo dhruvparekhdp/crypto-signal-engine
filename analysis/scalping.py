@@ -19,7 +19,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import UTC, datetime
 
 from analysis.match_state import MatchState
 from analysis.win_probability import compute_win_probability
@@ -72,7 +72,7 @@ class ScalpOpportunity:
     reasons: list[str] = field(default_factory=list)
     scalp_window: bool = False  # odds drifted up → better entry now
     is_serving: bool = False    # favourite currently serving
-    timestamp: datetime = field(default_factory=datetime.utcnow)
+    timestamp: datetime = field(default_factory=lambda: datetime.now(UTC))
 
 
 def _best_of(state: MatchState) -> int:
@@ -246,7 +246,7 @@ def detect(
         reasons=reasons,
         scalp_window=_scalp_window(state, fav),
         is_serving=(state.current_server == fav),
-        timestamp=datetime.utcnow(),
+        timestamp=datetime.now(UTC),
     )
 
 

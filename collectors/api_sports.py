@@ -277,7 +277,7 @@ class ApiSportsCollector(BaseCollector):
             odds_history=[],
             game_log=[],
             match_duration_mins=0,
-            timestamp=datetime.utcnow(),
+            timestamp=datetime.now(timezone.utc),
             is_scheduled=is_scheduled,
             start_time=start_time,
         )

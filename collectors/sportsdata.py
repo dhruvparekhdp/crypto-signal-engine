@@ -12,7 +12,7 @@ Cloud-safe: works from Render without IP blocking.
 """
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime, timezone
 
 import httpx
 import structlog
@@ -211,7 +211,7 @@ class SportsDataCollector(BaseCollector):
             odds_history=[],
             game_log=[],
             match_duration_mins=0,
-            timestamp=datetime.utcnow(),
+            timestamp=datetime.now(UTC),
             is_scheduled=is_scheduled,
             start_time=start_time,
         )

@@ -1,9 +1,14 @@
-from datetime import datetime
+from datetime import UTC, datetime
 
 from sqlalchemy import Boolean, DateTime, Float, Index, Integer, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from storage.database import Base
+
+
+def _now_utc() -> datetime:
+    """Return current UTC time as naive datetime for TIMESTAMP WITHOUT TIME ZONE compatibility."""
+    return datetime.now(UTC).replace(tzinfo=None)
 
 
 class Match(Base):
@@ -14,8 +19,8 @@ class Match(Base):
     player2: Mapped[str] = mapped_column(String)
     tournament: Mapped[str] = mapped_column(String)
     surface: Mapped[str] = mapped_column(String)
-    first_seen: Mapped[datetime] = mapped_column(default=datetime.utcnow)
-    last_updated: Mapped[datetime] = mapped_column(default=datetime.utcnow)
+    first_seen: Mapped[datetime] = mapped_column(default=_now_utc)
+    last_updated: Mapped[datetime] = mapped_column(default=_now_utc)
     is_finished: Mapped[bool] = mapped_column(default=False)
 
 
@@ -256,7 +261,7 @@ class MatchResult(Base):
     match_progress: Mapped[float] = mapped_column(Float)
     p1_opening_implied: Mapped[float] = mapped_column(Float)
     winner: Mapped[int] = mapped_column(Integer)
-    recorded_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    recorded_at: Mapped[datetime] = mapped_column(DateTime, default=_now_utc)
 
 
 class CryptoSnapshot(Base):
@@ -334,7 +339,7 @@ class CryptoWatchlistEntry(Base):
     __tablename__ = "crypto_watchlist"
 
     symbol: Mapped[str] = mapped_column(String, primary_key=True)   # e.g. "btcusdt"
-    added_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    added_at: Mapped[datetime] = mapped_column(DateTime, default=_now_utc)
 
 
 class PaperCycle(Base):
@@ -374,6 +379,70 @@ class PaperCycle(Base):
     # running | hit_target | busted | stopped
     status: Mapped[str] = mapped_column(String, default="running", index=True)
     note: Mapped[str] = mapped_column(String, default="")
+
+
+class PaperTradingConfig(Base):
+    """
+    User-configurable parameters for the paper trading engine stored in DB.
+    Allows runtime editing from /settings without touching environment files.
+    """
+
+    __tablename__ = "paper_trading_config"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, default=1)
+    starting_wallet: Mapped[float] = mapped_column(Float, default=3000.0)
+    target_wallet: Mapped[float] = mapped_column(Float, default=20000.0)
+    leverage: Mapped[float] = mapped_column(Float, default=10.0)
+    stop_pct_of_margin: Mapped[float] = mapped_column(Float, default=0.20)
+    reward_risk: Mapped[float] = mapped_column(Float, default=2.0)
+    min_confidence: Mapped[float] = mapped_column(Float, default=0.70)
+    max_concurrent: Mapped[int] = mapped_column(Integer, default=3)
+    max_hold_minutes: Mapped[int] = mapped_column(Integer, default=240)
+    scaled_sizing: Mapped[bool] = mapped_column(Boolean, default=True)
+    trailing_enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    scaled_leverage: Mapped[bool] = mapped_column(Boolean, default=False)
+    ladder_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
+    ladder_tight: Mapped[bool] = mapped_column(Boolean, default=False)
+    max_leverage: Mapped[float] = mapped_column(Float, default=25.0)
+    usdt_inr: Mapped[float] = mapped_column(Float, default=102.0)
+    alert_telegram: Mapped[bool] = mapped_column(Boolean, default=True)
+
+
+class AdminAuth(Base):
+    """
+    Administrator authentication hash and active session token.
+    Stores salted PBKDF2 hash so no plaintext credentials ever exist in DB or code.
+    """
+
+    __tablename__ = "admin_auth"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, default=1)
+    password_hash: Mapped[str] = mapped_column(String)
+    salt: Mapped[str] = mapped_column(String)
+    session_token: Mapped[str | None] = mapped_column(String, nullable=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=_now_utc)
+
+
+class StrategyConfig(Base):
+    """
+    Runtime strategy parameters editable via /settings without redeploying.
+    """
+
+    __tablename__ = "strategy_config"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, default=1)
+    crypto_min_confidence: Mapped[float] = mapped_column(Float, default=0.70)
+    high_conviction_only: Mapped[bool] = mapped_column(Boolean, default=True)
+    crypto_volume_spike_enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    crypto_htf_filter_enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    binance_klines_enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    binance_oi_enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    orderflow_enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    groq_signal_review_enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    groq_model: Mapped[str] = mapped_column(String, default="qwen/qwen3.8-27b")
+    sports_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
+    bank_size: Mapped[float] = mapped_column(Float, default=10000.0)
+    min_confidence: Mapped[float] = mapped_column(Float, default=0.65)
 
 
 class PaperPosition(Base):
@@ -486,4 +555,4 @@ class NewsSentiment(Base):
     model: Mapped[str] = mapped_column(String, default="")       # what scored it
 
     published_at: Mapped[datetime] = mapped_column(DateTime, index=True)
-    received_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    received_at: Mapped[datetime] = mapped_column(DateTime, default=_now_utc)

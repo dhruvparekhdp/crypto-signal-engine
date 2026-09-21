@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 
 import structlog
 
@@ -128,10 +128,10 @@ class AnalysisEngine:
         if last is None:
             return False
         cooldown = timedelta(minutes=settings.signal_cooldown_minutes)
-        return datetime.utcnow() - last < cooldown
+        return datetime.now(UTC) - last < cooldown
 
     def _set_cooldown(self, match_id: str, signal_type: str) -> None:
-        self._cooldowns[(match_id, signal_type)] = datetime.utcnow()
+        self._cooldowns[(match_id, signal_type)] = datetime.now(UTC)
 
     async def _log_signal(self, sig: Signal, state: MatchState) -> None:
         try:

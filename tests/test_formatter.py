@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import UTC, datetime
 
 from analysis.signal import Signal
 from notifications.formatter import format_signal
@@ -22,7 +22,7 @@ def _make_signal(**kwargs) -> Signal:
         surface="clay",
         score_summary="3-6, 2-2 sets",
         match_duration_mins=83,
-        timestamp=datetime.utcnow(),
+        timestamp=datetime.now(UTC),
     )
     defaults.update(kwargs)
     return Signal(**defaults)

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import UTC, datetime
 
 
 @dataclass
@@ -35,7 +35,7 @@ class FootballMatchState:
     period: int = 1      # 1=first half, 2=second half, 3+=ET
     is_scheduled: bool = False   # True = upcoming, not yet live
     kickoff_time: datetime | None = None
-    timestamp: datetime = field(default_factory=datetime.utcnow)
+    timestamp: datetime = field(default_factory=lambda: datetime.now(UTC))
 
     @property
     def goal_diff(self) -> int:
@@ -93,7 +93,7 @@ class FootballStateStore:
                     draw_odds=draw_odds,
                     away_odds=away_odds,
                     minute=minute,
-                    timestamp=datetime.utcnow(),
+                    timestamp=datetime.now(UTC),
                 ))
                 state.odds_history = state.odds_history[-50:]
 

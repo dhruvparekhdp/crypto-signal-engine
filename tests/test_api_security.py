@@ -11,8 +11,9 @@ here rather than in production.
 from __future__ import annotations
 
 import unittest
+from unittest.mock import AsyncMock, patch
 
-from aiohttp.test_utils import AioHTTPTestCase, unittest_run_loop
+from aiohttp.test_utils import AioHTTPTestCase
 
 from scheduler.security import RateLimiter, check_bearer_auth, client_ip
 
@@ -177,14 +178,24 @@ class TestProtectedEndpoints(AioHTTPTestCase):
         self.runner = FakeRunner()
         return await make_app(self.runner)
 
-    @unittest_run_loop
+    async def setUpAsync(self):
+        await super().setUpAsync()
+        self._verify_patch = patch(
+            "scheduler.health._verify_admin_session",
+            new=AsyncMock(return_value=False),
+        )
+        self._verify_patch.start()
+
+    async def tearDownAsync(self):
+        self._verify_patch.stop()
+        await super().tearDownAsync()
+
     async def test_toggle_without_a_token_is_refused(self):
         resp = await self.client.post("/api/settings/toggle",
                                       json={"collector": "sportradar", "enabled": False})
         self.assertEqual(resp.status, 401)
         self.assertTrue(self.runner.collector_enabled["sportradar"])
 
-    @unittest_run_loop
     async def test_toggle_with_the_right_token_works(self):
         resp = await self.client.post(
             "/api/settings/toggle",
@@ -193,13 +204,11 @@ class TestProtectedEndpoints(AioHTTPTestCase):
         self.assertEqual(resp.status, 200)
         self.assertFalse(self.runner.collector_enabled["sportradar"])
 
-    @unittest_run_loop
     async def test_watchlist_add_without_a_token_is_refused(self):
         resp = await self.client.post("/api/crypto/watchlist/add", json={"symbol": "dogeusdt"})
         self.assertEqual(resp.status, 401)
         self.assertEqual(self.runner.added, [])
 
-    @unittest_run_loop
     async def test_watchlist_add_with_the_right_token_works(self):
         resp = await self.client.post(
             "/api/crypto/watchlist/add", json={"symbol": "dogeusdt"},
@@ -207,13 +216,11 @@ class TestProtectedEndpoints(AioHTTPTestCase):
         self.assertEqual(resp.status, 200)
         self.assertEqual(self.runner.added, ["dogeusdt"])
 
-    @unittest_run_loop
     async def test_watchlist_remove_without_a_token_is_refused(self):
         resp = await self.client.post("/api/crypto/watchlist/remove", json={"symbol": "dogeusdt"})
         self.assertEqual(resp.status, 401)
         self.assertEqual(self.runner.removed, [])
 
-    @unittest_run_loop
     async def test_auth_verify_reports_a_good_token(self):
         resp = await self.client.post(
             "/api/auth/verify", headers={"Authorization": "Bearer test-token-abc"})
@@ -221,13 +228,11 @@ class TestProtectedEndpoints(AioHTTPTestCase):
         body = await resp.json()
         self.assertTrue(body["ok"])
 
-    @unittest_run_loop
     async def test_auth_verify_reports_a_bad_token(self):
         resp = await self.client.post(
             "/api/auth/verify", headers={"Authorization": "Bearer wrong"})
         self.assertEqual(resp.status, 401)
 
-    @unittest_run_loop
     async def test_read_endpoints_stay_open(self):
         """
         Market data carries no secret and the existing dashboard reads it
@@ -237,18 +242,15 @@ class TestProtectedEndpoints(AioHTTPTestCase):
         resp = await self.client.get("/api/crypto/coins")
         self.assertNotEqual(resp.status, 401)
 
-    @unittest_run_loop
     async def test_security_headers_are_present_on_every_response(self):
         resp = await self.client.get("/api/crypto/coins")
         self.assertEqual(resp.headers.get("X-Content-Type-Options"), "nosniff")
         self.assertEqual(resp.headers.get("X-Frame-Options"), "DENY")
 
-    @unittest_run_loop
     async def test_api_responses_are_never_cached(self):
         resp = await self.client.get("/api/crypto/coins")
         self.assertEqual(resp.headers.get("Cache-Control"), "no-store")
 
-    @unittest_run_loop
     async def test_html_pages_are_not_marked_no_store(self):
         """The no-store rule is for API JSON, not for the page shell itself."""
         resp = await self.client.get("/")
@@ -267,7 +269,14 @@ class TestRateLimitIntegration(AioHTTPTestCase):
         settings.api_auth_rate_limit_window_seconds = 60
         return await make_app(FakeRunner())
 
-    @unittest_run_loop
+    async def tearDownAsync(self):
+        from config.settings import settings
+        settings.api_rate_limit_requests = 120
+        settings.api_rate_limit_window_seconds = 60
+        settings.api_auth_rate_limit_requests = 5
+        settings.api_auth_rate_limit_window_seconds = 60
+        await super().tearDownAsync()
+
     async def test_a_burst_over_the_general_limit_gets_429(self):
         for _ in range(3):
             resp = await self.client.get("/api/crypto/coins")
@@ -276,7 +285,6 @@ class TestRateLimitIntegration(AioHTTPTestCase):
         self.assertEqual(resp.status, 429)
         self.assertIn("Retry-After", resp.headers)
 
-    @unittest_run_loop
     async def test_the_auth_endpoint_has_its_own_tighter_bucket(self):
         """
         Configured to 2 here vs 3 for the general bucket, and hit only via
@@ -292,7 +300,6 @@ class TestRateLimitIntegration(AioHTTPTestCase):
         resp = await self.client.post("/api/auth/verify")
         self.assertEqual(resp.status, 429)
 
-    @unittest_run_loop
     async def test_hitting_the_auth_limit_does_not_touch_the_general_bucket(self):
         for _ in range(2):
             await self.client.post("/api/auth/verify")

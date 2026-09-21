@@ -10,7 +10,7 @@ Limitations vs Sofascore:
 - No live odds
 - Score data is slightly less granular (no point-level)
 """
-from datetime import datetime, timezone
+from datetime import UTC, datetime, timezone
 from dateutil import parser as _dtparser
 
 import httpx
@@ -251,7 +251,7 @@ class ESPNCollector(BaseCollector):
             odds_history=[],
             game_log=game_log,
             match_duration_mins=0,
-            timestamp=datetime.utcnow(),
+            timestamp=datetime.now(UTC),
             is_scheduled=is_scheduled,
             start_time=start_time,
         )

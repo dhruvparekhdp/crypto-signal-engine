@@ -1,5 +1,5 @@
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import UTC, datetime
 
 
 @dataclass
@@ -54,7 +54,7 @@ class MatchState:
     # Ordered list of game winners (1 or 2)
     game_log: list[int] = field(default_factory=list)
     match_duration_mins: int = 0
-    timestamp: datetime = field(default_factory=datetime.utcnow)
+    timestamp: datetime = field(default_factory=lambda: datetime.now(UTC))
     is_scheduled: bool = False       # True = upcoming, not yet live
     start_time: datetime | None = None
 

@@ -49,14 +49,12 @@ class Base(DeclarativeBase):
 
 
 async def init_db() -> None:
-    # Import for the side effect of registering every model on Base.metadata.
-    # Without it create_all sees an empty metadata and silently creates
-    # nothing — the tables then appear to be missing at query time, which is
-    # a confusing way to discover an import-order problem.
     import storage.models  # noqa: F401
 
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+
+    async with engine.connect() as conn:
         await _migrate_columns(conn)
 
 
@@ -155,6 +153,56 @@ async def _migrate_columns(conn) -> None:
             symbol VARCHAR PRIMARY KEY,
             added_at TIMESTAMP
         )""",
+        # paper_cycles columns for dynamic leverage scaling and profit ladders
+        "ALTER TABLE paper_cycles ADD COLUMN IF NOT EXISTS scaled_leverage BOOLEAN DEFAULT FALSE",
+        "ALTER TABLE paper_cycles ADD COLUMN IF NOT EXISTS ladder_enabled BOOLEAN DEFAULT FALSE",
+        "ALTER TABLE paper_cycles ADD COLUMN IF NOT EXISTS ladder_tight BOOLEAN DEFAULT FALSE",
+        # paper_trading_config table — user configurable paper trading settings in DB
+        """CREATE TABLE IF NOT EXISTS paper_trading_config (
+            id INTEGER PRIMARY KEY,
+            starting_wallet FLOAT DEFAULT 3000.0,
+            target_wallet FLOAT DEFAULT 20000.0,
+            leverage FLOAT DEFAULT 10.0,
+            stop_pct_of_margin FLOAT DEFAULT 0.20,
+            reward_risk FLOAT DEFAULT 2.0,
+            min_confidence FLOAT DEFAULT 0.70,
+            max_concurrent INTEGER DEFAULT 3,
+            max_hold_minutes INTEGER DEFAULT 240,
+            scaled_sizing BOOLEAN DEFAULT TRUE,
+            trailing_enabled BOOLEAN DEFAULT TRUE,
+            scaled_leverage BOOLEAN DEFAULT FALSE,
+            ladder_enabled BOOLEAN DEFAULT FALSE,
+            ladder_tight BOOLEAN DEFAULT FALSE,
+            max_leverage FLOAT DEFAULT 25.0,
+            usdt_inr FLOAT DEFAULT 102.0,
+            alert_telegram BOOLEAN DEFAULT TRUE
+        )""",
+        "INSERT INTO paper_trading_config (id) VALUES (1) ON CONFLICT (id) DO NOTHING",
+        # admin_auth table — password hash + salt + active session
+        """CREATE TABLE IF NOT EXISTS admin_auth (
+            id INTEGER PRIMARY KEY,
+            password_hash VARCHAR NOT NULL,
+            salt VARCHAR NOT NULL,
+            session_token VARCHAR,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )""",
+        # strategy_config table — strategy & AI runtime settings
+        """CREATE TABLE IF NOT EXISTS strategy_config (
+            id INTEGER PRIMARY KEY,
+            crypto_min_confidence FLOAT DEFAULT 0.70,
+            high_conviction_only BOOLEAN DEFAULT TRUE,
+            crypto_volume_spike_enabled BOOLEAN DEFAULT TRUE,
+            crypto_htf_filter_enabled BOOLEAN DEFAULT TRUE,
+            binance_klines_enabled BOOLEAN DEFAULT TRUE,
+            binance_oi_enabled BOOLEAN DEFAULT TRUE,
+            orderflow_enabled BOOLEAN DEFAULT TRUE,
+            groq_signal_review_enabled BOOLEAN DEFAULT TRUE,
+            groq_model VARCHAR DEFAULT 'qwen/qwen3.8-27b',
+            sports_enabled BOOLEAN DEFAULT FALSE,
+            bank_size FLOAT DEFAULT 10000.0,
+            min_confidence FLOAT DEFAULT 0.65
+        )""",
+        "INSERT INTO strategy_config (id) VALUES (1) ON CONFLICT (id) DO NOTHING",
         # Purge any legacy corrupted signals with invalid entry prices or astronomical moves
         """DELETE FROM crypto_signal_log 
            WHERE current_price <= 0.001 
@@ -166,8 +214,9 @@ async def _migrate_columns(conn) -> None:
     for sql in migrations:
         try:
             await conn.execute(__import__("sqlalchemy").text(sql))
+            await conn.commit()
         except Exception:
-            pass  # column may already exist on fresh DBs — silently skip
+            await conn.rollback()
 
 
 async def get_session() -> AsyncSession:

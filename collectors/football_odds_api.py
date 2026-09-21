@@ -12,7 +12,7 @@ Odds: 3-way h2h (home / draw / away) from EU bookmakers.
 """
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta, timezone
 
 import httpx
 import structlog
@@ -227,7 +227,7 @@ class FootballOddsApiCollector:
             away_odds=away_odds,
             is_scheduled=is_upcoming,
             kickoff_time=ct if is_upcoming else None,
-            timestamp=datetime.utcnow(),
+            timestamp=datetime.now(UTC),
         )
         await self.store.update(new_state)
         log.info("football_odds_api_match_added",

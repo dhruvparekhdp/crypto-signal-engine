@@ -12,7 +12,7 @@ Key facts from docs:
 """
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta, timezone
 
 import httpx
 import structlog
@@ -309,7 +309,7 @@ class OddsApiCollector:
             existing.odds_p1 = new_p1
             existing.odds_p2 = new_p2
             existing.odds_history.append(
-                OddsPoint(odds_p1=new_p1, odds_p2=new_p2, timestamp=datetime.utcnow())
+                OddsPoint(odds_p1=new_p1, odds_p2=new_p2, timestamp=datetime.now(UTC))
             )
             _save_snapshot(existing.match_id, new_p1, new_p2)
             log.info("odds_api_updated", match_id=existing.match_id,
@@ -329,7 +329,7 @@ class OddsApiCollector:
             existing_odds.odds_p1 = odds_home
             existing_odds.odds_p2 = odds_away
             existing_odds.odds_history.append(
-                OddsPoint(odds_p1=odds_home, odds_p2=odds_away, timestamp=datetime.utcnow())
+                OddsPoint(odds_p1=odds_home, odds_p2=odds_away, timestamp=datetime.now(UTC))
             )
             if not is_scheduled:
                 existing_odds.is_scheduled = False  # match started
@@ -359,10 +359,10 @@ class OddsApiCollector:
             odds_p1=odds_home,
             odds_p2=odds_away,
             odds_history=[OddsPoint(odds_p1=odds_home, odds_p2=odds_away,
-                                    timestamp=datetime.utcnow())],
+                                    timestamp=datetime.now(UTC))],
             game_log=[],
             match_duration_mins=0,
-            timestamp=datetime.utcnow(),
+            timestamp=datetime.now(UTC),
             is_scheduled=is_scheduled,
             start_time=start_time,
         )
