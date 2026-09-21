@@ -1,0 +1,21 @@
+[Unit]
+Description=Crypto Signal Engine
+After=network.target
+
+[Service]
+Type=simple
+User=ubuntu
+WorkingDirectory=/home/ubuntu/crypto-signal-engine
+EnvironmentFile=-/home/ubuntu/crypto-signal-engine/.env
+ExecStart=/home/ubuntu/crypto-signal-engine/.venv/bin/python main.py
+Restart=always
+RestartSec=5
+Environment=PYTHONUNBUFFERED=1
+Environment=PORT=8080
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,143 @@
+name: Deploy to EC2
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    name: Auto Deploy to AWS EC2
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Notify Telegram (Deployment Started)
+        if: always()
+        env:
+          TG_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TG_CHAT: ${{ secrets.TELEGRAM_CHAT_ID }}
+          COMMIT_SHA: ${{ github.sha }}
+          COMMIT_MSG: ${{ github.event.head_commit.message }}
+          ACTOR: ${{ github.actor }}
+        run: |
+          echo "=========================================="
+          echo "🚀 [Deploy] Starting EC2 Auto-Deployment"
+          echo "Repository: ${{ github.repository }}"
+          echo "Branch:     ${{ github.ref_name }}"
+          echo "Commit:     ${COMMIT_SHA}"
+          echo "Author:     ${ACTOR}"
+          echo "Message:    ${COMMIT_MSG}"
+          echo "=========================================="
+
+          if [ -n "${TG_TOKEN}" ] && [ -n "${TG_CHAT}" ]; then
+            SHORT_SHA=$(echo "${COMMIT_SHA}" | cut -c1-7)
+            FIRST_LINE=$(echo "${COMMIT_MSG:-Manual dispatch}" | head -n 1)
+            MSG="🚀 <b>Deploying to EC2...</b>
+📦 <b>Repo:</b> ${{ github.repository }}
+🌿 <b>Branch:</b> <code>${{ github.ref_name }}</code>
+🔖 <b>Commit:</b> <code>${SHORT_SHA}</code>
+👤 <b>Author:</b> ${ACTOR}
+📝 <b>Message:</b> ${FIRST_LINE}"
+
+            curl -s -X POST "https://api.telegram.org/bot${TG_TOKEN}/sendMessage" \
+              -d "chat_id=${TG_CHAT}" \
+              -d "parse_mode=HTML" \
+              --data-urlencode "text=${MSG}" > /dev/null || true
+            echo "📢 Telegram notification sent: Deployment Started"
+          else
+            echo "ℹ️ TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID secrets not configured in GitHub repository. Skipping."
+          fi
+
+      - name: Deploy via SSH
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.EC2_HOST }}
+          username: ${{ secrets.EC2_USER || 'ubuntu' }}
+          key: ${{ secrets.EC2_SSH_KEY }}
+          port: ${{ secrets.EC2_PORT || 22 }}
+          script_stop: true
+          script: |
+            set -e
+            echo "=========================================="
+            echo "🚀 [Deploy] Connecting to EC2 & updating repository..."
+            echo "=========================================="
+            cd ~/crypto-signal-engine
+
+            echo "📥 Fetching latest commits from origin/main..."
+            git fetch origin main
+            git reset --hard origin/main
+            echo "📌 Current commit on EC2: $(git rev-parse --short HEAD) - $(git log -1 --pretty=%s)"
+
+            echo "📦 Updating python virtual environment dependencies..."
+            source .venv/bin/activate
+            pip install --upgrade pip
+            pip install -r requirements.txt
+
+            if systemctl is-active --quiet crypto-engine; then
+              echo "🔄 Restarting crypto-engine service..."
+              sudo systemctl restart crypto-engine
+              sleep 2
+              echo "🔍 Service status check:"
+              sudo systemctl status crypto-engine --no-pager -n 5
+            else
+              echo "ℹ️ [Notice] crypto-engine service not yet active. Run: bash deploy/setup_ec2.sh"
+            fi
+
+            echo "=========================================="
+            echo "✅ [Deploy] Deployment completed successfully on EC2!"
+            echo "=========================================="
+
+      - name: Notify Telegram (Deployment Success)
+        if: success()
+        env:
+          TG_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TG_CHAT: ${{ secrets.TELEGRAM_CHAT_ID }}
+          COMMIT_SHA: ${{ github.sha }}
+          EC2_HOST: ${{ secrets.EC2_HOST }}
+        run: |
+          echo "=========================================="
+          echo "✅ [Deploy] EC2 Deployment finished successfully!"
+          echo "=========================================="
+
+          if [ -n "${TG_TOKEN}" ] && [ -n "${TG_CHAT}" ]; then
+            SHORT_SHA=$(echo "${COMMIT_SHA}" | cut -c1-7)
+            MSG="✅ <b>Deployment Successful!</b>
+🖥️ <b>Host:</b> EC2 (<code>${EC2_HOST}</code>)
+🔖 <b>Commit:</b> <code>${SHORT_SHA}</code>
+⚙️ <b>Service:</b> <code>crypto-engine</code> restarted & healthy 🟢
+🌐 <b>Dashboard:</b> http://${EC2_HOST}:8080"
+
+            curl -s -X POST "https://api.telegram.org/bot${TG_TOKEN}/sendMessage" \
+              -d "chat_id=${TG_CHAT}" \
+              -d "parse_mode=HTML" \
+              --data-urlencode "text=${MSG}" > /dev/null || true
+            echo "📢 Telegram notification sent: Deployment Successful"
+          fi
+
+      - name: Notify Telegram (Deployment Failure)
+        if: failure()
+        env:
+          TG_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TG_CHAT: ${{ secrets.TELEGRAM_CHAT_ID }}
+          COMMIT_SHA: ${{ github.sha }}
+          EC2_HOST: ${{ secrets.EC2_HOST }}
+        run: |
+          echo "=========================================="
+          echo "❌ [Deploy] EC2 Deployment failed!"
+          echo "=========================================="
+
+          if [ -n "${TG_TOKEN}" ] && [ -n "${TG_CHAT}" ]; then
+            SHORT_SHA=$(echo "${COMMIT_SHA}" | cut -c1-7)
+            MSG="❌ <b>Deployment Failed!</b>
+🖥️ <b>Host:</b> EC2 (<code>${EC2_HOST}</code>)
+🔖 <b>Commit:</b> <code>${SHORT_SHA}</code>
+⚠️ <i>Check GitHub Actions log for details.</i>"
+
+            curl -s -X POST "https://api.telegram.org/bot${TG_TOKEN}/sendMessage" \
+              -d "chat_id=${TG_CHAT}" \
+              -d "parse_mode=HTML" \
+              --data-urlencode "text=${MSG}" > /dev/null || true
+            echo "📢 Telegram notification sent: Deployment Failed"
+          fi

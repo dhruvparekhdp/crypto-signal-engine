@@ -742,8 +742,8 @@ class AppRunner:
     async def _cleanup_job(self) -> None:
         async with AsyncSessionFactory() as session:
             repo = Repository(session)
-            await repo.delete_old_odds_snapshots(days=7)
-            await repo.delete_old_crypto_data(days=7)
+            await repo.delete_old_odds_snapshots(days=3)
+            await repo.delete_old_crypto_data(days=3)
         log.info("db_cleanup_done")
 
     async def _heartbeat_job(self) -> None:
@@ -968,9 +968,8 @@ class AppRunner:
         # ── Always-on infrastructure jobs ────────────────────────────────────
         self.scheduler.add_job(
             self._cleanup_job,
-            "cron",
-            hour=3,
-            minute=0,
+            "interval",
+            hours=6,
             id="db_cleanup",
         )
         self.scheduler.add_job(

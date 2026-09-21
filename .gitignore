@@ -27,3 +27,7 @@ design/*.html
 !design/*.dc.html
 design/themes/*.html
 !design/themes/*.dc.html
+
+# Database Backups (keep compressed .gz in git, ignore raw uncompressed >100MB json)
+backups/*.json
+!backups/*.json.gz
