@@ -1,3 +1,4 @@
+import ssl
 from urllib.parse import parse_qs, urlencode, urlparse, urlunparse
 
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
@@ -10,7 +11,7 @@ def _make_url(raw: str) -> tuple[str, dict]:
     """
     Normalise a database URL for SQLAlchemy asyncpg:
     - Convert postgres:// / postgresql:// → postgresql+asyncpg://
-    - Strip sslmode= query param (asyncpg rejects it) and convert to connect_args ssl=True
+    - Strip sslmode= query param (asyncpg rejects it) and configure connect_args ssl
     Returns (url, connect_args).
     """
     connect_args: dict = {}
@@ -21,12 +22,17 @@ def _make_url(raw: str) -> tuple[str, dict]:
         raw = raw.replace("postgresql://", "postgresql+asyncpg://", 1)
 
     # asyncpg doesn't accept sslmode — strip it and pass ssl via connect_args
-    if "sslmode=" in raw:
+    if "sslmode=" in raw or "ssl=" in raw:
         parsed = urlparse(raw)
         params = parse_qs(parsed.query, keep_blank_values=True)
-        sslmode = params.pop("sslmode", ["require"])[0]
-        if sslmode in ("require", "verify-ca", "verify-full"):
+        ssl_val = (params.pop("sslmode", None) or params.pop("ssl", ["require"]))[0].lower()
+        if ssl_val in ("verify-ca", "verify-full"):
             connect_args["ssl"] = True
+        elif ssl_val in ("require", "prefer", "allow", "no-verify", "true", "1"):
+            ctx = ssl.create_default_context()
+            ctx.check_hostname = False
+            ctx.verify_mode = ssl.CERT_NONE
+            connect_args["ssl"] = ctx
         new_query = urlencode({k: v[0] for k, v in params.items()})
         raw = urlunparse(parsed._replace(query=new_query))
 
