@@ -57,6 +57,17 @@ async def init_db() -> None:
     async with engine.connect() as conn:
         await _migrate_columns(conn)
 
+    # Optional initial seed for fresh databases if ADMIN_PASSWORD is provided in env
+    admin_pwd = os.getenv("ADMIN_PASSWORD")
+    if admin_pwd and admin_pwd.strip():
+        from storage.models import AdminAuth
+        from storage.repository import Repository
+        async with AsyncSessionFactory() as session:
+            auth = await session.get(AdminAuth, 1)
+            if auth is None:
+                repo = Repository(session)
+                await repo.set_admin_password(admin_pwd.strip())
+
 
 async def _migrate_columns(conn) -> None:
     """
