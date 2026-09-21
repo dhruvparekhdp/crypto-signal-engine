@@ -7,11 +7,11 @@ tracked through a paper-trading simulator (no real capital), scored against
 their actual outcomes, and exposed through a web dashboard and a small
 authenticated API.
 
-The project began as a tennis-match betting monitor. The sports code is
-still in the repository — working, tested, and reachable behind a feature
-flag — but it is not part of the running system today. See
-[Status: the tennis/football engine](#status-the-tennisfootball-engine)
-for why it was kept rather than deleted.
+The project began as a tennis-match betting monitor. That lineage is
+visible in the git history and nowhere else: the sports collectors,
+analyzers, models and routes were removed once the crypto path became the
+whole system. Keeping a second, unrunnable application alive behind a
+feature flag cost more in confusion than it saved in optionality.
 
 ---
 
@@ -124,9 +124,8 @@ the documentation of "what fired this signal" is read from the code, not
 maintained by hand, so it can't drift out of sync with it.
 
 There is no machine-learning model retraining on this crypto outcome
-history today. See the cleanup note below — a dormant ML retrain job exists
-in the scheduler, but it trains a tennis win-probability model on tennis
-match data, not a crypto model.
+history today. The outcome archive is the input such a model would need,
+which is why it is recorded whether or not anything consumes it yet.
 
 ## API and security
 
@@ -203,11 +202,16 @@ Core secret credentials are kept in `.env`. Operational levers (Paper Trading on
 | Variable | Default | Purpose |
 |---|---|---|
 | `PORT` | `8080` | Web server port |
-| `DATABASE_URL` | `sqlite+aiosqlite:///./tennis_bet.db` | PostgreSQL connection URL (e.g. Aiven) |
+| `DATABASE_URL` | `sqlite+aiosqlite:///./crypto_engine.db` | PostgreSQL connection URL (e.g. Aiven) |
 | `ADMIN_PASSWORD` | — | Secret password to unlock `/settings` and manual controls |
 | `TELEGRAM_BOT_TOKEN` / `TELEGRAM_CHAT_ID` | — | Signal and trade alerts via Telegram |
 | `GROQ_API_KEY` | — | Groq API key for trade pre-signal reviews |
+| `API_AUTH_TOKEN` | — | Bearer token for the mutating API endpoints and the iOS client. **Fails closed** — unset means those endpoints refuse every request with a 503 |
+| `SENTIMENT_INGEST_TOKEN` | — | Optional: shared secret for pushed news-sentiment scores |
 | `TWELVEDATA_API_KEY` | — | Optional: TwelveData API for Gold, Silver, and Crude Oil |
+
+These are credentials, not tunables — which is why they live in `.env`
+rather than in the DB-backed settings above.
 
 ## Project structure
 
@@ -218,20 +222,21 @@ crypto-signal-engine/
 ├── collectors/
 │   ├── binance_klines.py         # live candles, primary crypto data source
 │   ├── coindcx.py, coingecko.py  # price/ticker sources
-│   ├── sentiment_feeds.py        # CryptoPanic news sentiment
-│   └── ...                       # sofascore.py, api_tennis.py, etc. — dormant, sports_enabled-gated
+│   ├── binance_futures_oi.py     # futures open interest
+│   ├── macro_sentinel.py         # Groq pre-signal review
+│   └── sentiment_feeds.py        # CryptoPanic news sentiment, Fear & Greed
 ├── analysis/
 │   ├── crypto_state.py, crypto_state_store.py   # canonical live market state
 │   ├── indicators.py             # RSI, MACD, Bollinger, ATR, volume metrics, etc.
 │   ├── confluence.py             # family voting + volatility veto
 │   ├── scalp_levels.py           # cost-floor-derived target/stop/reward:risk
 │   ├── crypto_signals.py         # the five detectors + the confluence detector
-│   ├── crypto_engine.py          # cooldown + contradiction rejection
+│   ├── crypto_engine.py          # cooldown, contradiction rejection, HTF filter
 │   ├── orderbook.py              # book-derived cost and wall-veto
+│   ├── orderflow.py              # CVD, taker delta, absorption detection
 │   ├── paper_trading.py, paper_cycle.py         # simulated execution
 │   ├── backtest.py               # historical replay through the same pipeline
-│   ├── signal_audit.py           # outcome scoring + live method catalogue
-│   └── ml_predictor.py           # dormant — trains a TENNIS model, not crypto (see below)
+│   └── signal_audit.py           # outcome scoring + live method catalogue
 ├── scheduler/
 │   ├── runner.py                 # APScheduler job registration and orchestration
 │   ├── health.py                 # aiohttp app: dashboard + JSON API
@@ -239,38 +244,5 @@ crypto-signal-engine/
 ├── storage/                      # SQLAlchemy models + repository
 ├── notifications/                # Telegram formatting and delivery
 ├── ios-port/                     # in-progress native iOS client (see above)
-└── tests/                        # 586 tests
+└── tests/                        # ~580 tests
 ```
-
----
-
-## Status: the tennis/football engine
-
-The original build. It's complete and was working — live match polling
-(Sofascore, ESPN, Flashscore, Sportradar, API-Tennis, football odds APIs),
-five tennis-specific signal analyzers (momentum shift, odds overreaction,
-serve degradation, set patterns, fatigue), a Markov-chain plus
-logistic-regression win-probability model, and its own Telegram alert
-format. All of it is reachable by setting `SPORTS_ENABLED=true`; with it
-unset, `scheduler/runner.py` never registers a single sports job — no API
-quota spent, no CPU spent, and the crypto path is unaffected either way.
-
-It was kept rather than deleted because it's tested, working code, and
-ripping it out is a separate, deliberate decision rather than a side effect
-of a documentation pass. It's flagged here, explicitly, so it reads as an
-intentional dormant subsystem rather than as evidence the repository wasn't
-cleaned up.
-
-## Known inaccuracy to fix, not just a naming issue
-
-The `ml_retrain` job runs unconditionally, every six hours, regardless of
-`SPORTS_ENABLED`. It calls `MLPredictor.maybe_retrain`, which loads training
-data from `MatchResult` — sets, games, serve percentage, surface — and fits
-a logistic regression to predict a *tennis match winner*. It is not a crypto
-model, it does not train on `crypto_signal_log`, and with sports disabled it
-has no fresh data to train on. If a crypto outcome model is wanted, it needs
-to be built against `crypto_signal_log`/`signal_audit`; the existing
-`ml_predictor.py` is unrelated tennis code that happens to still run on a
-timer. Recommend either building the crypto version or disabling/removing
-the job until it exists, so "the system retrains a model every six hours"
-is a true statement about what's deployed.

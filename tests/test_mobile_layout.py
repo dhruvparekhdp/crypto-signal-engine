@@ -263,13 +263,5 @@ class TestNoDanglingElementReferences(unittest.TestCase):
         """One absent tile should cost that tile, not the whole refresh."""
         self.assertIn("function setText(id, value)", self.html)
         block = self.html[self.html.index("async function refresh(){"):
-                          self.html.index("initView();")]
+                          self.html.index("switchTab((location.hash")]
         self.assertNotIn(".textContent=", block.replace("if(el) el.textContent", ""))
-
-    def test_init_view_survives_a_missing_element(self):
-        block = self.html[self.html.index("function initView(){"):]
-        block = block[:block.index("\n}")]
-        for m in re.finditer(r"getElementById\('([A-Za-z0-9_-]+)'\)", block):
-            with self.subTest(el=m.group(1)):
-                self.assertIn(m.group(1), self.ids)
-        self.assertIn("if(banner)", block)

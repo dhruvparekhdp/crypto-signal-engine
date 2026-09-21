@@ -8,18 +8,19 @@ version = "0.1.0"
 description = "Real-time crypto market analysis: five signal detectors, a confluence gate, and a paper-trading simulator"
 requires-python = ">=3.11"
 dependencies = [
-    "httpx[asyncio]>=0.27",
+    "httpx[asyncio,http2]>=0.27",
+    "h2>=4.0",
     "aiohttp>=3.9",
-    "beautifulsoup4>=4.12",
     "sqlalchemy[asyncio]>=2.0",
     "aiosqlite>=0.20",
+    "asyncpg>=0.29",
     "apscheduler>=3.10",
     "pydantic-settings>=2.0",
     "structlog>=24.0",
     "alembic>=1.13",
     "python-telegram-bot>=21.0",
-    "scikit-learn>=1.4",
     "pandas>=2.0",
+    "pyarrow>=14.0",
     "websockets>=13.0",
 ]
 

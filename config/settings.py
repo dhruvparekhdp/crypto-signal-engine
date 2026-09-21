@@ -3,22 +3,6 @@ from __future__ import annotations
 from pydantic import SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-# Legacy tournament helper (dormant)
-TIER1_KEYWORDS: frozenset[str] = frozenset({
-    "australian open", "roland garros", "french open", "wimbledon", "us open",
-    "indian wells", "miami open", "monte carlo", "madrid open", "monte-carlo",
-    "italian open", "internazionali", "canada open", "canadian open",
-    "montreal", "toronto", "western & southern", "cincinnati",
-    "shanghai", "paris masters", "rolex paris",
-    "china open", "beijing", "guadalajara",
-})
-
-
-def is_tier1(tournament_name: str) -> bool:
-    """Return True if the tournament is a Grand Slam or Masters 1000 / WTA 1000."""
-    name_lower = tournament_name.lower()
-    return any(kw in name_lower for kw in TIER1_KEYWORDS)
-
 
 class Settings(BaseSettings):
     """
@@ -29,7 +13,7 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 
     # Core Server & Storage
-    database_url: str = "sqlite+aiosqlite:///./tennis_bet.db"
+    database_url: str = "sqlite+aiosqlite:///./crypto_engine.db"
     port: int = 8080
 
     # Telegram Notifications (optional in dev, required in prod)
@@ -96,7 +80,6 @@ class Settings(BaseSettings):
     paper_alert_telegram: bool = True
 
     # Ingest / API Auth & Security
-    ingest_api_key: str = ""
     api_auth_token: str = ""
     api_rate_limit_requests: int = 120
     api_rate_limit_window_seconds: int = 60
@@ -109,10 +92,6 @@ class Settings(BaseSettings):
     crypto_max_stake_pct: float = 0.02
     use_finbert: bool = False
     crypto_auto_execute: bool = False
-
-    # Dormant sports & legacy settings
-    sports_enabled: bool = False
-    tournament_tier: str = "tier1"
 
     @property
     def prediction_timeframes(self) -> list[str]:

@@ -3,15 +3,18 @@ Entry point for the crypto signal engine.
 
 Starts the aiohttp web server (dashboard + JSON API) and the APScheduler
 job loop that polls live market data, runs the signal detectors, and drives
-the paper-trading simulator. The original tennis/football betting engine
-also lives in this codebase, dormant behind SPORTS_ENABLED=false; see
-README.md for why it was kept rather than removed.
+the paper-trading simulator.
+
+The web server binds before init_db on purpose: the database is remote, and
+a slow first connection used to hold the port closed long enough for health
+checks to fail against a process that was otherwise fine.
 
 Usage:
     python main.py
 
 Environment:
-    Copy .env.example to .env and fill in your credentials.
+    Copy .env.example to .env and fill in your credentials. Everything that
+    is not a secret is configured at runtime from /settings, stored in the DB.
 """
 import asyncio
 import os

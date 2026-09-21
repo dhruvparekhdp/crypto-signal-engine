@@ -1,34 +1,37 @@
 """
 APScheduler-based 24/7 job runner.
 
-Data collection strategy:
-  - ESPN (primary)     → always works from cloud IPs, covers ATP + WTA live scores
-  - Sofascore (enrich) → attempted for serve stats only; silently skipped if blocked
+Market data, in order of trust:
+  - Binance klines (60s)  → real 1-minute OHLCV plus depth; everything derives from it
+  - CoinDCX ticker (30s)  → keeps price fresh between kline polls
+  - CoinGecko (60s)       → covers anything CoinDCX does not list
 
 Jobs:
-  - data_poll:      every 30s  → ESPN fetch + optional Sofascore + analysis + snapshots
-  - schedule_poll:  every 5min → TheSportsDB schedule
-  - db_cleanup:     daily      → delete old odds/crypto/commodity snapshots
-  - heartbeat:      every 10m  → log status
+  - binance_klines / coindcx_poll / coingecko_poll → market data
+  - binance_oi_poll (120s)      → futures open interest, for leverage build-up
+  - crypto_analysis (60s)       → run the detectors, alert, queue for paper trading
+  - crypto_news / sentiment     → CryptoPanic headlines, Fear & Greed
+  - paper_trading_tick (30s)    → resolve open positions, then consider new ones
+  - resolve_signal_outcomes     → score fired signals against what price did next
+  - crypto_snapshot / db_cleanup / heartbeat / self_ping
 
-Data storage:
-  - MatchSnapshot: saved every ~2 minutes per match (every 4 polls)
-  - MatchCompletion: saved when a match disappears from the live feed
-  - SignalLog: updated with outcome (won/lost) when match completes
+Candles are never persisted — they live in memory, capped per symbol, and are
+refetched on boot. Only fired signals, snapshots and paper trades reach the DB.
 """
-import json
-import os
 import asyncio
-from datetime import datetime, timedelta, timezone
+import os
+from dataclasses import replace
+from datetime import UTC, datetime, timedelta
 
 import httpx
 import structlog
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from telegram.constants import ParseMode
 
-from dataclasses import replace
-
 from analysis.crypto_engine import CryptoEngine
+from analysis.crypto_signal import CryptoSignal
+from analysis.crypto_state_store import CommodityStateStore, CryptoStateStore
+from analysis.multi_horizon_predictor import MultiHorizonPredictor
 from analysis.paper_cycle import (
     CycleState,
     config_for_cycle,
@@ -40,20 +43,14 @@ from analysis.paper_cycle import (
     summarise,
 )
 from analysis.paper_trading import Position, Side
-from analysis.crypto_state_store import CommodityStateStore, CryptoStateStore
-from analysis.football_state import FootballStateStore
-from analysis.match_state import MatchState
-from analysis.multi_horizon_predictor import MultiHorizonPredictor
 from analysis.sentiment import SentimentAnalyzer
-from analysis.state_store import MatchStateStore
 from collectors.binance_futures_oi import BinanceFuturesOICollector
 from collectors.binance_klines import BinanceKlines
 from collectors.binance_ws import BinanceWSCollector
 from collectors.coindcx import CoinDCXCollector
 from collectors.coingecko import CoinGeckoCollector
-from collectors.macro_sentinel import GroqSentinel
 from collectors.cryptopanic import CryptoPanicCollector
-from collectors.historical_importer import run_import
+from collectors.macro_sentinel import GroqSentinel
 from collectors.sentiment_feeds import adjust_confidence, fetch_fear_greed
 from collectors.twelvedata_ws import TwelveDataWSCollector
 from config.settings import settings
@@ -71,8 +68,6 @@ log = structlog.get_logger()
 
 class AppRunner:
     def __init__(self) -> None:
-        self.store = MatchStateStore()
-        self.football_store = FootballStateStore()
         self.notifier = TelegramNotifier()
         self.scheduler = AsyncIOScheduler()
         # Crypto & Commodities — watchlist itself is DB-backed, loaded in start()
@@ -183,12 +178,12 @@ class AppRunner:
             stop_price=row.stop_price,
             target_price=row.target_price,
             liq_price=row.liq_price,
-            opened_at=row.opened_at.replace(tzinfo=timezone.utc),
+            opened_at=row.opened_at.replace(tzinfo=UTC),
             entry_fee=row.entry_fee,
             signal_type=row.signal_type,
             timeframe=row.timeframe,
             confidence=row.confidence,
-            expires_at=(row.expires_at.replace(tzinfo=timezone.utc)
+            expires_at=(row.expires_at.replace(tzinfo=UTC)
                         if row.expires_at else None),
             usdt_inr=row.usdt_inr,
             signal_price=row.signal_price,
@@ -411,20 +406,24 @@ class AppRunner:
     async def _cleanup_job(self) -> None:
         async with AsyncSessionFactory() as session:
             repo = Repository(session)
-            await repo.delete_old_odds_snapshots(days=3)
             await repo.delete_old_crypto_data(days=3)
         log.info("db_cleanup_done")
 
     async def _heartbeat_job(self) -> None:
-        count = await self.store.count()
-        sofascore_ok = self.sofascore._consecutive_failures == 0
-        flashscore_ok = self.flashscore._consecutive_failures == 0
+        # Symbols carrying a live price, not symbols merely on the watchlist:
+        # a watchlist entry no feed has answered for is the failure this line
+        # exists to make visible.
+        states = await self.crypto_store.get_all()
+        priced = sum(1 for st in states if st.current_price > 0)
         log.info(
             "heartbeat",
-            matches_tracked=count,
-            sofascore_available=sofascore_ok,
-            flashscore_http_ok=flashscore_ok,
-            flashscore_consecutive_zeros=self.flashscore._consecutive_zero_matches,
+            symbols_tracked=len(states),
+            symbols_priced=priced,
+            klines_host=self.klines.host or "none",
+            klines_last_success=(self.klines.last_success.isoformat()
+                                 if self.klines.last_success else None),
+            coindcx_failures=self.coindcx._consecutive_failures,
+            coingecko_failures=self.coingecko._consecutive_failures,
         )
 
     def _self_ping_url(self) -> tuple[str, bool]:
@@ -665,7 +664,7 @@ class AppRunner:
             seconds=settings.paper_tick_interval_seconds,
             id="paper_trading_tick",
             max_instances=1,
-            next_run_time=datetime.now(timezone.utc) + timedelta(seconds=15),
+            next_run_time=datetime.now(UTC) + timedelta(seconds=15),
         )
 
         self.scheduler.add_job(
@@ -674,7 +673,7 @@ class AppRunner:
             minutes=15,
             id="resolve_signal_outcomes",
             max_instances=1,
-            next_run_time=datetime.now(timezone.utc) + timedelta(minutes=2),
+            next_run_time=datetime.now(UTC) + timedelta(minutes=2),
         )
 
         if settings.sentiment_feeds_enabled:
@@ -684,7 +683,7 @@ class AppRunner:
                 minutes=settings.fear_greed_refresh_minutes,
                 id="sentiment_refresh",
                 max_instances=1,
-                next_run_time=datetime.now(timezone.utc),
+                next_run_time=datetime.now(UTC),
             )
 
         # Crypto & Commodities Interval Jobs
@@ -694,7 +693,7 @@ class AppRunner:
             seconds=settings.coindcx_poll_interval_seconds,
             id="coindcx_poll",
             max_instances=1,
-            next_run_time=datetime.now(timezone.utc),
+            next_run_time=datetime.now(UTC),
         )
         self.scheduler.add_job(
             self._klines_job,
@@ -702,7 +701,7 @@ class AppRunner:
             seconds=settings.binance_klines_seconds,
             id="binance_klines",
             max_instances=1,
-            next_run_time=datetime.now(timezone.utc),
+            next_run_time=datetime.now(UTC),
         )
         self.scheduler.add_job(
             self._coingecko_job,
@@ -710,7 +709,7 @@ class AppRunner:
             seconds=settings.coingecko_poll_interval_seconds,
             id="coingecko_poll",
             max_instances=1,
-            next_run_time=datetime.now(timezone.utc),
+            next_run_time=datetime.now(UTC),
         )
         self.scheduler.add_job(
             self._crypto_analysis_job,
@@ -718,7 +717,7 @@ class AppRunner:
             seconds=60,
             id="crypto_analysis",
             max_instances=1,
-            next_run_time=datetime.now(timezone.utc),
+            next_run_time=datetime.now(UTC),
         )
         self.scheduler.add_job(
             self._crypto_news_job,
@@ -726,7 +725,7 @@ class AppRunner:
             seconds=settings.cryptopanic_poll_interval_seconds,
             id="crypto_news",
             max_instances=1,
-            next_run_time=datetime.now(timezone.utc),
+            next_run_time=datetime.now(UTC),
         )
         self.scheduler.add_job(
             self._crypto_snapshot_job,
@@ -742,7 +741,7 @@ class AppRunner:
                 seconds=120,
                 id="binance_oi_poll",
                 max_instances=1,
-                next_run_time=datetime.now(timezone.utc),
+                next_run_time=datetime.now(UTC),
             )
 
     async def start(self) -> None:

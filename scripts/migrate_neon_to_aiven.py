@@ -31,10 +31,8 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 from storage.database import Base, _make_url, _migrate_columns
 from storage.models import (
     AdminAuth, CommoditySnapshot, CryptoSignalLog, CryptoSnapshot,
-    CryptoWatchlistEntry, Match, MatchCompletion, MatchRecord, MatchResult,
-    MatchSnapshot, NewsSentiment, OddsSnapshot, PaperCycle, PaperPosition,
-    PaperTrade, PaperTradingConfig, PlayerStats, SignalLog, SlamPoint,
-    StrategyConfig,
+    CryptoWatchlistEntry, NewsSentiment, PaperCycle, PaperPosition,
+    PaperTrade, PaperTradingConfig, StrategyConfig,
 )
 
 # Tables ordered by dependency (parent tables first, dependent children next)
@@ -48,16 +46,7 @@ TABLE_MODELS = [
     PaperTrade,
     CryptoSignalLog,
     NewsSentiment,
-    Match,
-    PlayerStats,
-    MatchRecord,
-    SlamPoint,
-    MatchSnapshot,
-    MatchCompletion,
-    MatchResult,
-    SignalLog,
     CommoditySnapshot,
-    OddsSnapshot,
     CryptoSnapshot,
 ]
 
@@ -139,7 +128,7 @@ async def migrate(source_url: str | None, target_url: str, snapshot_days: int = 
                 async with SourceSession() as s_session, TargetSession() as t_session:
                     # Filter heavy snapshot tables
                     stmt = select(model)
-                    if hasattr(model, "timestamp") and model in (CryptoSnapshot, OddsSnapshot, CommoditySnapshot):
+                    if hasattr(model, "timestamp") and model in (CryptoSnapshot, CommoditySnapshot):
                         stmt = stmt.where(model.timestamp >= cutoff_dt)
 
                     s_res = await s_session.execute(stmt)

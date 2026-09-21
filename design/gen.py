@@ -232,8 +232,8 @@ def hbars(rows,w=430):
 
 warn = ('<div style="background:#1e3a5f;border:1px solid #0ea5e9;border-radius:8px;padding:11px 13px;display:flex;gap:10px;align-items:flex-start">'
   '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#7dd3fc" stroke-width="2" style="flex:none;margin-top:1px"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4M12 8h.01"/></svg>'
-  '<div><div style="font-size:11px;color:#e2e8f0;font-weight:600">These charts need a signal-outcome resolver, which does not exist yet</div>'
-  '<div style="font-size:10px;color:#94a3b8;margin-top:3px">Crypto signals are written as <span style="font-family:ui-monospace,monospace">pending</span> and never resolved — only the tennis path has one. Every number on this page is illustrative until that job is built and has backfilled the archive.</div></div></div>')
+  '<div><div style="font-size:11px;color:#e2e8f0;font-weight:600">These charts are mock data, not the live archive</div>'
+  '<div style="font-size:10px;color:#94a3b8;margin-top:3px">Signals resolve through <span style="font-family:ui-monospace,monospace">resolve_signal_outcomes</span>, but the numbers on this page are illustrative — read the real ones from <span style="font-family:ui-monospace,monospace">/audit</span>.</div></div></div>')
 
 acc_body = f'''      {warn}
       <div style="display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px;flex-grow:1;min-height:0">

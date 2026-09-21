@@ -83,59 +83,6 @@ async def _migrate_columns(conn) -> None:
     PostgreSQL 9.6+ supports IF NOT EXISTS on ADD COLUMN.
     """
     migrations = [
-        # signal_log columns added in data-collection PR
-        "ALTER TABLE signal_log ADD COLUMN IF NOT EXISTS model_win_prob FLOAT DEFAULT 0.0",
-        "ALTER TABLE signal_log ADD COLUMN IF NOT EXISTS score_at_signal VARCHAR DEFAULT ''",
-        "ALTER TABLE signal_log ADD COLUMN IF NOT EXISTS sets_p1_at_signal INTEGER DEFAULT 0",
-        "ALTER TABLE signal_log ADD COLUMN IF NOT EXISTS sets_p2_at_signal INTEGER DEFAULT 0",
-        "ALTER TABLE signal_log ADD COLUMN IF NOT EXISTS games_p1_at_signal INTEGER DEFAULT 0",
-        "ALTER TABLE signal_log ADD COLUMN IF NOT EXISTS games_p2_at_signal INTEGER DEFAULT 0",
-        "ALTER TABLE signal_log ADD COLUMN IF NOT EXISTS outcome VARCHAR DEFAULT 'pending'",
-        "ALTER TABLE signal_log ADD COLUMN IF NOT EXISTS match_winner INTEGER DEFAULT 0",
-        # match_records table — bulk historical data from Sackmann ATP/WTA CSVs
-        """CREATE TABLE IF NOT EXISTS match_records (
-            id SERIAL PRIMARY KEY,
-            tour VARCHAR, year INTEGER, tourney_id VARCHAR DEFAULT '',
-            tourney_name VARCHAR, surface VARCHAR, tourney_level VARCHAR DEFAULT '',
-            round VARCHAR DEFAULT '', best_of INTEGER DEFAULT 3,
-            winner_name VARCHAR, loser_name VARCHAR,
-            winner_rank INTEGER DEFAULT 0, loser_rank INTEGER DEFAULT 0,
-            score VARCHAR DEFAULT '', minutes INTEGER DEFAULT 0,
-            w_ace INTEGER DEFAULT 0, w_df INTEGER DEFAULT 0,
-            w_svpt INTEGER DEFAULT 0, w_1st_in INTEGER DEFAULT 0,
-            w_1st_won INTEGER DEFAULT 0, w_2nd_won INTEGER DEFAULT 0,
-            w_svc_games INTEGER DEFAULT 0, w_bp_saved INTEGER DEFAULT 0,
-            w_bp_faced INTEGER DEFAULT 0,
-            l_ace INTEGER DEFAULT 0, l_df INTEGER DEFAULT 0,
-            l_svpt INTEGER DEFAULT 0, l_1st_in INTEGER DEFAULT 0,
-            l_1st_won INTEGER DEFAULT 0, l_2nd_won INTEGER DEFAULT 0,
-            l_svc_games INTEGER DEFAULT 0, l_bp_saved INTEGER DEFAULT 0,
-            l_bp_faced INTEGER DEFAULT 0
-        )""",
-        "CREATE INDEX IF NOT EXISTS ix_mr_winner ON match_records (winner_name)",
-        "CREATE INDEX IF NOT EXISTS ix_mr_loser ON match_records (loser_name)",
-        "CREATE INDEX IF NOT EXISTS ix_mr_year_surface ON match_records (year, surface)",
-        # slam_points table — point-by-point grand slam data
-        """CREATE TABLE IF NOT EXISTS slam_points (
-            id SERIAL PRIMARY KEY,
-            slam VARCHAR, year INTEGER, match_id VARCHAR,
-            player1 VARCHAR DEFAULT '', player2 VARCHAR DEFAULT '',
-            set_no INTEGER, game_no INTEGER, point_no INTEGER,
-            server INTEGER, point_winner INTEGER,
-            p1_score VARCHAR DEFAULT '', p2_score VARCHAR DEFAULT '',
-            p1_games INTEGER DEFAULT 0, p2_games INTEGER DEFAULT 0,
-            p1_sets INTEGER DEFAULT 0, p2_sets INTEGER DEFAULT 0,
-            is_break_point BOOLEAN DEFAULT FALSE,
-            is_set_point BOOLEAN DEFAULT FALSE,
-            is_match_point BOOLEAN DEFAULT FALSE,
-            p1_ace BOOLEAN DEFAULT FALSE, p2_ace BOOLEAN DEFAULT FALSE,
-            p1_double_fault BOOLEAN DEFAULT FALSE, p2_double_fault BOOLEAN DEFAULT FALSE,
-            serve_no INTEGER DEFAULT 1, rally_length INTEGER DEFAULT 0,
-            game_winner INTEGER DEFAULT 0, set_winner INTEGER DEFAULT 0,
-            match_winner INTEGER DEFAULT 0
-        )""",
-        "CREATE INDEX IF NOT EXISTS ix_sp_match ON slam_points (match_id)",
-        "CREATE INDEX IF NOT EXISTS ix_sp_slam_year ON slam_points (slam, year)",
         # crypto_snapshots table
         """CREATE TABLE IF NOT EXISTS crypto_snapshots (
             id SERIAL PRIMARY KEY,
@@ -218,7 +165,6 @@ async def _migrate_columns(conn) -> None:
             orderflow_enabled BOOLEAN DEFAULT TRUE,
             groq_signal_review_enabled BOOLEAN DEFAULT TRUE,
             groq_model VARCHAR DEFAULT 'qwen/qwen3.8-27b',
-            sports_enabled BOOLEAN DEFAULT FALSE,
             bank_size FLOAT DEFAULT 10000.0,
             min_confidence FLOAT DEFAULT 0.65
         )""",

@@ -22,18 +22,14 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from storage.database import _make_url
 from storage.models import (
     AdminAuth, CommoditySnapshot, CryptoSignalLog, CryptoSnapshot,
-    CryptoWatchlistEntry, Match, MatchCompletion, MatchRecord, MatchResult,
-    MatchSnapshot, NewsSentiment, OddsSnapshot, PaperCycle, PaperPosition,
-    PaperTrade, PaperTradingConfig, PlayerStats, SignalLog, SlamPoint,
-    StrategyConfig,
+    CryptoWatchlistEntry, NewsSentiment, PaperCycle, PaperPosition,
+    PaperTrade, PaperTradingConfig, StrategyConfig,
 )
 
 ALL_MODELS = [
     AdminAuth, StrategyConfig, PaperTradingConfig, CryptoWatchlistEntry,
     PaperCycle, PaperPosition, PaperTrade, CryptoSignalLog, NewsSentiment,
-    Match, PlayerStats, MatchRecord, SlamPoint, MatchSnapshot,
-    MatchCompletion, MatchResult, SignalLog, CommoditySnapshot, OddsSnapshot,
-    CryptoSnapshot,
+    CommoditySnapshot, CryptoSnapshot,
 ]
 
 

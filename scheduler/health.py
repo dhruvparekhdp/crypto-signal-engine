@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import math
 from datetime import UTC, datetime
 
 from aiohttp import web
@@ -17,298 +18,21 @@ _start_time = datetime.now(UTC)
 _SCALP = ScalpConfig()
 
 
-# ── Helpers ───────────────────────────────────────────────────────────────────
-
-def _dt_sort_key(dt: datetime | None) -> datetime:
-    if dt is None:
-        return datetime.now(UTC)
-    if dt.tzinfo is None:
-        return dt.replace(tzinfo=UTC)
-    return dt
-
-def _reconstruct_sets(
-    game_log: list[int],
-    sets_p1: int,
-    sets_p2: int,
-    games_p1: int,
-    games_p2: int,
-) -> list[dict]:
-    """Reconstruct per-set game scores from game_log."""
-    sets: list[dict] = []
-    log = list(game_log)
-    total_completed = sets_p1 + sets_p2
-
-    for _ in range(total_completed):
-        sp1, sp2 = 0, 0
-        while log:
-            w = log.pop(0)
-            if w == 1:
-                sp1 += 1
-            else:
-                sp2 += 1
-            if (sp1 >= 6 or sp2 >= 6) and abs(sp1 - sp2) >= 2:
-                break
-            if sp1 == 7 or sp2 == 7:  # tiebreak
-                break
-        sets.append({"p1": sp1, "p2": sp2, "current": False})
-
-    # Current set in progress
-    sets.append({"p1": games_p1, "p2": games_p2, "current": True})
-    return sets
-
 
 # ── JSON API ──────────────────────────────────────────────────────────────────
 
-def _settings_sports_enabled() -> bool:
-    from config.settings import settings
-    return bool(settings.sports_enabled)
-
-
 async def _api_status(runner, request: web.Request) -> web.Response:
     status = runner.get_status()
-    count = await runner.store.count()
+    count = await runner.crypto_store.count()
     uptime = int((datetime.now(UTC) - _start_time).total_seconds())
     return web.Response(
         text=json.dumps({
             "uptime_seconds": uptime,
-            "matches_tracked": count,
-            "sports_enabled": _settings_sports_enabled(),
+            "symbols_tracked": count,
             **status,
         }),
         content_type="application/json",
     )
-
-
-async def _api_matches(runner, request: web.Request) -> web.Response:
-    from analysis.win_probability import compute_win_probability
-    states = await runner.store.get_all()
-    # Live first, upcoming sorted by start_time
-    live = [s for s in states if not s.is_scheduled]
-    soon = sorted(
-        [s for s in states if s.is_scheduled],
-        key=lambda s: _dt_sort_key(s.start_time),
-    )
-    matches = []
-    for s in live + soon:
-        try:
-            win_p1, win_p2 = compute_win_probability(s)
-        except Exception:
-            win_p1, win_p2 = 0.0, 0.0
-
-        set_scores = _reconstruct_sets(
-            s.game_log, s.sets_p1, s.sets_p2,
-            s.games_in_set_p1, s.games_in_set_p2,
-        )
-        odds_history = [
-            {"odds_p1": p.odds_p1, "odds_p2": p.odds_p2,
-             "timestamp": _iso(p.timestamp)}
-            for p in s.odds_history[-20:]
-        ]
-        matches.append({
-            "match_id": s.match_id,
-            "player1": s.player1_name,
-            "player2": s.player2_name,
-            "tournament": s.tournament,
-            "surface": s.surface,
-            "sets_p1": s.sets_p1,
-            "sets_p2": s.sets_p2,
-            "games_p1": s.games_in_set_p1,
-            "games_p2": s.games_in_set_p2,
-            "current_set": s.current_set,
-            "is_tiebreak": s.is_tiebreak,
-            "odds_p1": s.odds_p1,
-            "odds_p2": s.odds_p2,
-            "win_prob_p1": round(win_p1 * 100, 1),
-            "win_prob_p2": round(win_p2 * 100, 1),
-            "set_scores": set_scores,
-            "odds_history": odds_history,
-            "game_log": s.game_log[-20:],
-            "duration_mins": s.match_duration_mins,
-            "source": s.match_id.split("_")[0],
-            "is_upcoming": s.is_scheduled,
-            "start_time": _iso(s.start_time),
-        })
-    return web.Response(text=json.dumps(matches), content_type="application/json")
-
-
-async def _api_football_matches(runner, request: web.Request) -> web.Response:
-    states = await runner.football_store.get_all()
-    # Live first, then upcoming sorted by kickoff
-    live = [s for s in states if not s.is_scheduled]
-    soon = sorted(
-        [s for s in states if s.is_scheduled],
-        key=lambda s: _dt_sort_key(s.kickoff_time),
-    )
-    matches = []
-    for s in live + soon:
-        matches.append({
-            "match_id": s.match_id,
-            "home_team": s.home_team,
-            "away_team": s.away_team,
-            "tournament": s.tournament,
-            "league_key": s.league_key,
-            "minute": s.minute,
-            "home_score": s.home_score,
-            "away_score": s.away_score,
-            "home_odds": s.home_odds,
-            "draw_odds": s.draw_odds,
-            "away_odds": s.away_odds,
-            "home_red_cards": s.home_red_cards,
-            "away_red_cards": s.away_red_cards,
-            "is_halftime": s.is_halftime,
-            "is_extra_time": s.is_extra_time,
-            "period": s.period,
-            "is_scheduled": s.is_scheduled,
-            "kickoff_time": _iso(s.kickoff_time),
-        })
-    return web.Response(text=json.dumps(matches), content_type="application/json")
-
-
-async def _api_football_signals(runner, request: web.Request) -> web.Response:
-    sigs = runner.football_engine.get_recent_signals(hours=24)
-    result = [
-        {
-            "match_id": s.match_id,
-            "signal_type": s.signal_type,
-            "team_to_back": s.team_to_back,
-            "opponent": s.opponent,
-            "tournament": s.tournament,
-            "is_home": s.is_home,
-            "market": s.market,
-            "current_odds": s.current_odds,
-            "fair_odds": s.fair_odds,
-            "edge_pct": round(s.edge_pct * 100, 1),
-            "confidence": round(s.confidence * 100),
-            "stake_pct": round(s.stake_pct * 100, 1),
-            "trigger": s.trigger_description,
-            "score_summary": s.score_summary,
-            "minute": s.minute,
-            "timestamp": _iso(s.timestamp),
-        }
-        for s in reversed(sigs)  # newest first
-    ]
-    return web.Response(text=json.dumps(result), content_type="application/json")
-
-
-async def _api_wc_groups(request: web.Request) -> web.Response:
-    """Fetch FIFA World Cup group standings from ESPN and return as JSON."""
-    import httpx
-    _ESPN_HEADERS = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-        "Accept": "application/json",
-    }
-    url = "https://site.api.espn.com/apis/v2/sports/soccer/fifa.world/standings"
-    try:
-        async with httpx.AsyncClient(timeout=10.0, headers=_ESPN_HEADERS) as client:
-            resp = await client.get(url)
-        if resp.status_code != 200:
-            return web.Response(
-                text=json.dumps({"error": f"ESPN returned {resp.status_code}"}),
-                content_type="application/json",
-                status=502,
-            )
-        data = resp.json()
-        groups: list[dict] = []
-        for grp in (data.get("standings") or []):
-            grp_name = grp.get("name") or grp.get("displayName") or "Group"
-            entries = []
-            for e in grp.get("entries") or []:
-                team = (e.get("team") or {})
-                stats: dict[str, int | str] = {}
-                for s in e.get("stats") or []:
-                    key = s.get("abbreviation") or s.get("name") or ""
-                    val = s.get("value")
-                    if key and val is not None:
-                        stats[key.upper()] = val
-                entries.append({
-                    "team": team.get("displayName") or team.get("shortDisplayName") or "?",
-                    "abbr": team.get("abbreviation") or "",
-                    "p": int(stats.get("GP") or stats.get("P") or 0),
-                    "w": int(stats.get("W") or 0),
-                    "d": int(stats.get("D") or 0),
-                    "l": int(stats.get("L") or 0),
-                    "gf": int(stats.get("GF") or 0),
-                    "ga": int(stats.get("GA") or 0),
-                    "gd": int(stats.get("DIFF") or stats.get("GD") or 0),
-                    "pts": int(stats.get("PTS") or 0),
-                })
-            if entries:
-                groups.append({"group": grp_name, "teams": entries})
-        return web.Response(text=json.dumps({"groups": groups}), content_type="application/json")
-    except Exception as exc:
-        return web.Response(
-            text=json.dumps({"error": str(exc)}),
-            content_type="application/json",
-            status=500,
-        )
-
-
-async def _api_signals(runner, request: web.Request) -> web.Response:
-    from storage.database import AsyncSessionFactory
-    from storage.repository import Repository
-    async with AsyncSessionFactory() as session:
-        repo = Repository(session)
-        rows = await repo.get_recent_signals(hours=24)
-    signals = [
-        {
-            "match_id": r.match_id,
-            "signal_type": r.signal_type,
-            "player_name": r.player_name or "",
-            "opponent_name": r.opponent_name or "",
-            "tournament": r.tournament or "",
-            "surface": r.surface or "hard",
-            "trigger": r.trigger_description,
-            "confidence": round(r.confidence * 100),
-            "market": r.recommended_market,
-            "odds": r.current_odds,
-            "fair_odds": r.fair_odds,
-            "edge_pct": round(r.edge_pct * 100, 1),
-            "stake_pct": round(r.stake_pct * 100, 1),
-            "model_win_prob": round(getattr(r, "model_win_prob", 0) * 100, 1),
-            "score_at_signal": getattr(r, "score_at_signal", ""),
-            "outcome": getattr(r, "outcome", "pending"),
-            "timestamp": _iso(r.timestamp),
-        }
-        for r in rows
-    ]
-    return web.Response(text=json.dumps(signals), content_type="application/json")
-
-
-async def _api_scalping(runner, request: web.Request) -> web.Response:
-    """Sure-shot / scalping opportunities across all live tennis matches."""
-    from analysis.scalping import scan_all
-    from config.settings import settings
-    states = await runner.store.get_all()
-    opps = scan_all(
-        states,
-        min_win_prob=settings.scalp_min_win_prob,
-        lock_win_prob=settings.scalp_lock_win_prob,
-        max_odds=settings.scalp_max_odds,
-        lock_max_odds=settings.scalp_lock_max_odds,
-    )
-    result = [
-        {
-            "match_id": o.match_id,
-            "player_name": o.player_name,
-            "opponent_name": o.opponent_name,
-            "tournament": o.tournament,
-            "surface": o.surface,
-            "source": o.source,
-            "score_summary": o.score_summary,
-            "win_prob": round(o.win_prob * 100, 1),
-            "market_odds": o.market_odds,
-            "market_implied": round(o.market_implied * 100, 1),
-            "edge_pct": o.edge_pct,
-            "ev_pct": o.ev_pct,
-            "tier": o.tier,
-            "reasons": o.reasons,
-            "scalp_window": o.scalp_window,
-            "is_serving": o.is_serving,
-            "timestamp": _iso(o.timestamp),
-        }
-        for o in opps
-    ]
-    return web.Response(text=json.dumps(result), content_type="application/json")
 
 
 async def _api_crypto_coins(runner, request: web.Request) -> web.Response:
@@ -1151,139 +875,26 @@ async def _api_commodities(runner, request: web.Request) -> web.Response:
     return web.Response(text=json.dumps(comms), content_type="application/json")
 
 
-async def _api_h2h(runner, request: web.Request) -> web.Response:
-    p1 = request.query.get("p1", "")
-    p2 = request.query.get("p2", "")
-    surface = request.query.get("surface", None)
-    if not p1 or not p2:
-        return web.Response(text=json.dumps({"error": "p1 and p2 required"}),
-                            content_type="application/json", status=400)
-    from storage.database import AsyncSessionFactory
-    from storage.repository import Repository
-    async with AsyncSessionFactory() as session:
-        repo = Repository(session)
-        h2h = await repo.get_h2h(p1, p2, surface)
-        p1_form = await repo.get_player_form(p1, surface)
-        p2_form = await repo.get_player_form(p2, surface)
-    return web.Response(
-        text=json.dumps({"h2h": h2h, "p1_form": p1_form, "p2_form": p2_form}),
-        content_type="application/json",
-    )
-
-
-async def _api_ingest(runner, request: web.Request) -> web.Response:
-    """Receive match states pushed from a laptop-based Flashscore scraper."""
-    import structlog as _log
-
-    from analysis.match_state import MatchState, ServeStats
-    from config.settings import settings
-
-    key = request.headers.get("X-Ingest-Key", "")
-    if settings.ingest_api_key and key != settings.ingest_api_key:
-        return web.Response(
-            text=json.dumps({"error": "unauthorized"}),
-            content_type="application/json",
-            status=401,
-        )
-
-    try:
-        data = await request.json()
-    except Exception:
-        return web.Response(
-            text=json.dumps({"error": "invalid JSON"}),
-            content_type="application/json",
-            status=400,
-        )
-
-    matches = data.get("matches", [])
-    count = 0
-    pushed_ids: set[str] = set()
-    for m in matches:
-        try:
-            ts = datetime.fromisoformat(m["timestamp"]) if m.get("timestamp") else datetime.now(UTC)
-            st = datetime.fromisoformat(m["start_time"]) if m.get("start_time") else None
-            sp1 = m.get("serve_stats_p1", {})
-            sp2 = m.get("serve_stats_p2", {})
-            state = MatchState(
-                match_id=m["match_id"],
-                player1_name=m["player1_name"],
-                player2_name=m["player2_name"],
-                surface=m["surface"],
-                tournament=m["tournament"],
-                current_server=m.get("current_server", 0),
-                sets_p1=m.get("sets_p1", 0),
-                sets_p2=m.get("sets_p2", 0),
-                games_in_set_p1=m.get("games_in_set_p1", 0),
-                games_in_set_p2=m.get("games_in_set_p2", 0),
-                current_set=m.get("current_set", 1),
-                is_tiebreak=m.get("is_tiebreak", False),
-                serve_stats_p1=ServeStats(
-                    first_serve_pct=sp1.get("first_serve_pct", 0.6),
-                    aces=sp1.get("aces", 0),
-                    double_faults=sp1.get("double_faults", 0),
-                ),
-                serve_stats_p2=ServeStats(
-                    first_serve_pct=sp2.get("first_serve_pct", 0.6),
-                    aces=sp2.get("aces", 0),
-                    double_faults=sp2.get("double_faults", 0),
-                ),
-                odds_p1=m.get("odds_p1", 0.0),
-                odds_p2=m.get("odds_p2", 0.0),
-                game_log=m.get("game_log", []),
-                match_duration_mins=m.get("match_duration_mins", 0),
-                timestamp=ts,
-                is_scheduled=m.get("is_scheduled", False),
-                start_time=st,
-            )
-            await runner.store.update(state)
-            pushed_ids.add(state.match_id)
-            count += 1
-        except Exception as exc:
-            _log.get_logger().warning("ingest_match_failed", error=str(exc))
-
-    # Remove stale pushed matches that are no longer in the push payload.
-    # Pushed sources are laptop-scraped: Flashscore (fs_) and Parimatch (pm_).
-    for s in await runner.store.get_all():
-        if (s.match_id.startswith("fs_") or s.match_id.startswith("pm_")) \
-                and s.match_id not in pushed_ids:
-            await runner.store.remove(s.match_id)
-
-    _log.get_logger().info("ingest_received", count=count)
-    return web.Response(
-        text=json.dumps({"ok": True, "count": count}),
-        content_type="application/json",
-    )
-
-
 async def _api_debug(runner, request: web.Request) -> web.Response:
-    """Diagnostic endpoint — returns collector state, all stored match IDs, and timing."""
-    states = await runner.store.get_all()
-    fb_states = await runner.football_store.get_all()
+    """Diagnostic endpoint — per-symbol feed state and collector status."""
+    states = await runner.crypto_store.get_all()
     uptime = int((datetime.now(UTC) - _start_time).total_seconds())
     return web.Response(
         text=json.dumps({
             "uptime_seconds": uptime,
-            "tennis_matches": [
+            "symbols": [
                 {
-                    "match_id": s.match_id,
-                    "players": f"{s.player1_name} vs {s.player2_name}",
-                    "tournament": s.tournament,
-                    "score": f"{s.sets_p1}-{s.sets_p2} ({s.games_in_set_p1}-{s.games_in_set_p2})",
-                    "has_odds": s.odds_p1 > 1.01,
-                    "source": s.match_id.split("_")[0],
+                    "symbol": s.symbol,
+                    "price": s.current_price,
+                    "candles_1m": len(s.candles_1m),
+                    "atr_14": s.atr_14,
+                    "rsi_14": s.rsi_14,
+                    "kline_status": runner.klines.status.get(s.symbol, "not fetched"),
                 }
                 for s in states
             ],
-            "football_matches": [
-                {
-                    "match_id": s.match_id,
-                    "teams": f"{s.home_team} vs {s.away_team}",
-                    "tournament": s.tournament,
-                    "minute": s.minute,
-                    "is_scheduled": s.is_scheduled,
-                }
-                for s in fb_states
-            ],
+            "klines_host": runner.klines.host,
+            "klines_last_error": runner.klines.last_error,
             "collector_status": runner.get_status(),
         }),
         content_type="application/json",
@@ -1291,10 +902,15 @@ async def _api_debug(runner, request: web.Request) -> web.Response:
 
 
 async def _health(runner, request: web.Request) -> web.Response:
-    count = await runner.store.count()
+    # Counts priced symbols, not watchlist size: the systemd/uptime check
+    # should go red when every feed is down, not merely when the DB row count
+    # happens to be non-zero.
+    states = await runner.crypto_store.get_all()
+    priced = sum(1 for s in states if s.current_price > 0)
     uptime = int((datetime.now(UTC) - _start_time).total_seconds())
     return web.Response(
-        text=json.dumps({"status": "ok", "matches_tracked": count, "uptime_seconds": uptime}),
+        text=json.dumps({"status": "ok", "symbols_tracked": len(states),
+                         "symbols_priced": priced, "uptime_seconds": uptime}),
         content_type="application/json",
     )
 
@@ -1306,7 +922,7 @@ _HTML = r"""<!DOCTYPE html>
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Tennis Bet Monitor</title>
+<title>Crypto Signal Engine</title>
 <style>
 *{box-sizing:border-box;margin:0;padding:0}
 body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:#0f172a;color:#e2e8f0;min-height:100vh}
@@ -1318,8 +934,6 @@ header h1{font-size:18px;font-weight:700;color:#f1f5f9;display:flex;align-items:
 .nav-btn:hover{background:#334155;color:#e2e8f0}
 .nav-btn.active{background:#0ea5e9;color:#fff;border-color:#0ea5e9}
 .nav-btn.active:hover{background:#0284c7;color:#fff}
-.sports-paused{margin:16px 20px 0;background:#2d1f00;border:1px solid #e3b341;border-radius:8px;padding:10px 14px;font-size:12px;color:#e3b341;line-height:1.6}
-.sports-paused code{background:rgba(0,0,0,.3);padding:1px 5px;border-radius:3px;font-size:11px}
 .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:10px;padding:16px 20px 0}
 .card{background:#1e293b;border:1px solid #334155;border-radius:10px;padding:14px}
 .card-title{font-size:10px;text-transform:uppercase;letter-spacing:.08em;color:#64748b;margin-bottom:6px}
@@ -1335,146 +949,6 @@ section h2{font-size:12px;font-weight:600;color:#64748b;text-transform:uppercase
 .status-val{font-size:12px;color:#f1f5f9}
 footer{text-align:center;padding:16px;color:#334155;font-size:11px;border-top:1px solid #1e293b;margin-top:4px}
 .empty{color:#475569;font-size:13px;padding:20px 0;text-align:center}
-
-/* ── Match card — Fairplay style ── */
-.match-card{background:#1e293b;border:1px solid #334155;border-radius:12px;overflow:hidden;margin-bottom:12px}
-.mc-header{display:flex;align-items:center;gap:6px;padding:7px 12px;background:#162032;border-bottom:1px solid #1e3a5f;font-size:11px;color:#64748b;flex-wrap:wrap}
-.source-tag{font-size:10px;padding:1px 6px;border-radius:4px;background:#1e3a5f;color:#7dd3fc;font-weight:700;letter-spacing:.04em}
-.surface-clay{color:#f97316}.surface-grass{color:#22c55e}.surface-hard{color:#38bdf8}.surface-indoor_hard{color:#818cf8}
-/* Player row */
-.mc-players{display:grid;grid-template-columns:1fr auto 1fr;align-items:center;padding:14px 12px 10px}
-.mc-player{display:flex;flex-direction:column;gap:3px}
-.mc-player.right{align-items:flex-end;text-align:right}
-.mc-name{font-size:15px;font-weight:700;color:#f1f5f9;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:140px}
-.mc-sets-won{font-size:32px;font-weight:900;color:#f1f5f9;line-height:1}
-.mc-leading{font-size:10px;padding:2px 6px;border-radius:4px;background:#14532d;color:#4ade80;font-weight:700;margin-top:2px;display:inline-block}
-/* Center score */
-.mc-center{display:flex;flex-direction:column;align-items:center;gap:4px;padding:0 14px;min-width:100px}
-.mc-set-label{font-size:9px;text-transform:uppercase;letter-spacing:.08em;color:#475569;font-weight:600}
-.mc-game-score{font-size:30px;font-weight:900;color:#f1f5f9;letter-spacing:3px;line-height:1}
-.mc-tb-tag{font-size:9px;background:#7c3aed;color:#ddd6fe;padding:1px 5px;border-radius:3px;font-weight:700}
-.mc-duration{font-size:10px;color:#64748b;background:#0f172a;padding:2px 7px;border-radius:4px}
-/* Scoreboard — Fairplay style */
-.mc-scoreboard{background:#0f172a;border-top:1px solid #1e3a5f;padding:8px 12px}
-.sb-table{width:100%;border-collapse:collapse;font-size:12px}
-.sb-table th{color:#475569;font-weight:600;text-transform:uppercase;font-size:9px;letter-spacing:.06em;padding:4px 6px;text-align:center;border-bottom:1px solid #1e293b}
-.sb-table th.pname{text-align:left}
-.sb-table td{padding:5px 6px;text-align:center;font-size:13px;font-weight:700}
-.sb-table td.pname{text-align:left;font-size:11px;color:#94a3b8;font-weight:500}
-.sb-won{color:#38bdf8}
-.sb-lost{color:#475569}
-.sb-cur{color:#f1f5f9;position:relative}
-.sb-cur::after{content:'▸';font-size:8px;color:#f59e0b;position:absolute;top:-1px;right:-2px}
-.sb-sets-total{font-size:16px;font-weight:900;color:#f1f5f9}
-.sb-sets-won{color:#38bdf8}
-/* Win probability bar */
-.mc-prob{background:#0f172a;border-top:1px solid #1e293b;padding:8px 12px;display:flex;align-items:center;gap:8px;font-size:11px}
-.prob-name{color:#94a3b8;white-space:nowrap;font-size:10px;min-width:70px;overflow:hidden;text-overflow:ellipsis}
-.prob-name.right{text-align:right;min-width:70px}
-.prob-bar-wrap{flex:1;height:8px;background:#1e293b;border-radius:4px;overflow:hidden;display:flex}
-.prob-bar-p1{height:100%;background:#38bdf8;transition:width .4s}
-.prob-bar-p2{height:100%;background:#f97316;transition:width .4s}
-.prob-pct{font-weight:700;color:#f1f5f9;white-space:nowrap;font-size:11px;min-width:36px}
-.prob-pct.right{text-align:right}
-/* Odds */
-.mc-odds-row{display:grid;grid-template-columns:1fr 1fr;gap:1px;background:#0f172a;border-top:1px solid #334155}
-.mc-odds-box{padding:10px 12px;text-align:center;background:#1e293b;cursor:pointer;transition:background .15s}
-.mc-odds-box:hover{background:#243554}
-.mc-odds-label{font-size:9px;color:#64748b;margin-bottom:3px;font-weight:600;text-transform:uppercase;letter-spacing:.04em}
-.mc-odds-val{font-size:24px;font-weight:900;line-height:1}
-.mc-odds-val.fav{color:#34d399}
-.mc-odds-val.dog{color:#38bdf8}
-.mc-odds-val.none{color:#334155;font-size:16px}
-.mc-odds-hint{font-size:9px;color:#475569;margin-top:2px}
-
-/* ── Redesigned match card (v2 — app style) ── */
-.mc2{background:#0d1b2e;border:1px solid #1e3a5f;border-radius:14px;overflow:hidden;margin-bottom:14px}
-.mc2-top{display:flex;align-items:center;gap:7px;padding:9px 14px;background:#0a1422;font-size:11px;color:#64748b;border-bottom:1px solid #14263d;flex-wrap:wrap}
-.mc2-live{margin-left:auto;display:flex;align-items:center;gap:5px;font-size:10px;font-weight:800;color:#f87171;white-space:nowrap}
-.mc2-livedot{width:7px;height:7px;border-radius:50%;background:#ef4444;animation:fbpulse 1s infinite}
-.mc2-score{display:grid;grid-template-columns:1fr auto 1fr;align-items:center;padding:16px 14px 13px;gap:6px}
-.mc2-pl{display:flex;flex-direction:column;align-items:center;gap:3px;min-width:0}
-.mc2-plname{font-size:14px;font-weight:800;color:#f1f5f9;text-align:center;line-height:1.2;overflow:hidden;text-overflow:ellipsis;max-width:140px}
-.mc2-lead{font-size:9px;padding:1px 6px;border-radius:4px;background:#14532d;color:#4ade80;font-weight:800}
-.mc2-center{display:flex;flex-direction:column;align-items:center;gap:5px;min-width:104px}
-.mc2-sets{font-size:38px;font-weight:900;color:#f87171;letter-spacing:4px;line-height:1}
-.mc2-setnow{font-size:12px;color:#94a3b8;font-weight:700}
-.mc2-setnow b{color:#f1f5f9}
-.mc2-tb{font-size:9px;font-weight:900;color:#0f172a;background:#facc15;border-radius:5px;padding:2px 8px;letter-spacing:.06em}
-.mc2-blk{border-top:1px solid #14263d;padding:10px 14px}
-.mc2-lbl{display:flex;align-items:baseline;gap:8px;margin-bottom:7px;flex-wrap:wrap}
-.mc2-lbl h3{font-size:10px;font-weight:800;letter-spacing:.1em;color:#7dd3fc;text-transform:uppercase}
-.mc2-lbl span{font-size:9px;color:#475569}
-.mvm{display:grid;grid-template-columns:84px 1fr 1fr;gap:4px;font-size:11px}
-.mvm .h{color:#94a3b8;font-weight:700;font-size:10px;text-align:center;padding:3px 0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.mvm .lab{color:#64748b;padding:4px 0;font-size:10px}
-.mvm .val{text-align:center;font-weight:800;color:#f1f5f9;padding:4px 0;border-radius:5px}
-.mvm .val.best{background:#0c2e1a;color:#4ade80}
-.mc2-probbar{display:flex;height:9px;border-radius:5px;overflow:hidden;margin:7px 0 4px;background:#1e293b}
-.mc2-pb1{background:#38bdf8}.mc2-pb2{background:#f97316}
-.mc2-problbl{display:flex;justify-content:space-between;font-size:10px;color:#94a3b8}
-.mc2-problbl b{color:#f1f5f9}
-.mc2-odds{display:grid;grid-template-columns:1fr 1fr;gap:8px}
-.mc2-ob{background:#0a1422;border:1px solid #1e3a5f;border-radius:9px;padding:9px;text-align:center}
-.mc2-ob.fav{border-color:#14532d;background:#0c2014}
-.mc2-obname{font-size:10px;color:#94a3b8;font-weight:700;margin-bottom:3px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.mc2-obval{font-size:22px;font-weight:900;color:#38bdf8;line-height:1}
-.mc2-ob.fav .mc2-obval{color:#34d399}
-.mc2-obval.none{color:#334155;font-size:14px}
-.mc2-obimp{font-size:9px;color:#64748b;margin-top:3px}
-.mc2-obtag{font-size:8px;font-weight:800;color:#4ade80;letter-spacing:.08em}
-.mc2-dt{display:flex;align-items:center;justify-content:space-between;padding:10px 14px;background:#0a1422;border-top:1px solid #14263d;cursor:pointer}
-.mc2-dt span{font-size:10px;font-weight:800;letter-spacing:.08em;color:#64748b;text-transform:uppercase}
-.mc2-dt .arr{font-size:13px;color:#475569}
-.mc2-details{display:none;border-top:1px solid #14263d;background:#0a1422}
-
-/* ── Signal cards — clearer BET ON ── */
-.signal-card{background:#1e293b;border:1px solid #334155;border-radius:10px;overflow:hidden;margin-bottom:10px}
-.sc-header{display:flex;align-items:center;gap:8px;padding:8px 12px;background:#0f172a;border-bottom:1px solid #334155}
-.sc-type{font-size:11px;font-weight:700;padding:3px 8px;border-radius:5px;white-space:nowrap}
-.sc-momentum{background:#1d4ed8;color:#bfdbfe}
-.sc-odds_value{background:#7c3aed;color:#ddd6fe}
-.sc-serve_degradation{background:#b45309;color:#fde68a}
-.sc-set_pattern{background:#065f46;color:#a7f3d0}
-.sc-fatigue{background:#9f1239;color:#fecdd3}
-.sc-ml_value{background:#155e75;color:#a5f3fc}
-.sc-endgame{background:#713f12;color:#fef08a}
-.sc-break_momentum{background:#7f1d1d;color:#fca5a5}
-.sc-second_set_fade{background:#312e81;color:#c7d2fe}
-.sc-time{font-size:11px;color:#475569;margin-left:auto}
-.sc-outcome-won{font-size:10px;background:#14532d;color:#4ade80;padding:2px 7px;border-radius:4px;font-weight:700}
-.sc-outcome-lost{font-size:10px;background:#7f1d1d;color:#fca5a5;padding:2px 7px;border-radius:4px;font-weight:700}
-.sc-outcome-pending{font-size:10px;background:#1e293b;color:#64748b;padding:2px 7px;border-radius:4px}
-/* BET ON banner */
-.sc-bet-banner{background:#0c2e1a;border-bottom:1px solid #14532d;padding:10px 12px;display:flex;align-items:center;gap:10px}
-.sc-bet-arrow{font-size:20px}
-.sc-bet-label{font-size:10px;text-transform:uppercase;letter-spacing:.08em;color:#4ade80;font-weight:700}
-.sc-bet-player{font-size:18px;font-weight:900;color:#f1f5f9;line-height:1.1}
-.sc-bet-market{font-size:11px;color:#86efac;margin-top:2px}
-.sc-bet-odds{margin-left:auto;text-align:right}
-.sc-bet-odds-val{font-size:22px;font-weight:900;color:#34d399}
-.sc-bet-odds-fair{font-size:10px;color:#4ade80}
-/* Body */
-.sc-body{padding:10px 12px}
-.sc-match{font-size:12px;color:#94a3b8;margin-bottom:6px}
-.sc-match strong{color:#e2e8f0}
-.sc-why{font-size:11px;color:#94a3b8;line-height:1.5;margin-bottom:8px}
-/* Probability comparison */
-.sc-probs{background:#0f172a;border-radius:6px;padding:8px 10px;margin-bottom:8px}
-.sc-prob-row{display:flex;align-items:center;gap:8px;margin-bottom:4px}
-.sc-prob-row:last-child{margin-bottom:0}
-.sc-prob-lbl{font-size:10px;color:#64748b;width:46px;font-weight:600}
-.sc-prob-bar-wrap{flex:1;height:7px;background:#1e293b;border-radius:3px;overflow:hidden}
-.sc-prob-bar{height:100%;border-radius:3px}
-.sc-prob-bar-model{background:#38bdf8}
-.sc-prob-bar-market{background:#94a3b8}
-.sc-prob-pct{font-size:11px;font-weight:700;color:#f1f5f9;width:36px;text-align:right}
-/* Footer row */
-.sc-footer{display:flex;align-items:center;gap:10px;padding:8px 12px;background:#0f172a;border-top:1px solid #1e293b;flex-wrap:wrap}
-.sc-conf{font-size:13px;font-weight:800;color:#f1f5f9}
-.sc-conf-bar{font-size:13px;color:#334155;letter-spacing:1px}
-.sc-edge{font-size:11px;color:#22c55e;font-weight:700}
-.sc-stake{font-size:10px;background:#1d4736;color:#34d399;padding:2px 8px;border-radius:4px;font-weight:600;margin-left:auto}
 
 /* ── Tab bar ── */
 .tab-bar{display:flex;gap:0;padding:0 20px;background:#1e293b;border-bottom:2px solid #0f172a}
@@ -1546,96 +1020,6 @@ footer{text-align:center;padding:16px;color:#334155;font-size:11px;border-top:1p
 .cr-glossary dt{font-size:12px;font-weight:700;color:#e2e8f0;margin-top:8px}
 .cr-glossary dd{font-size:11px;color:#94a3b8;margin-top:2px;line-height:1.5}
 
-/* ── Scalping ── */
-.scalp-intro{font-size:11px;color:#94a3b8;line-height:1.6;background:#0f172a;border:1px solid #1e293b;border-radius:8px;padding:10px 12px;margin-bottom:14px}
-.scalp-intro strong{color:#e2e8f0}
-.scalp-card{background:#1e293b;border:1px solid #334155;border-left:4px solid #475569;border-radius:12px;overflow:hidden;margin-bottom:12px}
-.scalp-card.tier-lock{border-left-color:#22c55e;box-shadow:0 0 0 1px rgba(34,197,94,.25)}
-.scalp-card.tier-strong{border-left-color:#0ea5e9}
-.scalp-card.tier-watch{border-left-color:#f59e0b}
-.scalp-head{display:flex;align-items:center;gap:8px;padding:9px 12px;background:#162032;border-bottom:1px solid #1e3a5f;flex-wrap:wrap}
-.scalp-tier{font-size:10px;font-weight:900;letter-spacing:.08em;padding:2px 9px;border-radius:5px}
-.scalp-tier.tier-lock{background:#14532d;color:#4ade80}
-.scalp-tier.tier-strong{background:#0c4a6e;color:#7dd3fc}
-.scalp-tier.tier-watch{background:#78350f;color:#fcd34d}
-.scalp-tourney{font-size:11px;color:#64748b;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.scalp-src{font-size:9px;padding:1px 6px;border-radius:4px;background:#1e3a5f;color:#7dd3fc;font-weight:700;text-transform:uppercase}
-.scalp-window{font-size:10px;background:#3b0764;color:#e9d5ff;padding:2px 8px;border-radius:5px;font-weight:700;margin-left:auto;animation:fbpulse 1.2s infinite}
-.scalp-body{padding:12px}
-.scalp-bet{display:flex;align-items:center;gap:10px;margin-bottom:10px}
-.scalp-bet-info{flex:1;min-width:0}
-.scalp-bet-label{font-size:10px;text-transform:uppercase;letter-spacing:.08em;color:#4ade80;font-weight:700}
-.scalp-player{font-size:19px;font-weight:900;color:#f1f5f9;line-height:1.1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.scalp-vs{font-size:11px;color:#64748b;margin-top:2px}
-.scalp-odds{text-align:right}
-.scalp-odds-val{font-size:24px;font-weight:900;color:#34d399}
-.scalp-odds-val.none{color:#475569}
-.scalp-odds-cap{font-size:9px;color:#64748b;text-transform:uppercase;letter-spacing:.05em}
-.scalp-score{font-size:13px;font-weight:800;color:#f59e0b;margin-bottom:8px}
-.scalp-prob-wrap{height:9px;background:#0f172a;border-radius:5px;overflow:hidden;margin-bottom:4px;position:relative}
-.scalp-prob-bar{height:100%;background:linear-gradient(90deg,#0ea5e9,#22c55e);border-radius:5px}
-.scalp-prob-lbls{display:flex;justify-content:space-between;font-size:10px;color:#64748b;margin-bottom:8px}
-.scalp-prob-lbls b{color:#f1f5f9}
-.scalp-reasons{display:flex;flex-wrap:wrap;gap:5px;margin-bottom:8px}
-.scalp-reason{font-size:10px;background:#0f172a;color:#cbd5e1;padding:2px 8px;border-radius:9999px;border:1px solid #1e293b}
-.scalp-foot{display:flex;align-items:center;gap:12px;padding:8px 12px;background:#0f172a;border-top:1px solid #1e293b;flex-wrap:wrap}
-.scalp-stat{font-size:11px;color:#94a3b8}
-.scalp-stat b{color:#f1f5f9}
-.scalp-ev-pos{color:#22c55e;font-weight:700}
-.scalp-ev-neg{color:#f87171;font-weight:700}
-
-/* ── Football match card ── */
-.fb-card{background:#1e293b;border:1px solid #334155;border-radius:12px;overflow:hidden;margin-bottom:12px}
-.fb-header{display:flex;align-items:center;gap:6px;padding:7px 12px;background:#1a1f2e;border-bottom:1px solid #2d3748;font-size:11px;color:#64748b;flex-wrap:wrap}
-.fb-league-tag{font-size:10px;padding:1px 7px;border-radius:4px;background:#166534;color:#86efac;font-weight:700;letter-spacing:.04em}
-.fb-minute{font-size:12px;font-weight:800;color:#f59e0b;margin-left:auto;display:flex;align-items:center;gap:4px}
-.fb-live-dot{display:inline-block;width:7px;height:7px;border-radius:50%;background:#ef4444;animation:fbpulse .9s infinite}
-@keyframes fbpulse{0%,100%{opacity:1}50%{opacity:.25}}
-.fb-ht-badge{font-size:10px;background:#78350f;color:#fde68a;padding:1px 6px;border-radius:3px;font-weight:700}
-.fb-et-badge{font-size:10px;background:#7c3aed;color:#ddd6fe;padding:1px 6px;border-radius:3px;font-weight:700}
-/* Score area */
-.fb-score-row{display:grid;grid-template-columns:1fr auto 1fr;align-items:center;padding:18px 14px 14px}
-.fb-team{display:flex;flex-direction:column;gap:5px}
-.fb-team.right{align-items:flex-end;text-align:right}
-.fb-team-name{font-size:14px;font-weight:700;color:#f1f5f9;max-width:145px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.fb-red-cards{display:flex;gap:2px}
-.fb-red-card{width:11px;height:15px;background:#ef4444;border-radius:2px}
-.fb-leading-badge{font-size:10px;padding:2px 6px;border-radius:4px;background:#14532d;color:#4ade80;font-weight:700}
-/* Center */
-.fb-score-center{text-align:center;padding:0 18px;min-width:90px}
-.fb-score{font-size:46px;font-weight:900;color:#f1f5f9;letter-spacing:6px;line-height:1}
-.fb-score-sub{font-size:10px;color:#64748b;margin-top:4px}
-/* Odds 3-way */
-.fb-odds-row{display:grid;grid-template-columns:1fr 1fr 1fr;gap:1px;background:#0f172a;border-top:1px solid #334155}
-.fb-odds-box{padding:10px 6px;text-align:center;background:#1e293b}
-.fb-odds-label{font-size:9px;color:#64748b;margin-bottom:3px;font-weight:600;text-transform:uppercase;letter-spacing:.04em;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.fb-odds-val{font-size:20px;font-weight:900;color:#38bdf8}
-.fb-odds-val.fav{color:#34d399}
-.fb-odds-val.draw{color:#94a3b8}
-.fb-odds-val.none{color:#334155;font-size:14px}
-/* WC group standings */
-.wc-groups{display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:12px;margin-top:8px}
-.wc-group{background:#1e293b;border:1px solid #334155;border-radius:10px;overflow:hidden}
-.wc-group-hd{background:#1a1f2e;padding:7px 12px;font-size:11px;font-weight:800;color:#fbbf24;letter-spacing:.08em;text-transform:uppercase;border-bottom:1px solid #2d3748}
-.wc-table{width:100%;border-collapse:collapse;font-size:11px}
-.wc-table th{padding:4px 8px;text-align:center;font-size:9px;color:#64748b;text-transform:uppercase;letter-spacing:.04em}
-.wc-table th.team-col{text-align:left}
-.wc-table td{padding:5px 8px;text-align:center;font-weight:700;color:#e2e8f0;border-top:1px solid #1a2235}
-.wc-table td.team-col{text-align:left;color:#f1f5f9;font-size:11px}
-.wc-table tr:nth-child(1) td,.wc-table tr:nth-child(2) td{background:rgba(52,211,153,.04)}
-.wc-table .pts{color:#fbbf24;font-size:12px;font-weight:900}
-.wc-table .gd.pos{color:#4ade80}.wc-table .gd.neg{color:#f87171}
-
-/* ── Football signal card ── */
-.fb-sig-card{background:#1e293b;border:1px solid #334155;border-radius:10px;overflow:hidden;margin-bottom:10px}
-.fb-sig-header{display:flex;align-items:center;gap:8px;padding:8px 12px;background:#0f172a;border-bottom:1px solid #334155}
-.fb-sig-type{font-size:11px;font-weight:700;padding:3px 8px;border-radius:5px;white-space:nowrap}
-.fb-sig-late_lead{background:#065f46;color:#a7f3d0}
-.fb-sig-heavy_fav_dominating{background:#1d4ed8;color:#bfdbfe}
-.fb-sig-late_draw_fade{background:#312e81;color:#c7d2fe}
-.fb-sig-red_card_advantage{background:#7f1d1d;color:#fca5a5}
-.fb-sig-clean_sheet_likely{background:#134e4a;color:#99f6e4}
-.fb-sig-time{font-size:11px;color:#475569;margin-left:auto}
 .cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:12px}
 
 .side-themes{display:flex;gap:7px;padding:10px 16px;flex-wrap:wrap}
@@ -2004,50 +1388,6 @@ section h2{color:var(--accent-soft)}
   </section>
 </div>
 
-
-<div class="sports-paused" id="sports-paused-banner" style="display:none">
-  Sports data collection is currently <b>paused</b> — these pages show the last data that was stored, but nothing new is being fetched. Re-enable by setting <code>SPORTS_ENABLED=true</code> in your Render environment variables.
-</div>
-
-<div id="tab-tennis" class="tab-content">
-  <section>
-    <h2>Live Tennis Matches</h2>
-    <div id="matches"><div class="empty">No live matches tracked</div></div>
-  </section>
-  <section>
-    <h2>Tennis Signals (last 24h)</h2>
-    <div id="signals"><div class="empty">No signals fired yet</div></div>
-  </section>
-  <section>
-    <h2>Data Sources</h2>
-    <div class="status-grid" id="sources"></div>
-  </section>
-</div>
-
-<div id="tab-scalping" class="tab-content">
-  <section>
-    <h2>🎯 Sure-Shot / Scalping Opportunities</h2>
-    <div class="scalp-intro">Near-certain in-play winners — favourite holds a decisive lead <em>and</em> is priced short. <strong>LOCK</strong> = highest conviction. A <strong>scalp window</strong> means odds drifted up after a dropped game (better entry now). Fixed-odds books carry risk — no result is ever 100%.</div>
-    <div id="scalp-list"><div class="empty">No sure-shot opportunities right now</div></div>
-  </section>
-</div>
-
-<div id="tab-football" class="tab-content">
-  <section>
-    <h2>Live Football Matches</h2>
-    <div id="fb-matches"><div class="empty">No live football matches tracked</div></div>
-  </section>
-  <section id="wc-groups-section" style="display:none">
-    <h2>FIFA World Cup 2026 — Group Standings</h2>
-    <div id="wc-groups"><div class="empty">Loading group standings…</div></div>
-  </section>
-  <section>
-    <h2>Football Signals (last 24h)</h2>
-    <div id="fb-signals"><div class="empty">No football signals fired yet</div></div>
-  </section>
-</div>
-
-
 <div id="tab-crypto" class="tab-content">
   <section>
     <h2>🪙 Live Crypto Watchlist</h2>
@@ -2096,426 +1436,15 @@ section h2{color:var(--accent-soft)}
   </div>
 </div>
 </div>
-<footer>Auto-refreshes every 30s &middot; <span id="last-updated">&mdash;</span> &middot; <a href="/data" style="color:#38bdf8;text-decoration:none">🗄️ DB Dump</a> &middot; <a href="/settings" style="color:#3fb950;text-decoration:none">⚙️ Settings</a> &middot; <a href="/api/debug/collectors" style="color:#a78bfa;text-decoration:none">🔬 Debug</a></footer>
+<footer>Auto-refreshes every 30s &middot; <span id="last-updated">&mdash;</span> &middot; <a href="/data" style="color:#38bdf8;text-decoration:none">🗄️ DB Dump</a> &middot; <a href="/settings" style="color:#3fb950;text-decoration:none">⚙️ Settings</a> &middot; <a href="/api/debug" style="color:#a78bfa;text-decoration:none">🔬 Debug</a></footer>
 
 <script>
-const SURFACE_CLASS={clay:'surface-clay',grass:'surface-grass',hard:'surface-hard',indoor_hard:'surface-indoor_hard'};
-const SURFACE_DOT={clay:'🟤',grass:'🟢',hard:'🔵',indoor_hard:'🔵'};
-const SIG_EMOJI={momentum:'⚡',odds_value:'📉',serve_degradation:'🎯',set_pattern:'📊',fatigue:'😤',ml_value:'🤖',endgame:'⏱',break_momentum:'💥',second_set_fade:'🔄'};
-const SIG_NAME={momentum:'Momentum Surge',odds_value:'Odds Value',serve_degradation:'Serve Degradation',set_pattern:'Set Pattern',fatigue:'Fatigue',ml_value:'ML Value',endgame:'Endgame Scalp',break_momentum:'Break Momentum',second_set_fade:'Second Set Fade'};
-const MKT_LABEL={match_winner:'Match Winner',next_game:'Next Game',next_set:'Next Set',set_winner_set2:'Set 2 Winner'};
 
 function fmtUptime(s){if(s==null||isNaN(s))return '—';if(s<60)return s+'s';if(s<3600)return Math.floor(s/60)+'m';const h=Math.floor(s/3600),m=Math.floor((s%3600)/60);return h+'h '+m+'m';}
 const _IST={timeZone:'Asia/Kolkata'};
 function fmtTime(iso){
   const d=new Date(iso.endsWith('Z')||iso.includes('+')?iso:iso+'Z');
   return d.toLocaleTimeString('en-IN',{..._IST,hour:'2-digit',minute:'2-digit'})+ ' IST';
-}
-
-// ── MATCHES ───────────────────────────────────────────────────────────────────
-function renderMatches(matches){
-  const el=document.getElementById('matches');
-  if(!matches.length){
-    el.innerHTML='<div class="empty">No live matches tracked right now.<br><span style="font-size:11px;color:#334155">ESPN updates every 30s · BetsAPI covers all tours if token is set · Odds API shows in-play matches</span></div>';
-    return;
-  }
-  el.innerHTML=matches.map(renderMatch).join('');
-}
-
-// H2H cache so we don't re-fetch on every render
-const _h2hCache={};
-async function loadH2H(matchId,p1,p2,surface){
-  const key=matchId;
-  if(_h2hCache[key]) return _h2hCache[key];
-  try{
-    const r=await fetch(`/api/h2h?p1=${encodeURIComponent(p1)}&p2=${encodeURIComponent(p2)}&surface=${encodeURIComponent(surface||'')}`);
-    const d=await r.json();
-    _h2hCache[key]=d;
-    return d;
-  }catch(e){return null;}
-}
-
-function toggleH2H(matchId,p1,p2,surface){
-  const panel=document.getElementById('h2h-'+matchId);
-  if(!panel) return;
-  const isOpen=panel.style.display!=='none';
-  if(isOpen){panel.style.display='none';return;}
-  panel.style.display='block';
-  if(panel.dataset.loaded) return;
-  panel.innerHTML='<div style="padding:16px;color:#64748b;text-align:center;font-size:12px">Loading H2H data…</div>';
-  loadH2H(matchId,p1,p2,surface).then(data=>{
-    if(!data){panel.innerHTML='<div style="padding:12px;color:#475569;font-size:11px;text-align:center">No H2H data in database yet</div>';return;}
-    panel.innerHTML=renderH2HPanel(data,p1,p2);
-    panel.dataset.loaded='1';
-  });
-}
-
-function renderH2HPanel(data,p1,p2){
-  const h=data.h2h||{};
-  const f1=data.p1_form||{};
-  const f2=data.p2_form||{};
-  const p1s=p1.split(' ').pop();
-  const p2s=p2.split(' ').pop();
-  const total=h.total_meetings||0;
-
-  // H2H header
-  let h2hHeader='<div style="padding:10px 12px;background:#0f172a;border-bottom:1px solid #1e293b">';
-  if(total===0){
-    h2hHeader+='<div style="color:#475569;font-size:12px;text-align:center">No historical H2H found in database</div>';
-  } else {
-    const p1pct=total>0?Math.round(h.p1_wins/total*100):50;
-    const p2pct=100-p1pct;
-    h2hHeader+=`<div style="display:flex;align-items:center;gap:8px;margin-bottom:6px">
-      <span style="font-size:13px;font-weight:800;color:#f1f5f9">${h.p1_wins}</span>
-      <span style="font-size:10px;color:#64748b;font-weight:600;flex:1;text-align:center">H2H · ${total} meetings</span>
-      <span style="font-size:13px;font-weight:800;color:#f1f5f9">${h.p2_wins}</span>
-    </div>
-    <div style="display:flex;height:6px;border-radius:3px;overflow:hidden;margin-bottom:4px">
-      <div style="width:${p1pct}%;background:#38bdf8"></div>
-      <div style="width:${p2pct}%;background:#f97316"></div>
-    </div>`;
-    if(h.surface_meetings>0){
-      h2hHeader+=`<div style="display:flex;justify-content:space-between;font-size:10px;color:#64748b;margin-top:4px">
-        <span>${esc(p1s)} ${h.p1_surface_wins}-${h.p2_surface_wins} ${esc(p2s)} on surface</span>
-        <span>${h.surface_meetings} matches</span>
-      </div>`;
-    }
-  }
-  h2hHeader+='</div>';
-
-  // Last meetings
-  let meetings='';
-  if((h.last_meetings||[]).length>0){
-    meetings='<div style="padding:8px 12px;border-bottom:1px solid #1e293b">';
-    meetings+=`<div style="font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.06em;margin-bottom:6px">Recent Meetings</div>`;
-    for(const m of h.last_meetings){
-      const isP1Win=m.winner==='p1';
-      const surfColor={clay:'#f97316',grass:'#22c55e',hard:'#38bdf8',indoor_hard:'#818cf8'}[m.surface]||'#94a3b8';
-      meetings+=`<div style="display:flex;align-items:center;gap:6px;padding:4px 0;border-bottom:1px solid #0f172a;font-size:11px">
-        <span style="color:#475569;width:36px;flex-shrink:0">${m.year}</span>
-        <span style="color:${surfColor};font-size:9px;width:8px;flex-shrink:0">●</span>
-        <span style="color:#64748b;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(m.tournament)}</span>
-        <span style="font-size:9px;color:#475569;width:28px;text-align:center">${m.round||''}</span>
-        <span style="font-weight:700;color:${isP1Win?'#38bdf8':'#f97316'};width:60px;text-align:right;flex-shrink:0">${esc(isP1Win?p1s:p2s)}</span>
-        <span style="color:#334155;width:4px">·</span>
-        <span style="color:#94a3b8;width:70px;flex-shrink:0;font-size:10px">${esc(m.score)}</span>
-      </div>`;
-    }
-    meetings+='</div>';
-  }
-
-  // Form blocks
-  function formBubbles(form){
-    return (form.recent||[]).map(f=>`<span style="display:inline-block;width:18px;height:18px;border-radius:3px;background:${f.won?'#166534':'#7f1d1d'};color:${f.won?'#4ade80':'#fca5a5'};font-size:9px;font-weight:800;line-height:18px;text-align:center" title="${f.won?'W':'L'} vs ${f.opponent} (${f.tournament})">${f.won?'W':'L'}</span>`).join('');
-  }
-
-  function statRow(label,v1,v2,higherIsBetter=true){
-    const n1=parseFloat(v1)||0, n2=parseFloat(v2)||0;
-    const p1b=higherIsBetter?(n1>n2):(n1<n2);
-    const p2b=higherIsBetter?(n2>n1):(n2<n1);
-    return `<tr>
-      <td style="font-size:12px;font-weight:${p1b?'800':'500'};color:${p1b?'#38bdf8':'#94a3b8'};padding:4px 0;text-align:left">${v1}</td>
-      <td style="font-size:10px;color:#475569;text-align:center;padding:4px 8px">${label}</td>
-      <td style="font-size:12px;font-weight:${p2b?'800':'500'};color:${p2b?'#f97316':'#94a3b8'};padding:4px 0;text-align:right">${v2}</td>
-    </tr>`;
-  }
-
-  const stats=`<div style="padding:8px 12px">
-    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
-      <div>
-        <div style="font-size:10px;font-weight:700;color:#64748b;text-transform:uppercase;letter-spacing:.06em;margin-bottom:4px">${esc(p1s)} FORM (last ${f1.total||0})</div>
-        <div style="display:flex;gap:2px;flex-wrap:wrap">${formBubbles(f1)}</div>
-      </div>
-      <div style="text-align:right">
-        <div style="font-size:10px;font-weight:700;color:#64748b;text-transform:uppercase;letter-spacing:.06em;margin-bottom:4px">${esc(p2s)} FORM (last ${f2.total||0})</div>
-        <div style="display:flex;gap:2px;flex-wrap:wrap;justify-content:flex-end">${formBubbles(f2)}</div>
-      </div>
-    </div>
-    <table style="width:100%;border-collapse:collapse">
-      ${statRow('Win Rate',`${f1.win_rate||0}%`,`${f2.win_rate||0}%`)}
-      ${statRow('1st Serve %',`${f1.avg_first_serve_pct||0}%`,`${f2.avg_first_serve_pct||0}%`)}
-      ${statRow('Aces/Match',f1.avg_aces||0,f2.avg_aces||0)}
-      ${statRow('BP Save %',`${f1.bp_save_pct||0}%`,`${f2.bp_save_pct||0}%`)}
-      ${f1.surface_win_rate!=null?statRow('Surface Win %',`${f1.surface_win_rate}%`,`${f2.surface_win_rate||0}%`):''}
-    </table>
-  </div>`;
-
-  return h2hHeader+meetings+stats;
-}
-
-function renderMatch(m){
-  if(m.is_upcoming) return renderTennisUpcoming(m);
-  const surf=SURFACE_CLASS[m.surface]||'';
-  const surfLabel=m.surface.replace('_',' ');
-  const hasOdds=m.odds_p1>1.01&&m.odds_p2>1.01;
-  const isOddsOnly=m.source==='odds';
-  const sets=m.set_scores||[];
-  const p1s=esc(m.player1.split(' ').pop());
-  const p2s=esc(m.player2.split(' ').pop());
-  const mid=m.match_id.replace(/[^a-z0-9]/gi,'_');
-
-  // ── Header ──
-  const dur=m.duration_mins>0?` · ${m.duration_mins}m`:'';
-  const header=`<div class="mc2-top">
-    <span class="source-tag">${isOddsOnly?'ODDS':m.source.toUpperCase()}</span>
-    <span class="${surf}">${surfLabel}</span>
-    <span>&middot; ${esc(m.tournament)}</span>
-    <span class="mc2-live"><span class="mc2-livedot"></span>LIVE${dur}</span>
-  </div>`;
-
-  // ── Score block (app style: names at sides, big set score centered) ──
-  const p1Lead=m.sets_p1>m.sets_p2||(m.sets_p1===m.sets_p2&&m.games_p1>m.games_p2);
-  const p2Lead=m.sets_p2>m.sets_p1||(m.sets_p1===m.sets_p2&&m.games_p2>m.games_p1);
-  let center;
-  if(isOddsOnly){
-    center=`<div style="font-size:18px;font-weight:900;color:#475569;letter-spacing:2px">vs</div>
-      <div class="mc2-setnow" style="font-size:10px">in play · no score feed</div>`;
-  }else{
-    center=`<div class="mc2-sets">${m.sets_p1} : ${m.sets_p2}</div>
-      <div class="mc2-setnow">SET ${m.current_set} · <b>${m.games_p1} : ${m.games_p2}</b></div>
-      ${m.is_tiebreak?'<div class="mc2-tb">TIEBREAK</div>':''}`;
-  }
-  const scoreBlock=`<div class="mc2-score">
-    <div class="mc2-pl">
-      <div class="mc2-plname">${esc(m.player1)}</div>
-      ${p1Lead&&!isOddsOnly?'<span class="mc2-lead">LEADING</span>':''}
-    </div>
-    <div class="mc2-center">${center}</div>
-    <div class="mc2-pl">
-      <div class="mc2-plname">${esc(m.player2)}</div>
-      ${p2Lead&&!isOddsOnly?'<span class="mc2-lead">LEADING</span>':''}
-    </div>
-  </div>`;
-
-  // ── Who wins? Model vs Market (labeled — this is what the bare % bar was) ──
-  const hasModel=m.win_prob_p1>0||m.win_prob_p2>0;
-  let mvmBlock='';
-  if(hasModel||hasOdds){
-    const imp1=hasOdds?Math.round(100/m.odds_p1):null;
-    const imp2=hasOdds?Math.round(100/m.odds_p2):null;
-    let rows='';
-    if(hasModel){
-      rows+=`<div class="lab">Our model</div>
-        <div class="val ${m.win_prob_p1>=m.win_prob_p2?'best':''}">${m.win_prob_p1}%</div>
-        <div class="val ${m.win_prob_p2>m.win_prob_p1?'best':''}">${m.win_prob_p2}%</div>`;
-    }
-    if(hasOdds){
-      rows+=`<div class="lab">Bookmakers</div>
-        <div class="val ${imp1>=imp2?'best':''}">${imp1}%</div>
-        <div class="val ${imp2>imp1?'best':''}">${imp2}%</div>`;
-    }
-    let bar='';
-    if(hasModel){
-      const w1=Math.max(5,Math.min(95,m.win_prob_p1));
-      bar=`<div class="mc2-probbar"><div class="mc2-pb1" style="width:${w1}%"></div><div class="mc2-pb2" style="width:${100-w1}%"></div></div>
-      <div class="mc2-problbl"><span>◀ <b>${m.win_prob_p1}%</b> ${p1s}</span><span>model win probability</span><span>${p2s} <b>${m.win_prob_p2}%</b> ▶</span></div>`;
-    }
-    mvmBlock=`<div class="mc2-blk">
-      <div class="mc2-lbl"><h3>Who wins? — Model vs Market</h3><span>model = our estimate from live score · market = from bookmaker odds</span></div>
-      <div class="mvm">
-        <div class="h"></div><div class="h">${p1s}</div><div class="h">${p2s}</div>
-        ${rows}
-      </div>
-      ${bar}
-    </div>`;
-  }
-
-  // ── Match winner odds (decimal + implied %, favourite tagged) ──
-  const favP1=hasOdds&&m.odds_p1<m.odds_p2;
-  const oddsBlock=`<div class="mc2-blk">
-    <div class="mc2-lbl"><h3>Match Winner Odds</h3><span>decimal · lower = favourite · % = chance bookies imply</span></div>
-    <div class="mc2-odds">
-      <div class="mc2-ob ${hasOdds&&favP1?'fav':''}">
-        <div class="mc2-obname">${p1s}</div>
-        <div class="mc2-obval ${hasOdds?'':'none'}">${hasOdds?m.odds_p1.toFixed(2):'no odds yet'}</div>
-        ${hasOdds?`<div class="mc2-obimp">implies ${Math.round(100/m.odds_p1)}% chance${favP1?' · <span class="mc2-obtag">FAVOURITE</span>':' · underdog'}</div>`:''}
-      </div>
-      <div class="mc2-ob ${hasOdds&&!favP1?'fav':''}">
-        <div class="mc2-obname">${p2s}</div>
-        <div class="mc2-obval ${hasOdds?'':'none'}">${hasOdds?m.odds_p2.toFixed(2):'no odds yet'}</div>
-        ${hasOdds?`<div class="mc2-obimp">implies ${Math.round(100/m.odds_p2)}% chance${!favP1?' · <span class="mc2-obtag">FAVOURITE</span>':' · underdog'}</div>`:''}
-      </div>
-    </div>
-  </div>`;
-
-  // ── Collapsed details at the bottom of the card: set-by-set + H2H ──
-  let scoreboard='';
-  if(sets.length>0){
-    const setHeaders=sets.map((_,i)=>`<th>S${i+1}</th>`).join('');
-    const cells=(key,other)=>sets.map(s=>{
-      if(s.current) return `<td class="sb-cur">${s[key]}</td>`;
-      return `<td class="${s[key]>s[other]?'sb-won':'sb-lost'}">${s[key]}</td>`;
-    }).join('');
-    scoreboard=`<div class="mc-scoreboard" style="border-top:none"><table class="sb-table">
-      <thead><tr><th class="pname"></th>${setHeaders}<th>Sets</th></tr></thead>
-      <tbody>
-        <tr><td class="pname">${p1s}</td>${cells('p1','p2')}
-          <td class="${m.sets_p1>=m.sets_p2?'sb-sets-total sb-won':'sb-sets-total sb-lost'}">${m.sets_p1}</td></tr>
-        <tr><td class="pname">${p2s}</td>${cells('p2','p1')}
-          <td class="${m.sets_p2>=m.sets_p1?'sb-sets-total sb-won':'sb-sets-total sb-lost'}">${m.sets_p2}</td></tr>
-      </tbody>
-    </table></div>`;
-  }
-  const details=`<div class="mc2-dt" onclick="toggleDetails('${mid}','${esc(m.player1)}','${esc(m.player2)}','${m.surface}')">
-    <span>📊 Match details — sets · H2H · stats</span><span class="arr" id="arr-${mid}">▾</span>
-  </div>
-  <div class="mc2-details" id="det-${mid}">
-    ${scoreboard}
-    <div id="h2h-${mid}"></div>
-  </div>`;
-
-  return `<div class="mc2">${header}${scoreBlock}${mvmBlock}${oddsBlock}${details}</div>`;
-}
-
-// Expand/collapse the per-card details section; lazy-loads H2H on first open
-function toggleDetails(mid,p1,p2,surface){
-  const det=document.getElementById('det-'+mid);
-  const arr=document.getElementById('arr-'+mid);
-  if(!det) return;
-  const open=det.style.display==='block';
-  det.style.display=open?'none':'block';
-  if(arr) arr.textContent=open?'▾':'▴';
-  if(open) return;
-  const panel=document.getElementById('h2h-'+mid);
-  if(!panel||panel.dataset.loaded) return;
-  panel.innerHTML='<div style="padding:14px;color:#64748b;text-align:center;font-size:12px">Loading H2H data…</div>';
-  loadH2H(mid,p1,p2,surface).then(data=>{
-    if(!data){panel.innerHTML='<div style="padding:12px;color:#475569;font-size:11px;text-align:center">No H2H data in database yet</div>';return;}
-    panel.innerHTML=renderH2HPanel(data,p1,p2);
-    panel.dataset.loaded='1';
-  });
-}
-
-// ── TENNIS UPCOMING ───────────────────────────────────────────────────────────
-function renderTennisUpcoming(m){
-  const surf=SURFACE_CLASS[m.surface]||'';
-  const surfLabel=m.surface.replace('_',' ');
-  const hasOdds=m.odds_p1>1.01&&m.odds_p2>1.01;
-  const until=minsUntil(m.start_time);
-  const kt=fmtKickoff(m.start_time);
-  const favP1=hasOdds&&m.odds_p1<m.odds_p2;
-  const p1s=esc(m.player1.split(' ').pop());
-  const p2s=esc(m.player2.split(' ').pop());
-  return `<div class="mc2" style="opacity:.85">
-    <div class="mc2-top">
-      <span class="source-tag" style="background:#14321e;color:#6ee7b7">UPCOMING</span>
-      <span class="${surf}">${surfLabel}</span>
-      <span>&middot; ${esc(m.tournament)}</span>
-      <span style="margin-left:auto;font-size:10px;color:#6ee7b7;font-weight:800;white-space:nowrap">⏰ ${esc(until||'')}${kt?' · '+esc(kt):''}</span>
-    </div>
-    <div class="mc2-score">
-      <div class="mc2-pl"><div class="mc2-plname">${esc(m.player1)}</div></div>
-      <div class="mc2-center"><div style="font-size:16px;color:#475569;font-weight:800">vs</div></div>
-      <div class="mc2-pl"><div class="mc2-plname">${esc(m.player2)}</div></div>
-    </div>
-    ${hasOdds?`<div class="mc2-blk">
-      <div class="mc2-lbl"><h3>Match Winner Odds</h3><span>pre-match · decimal · lower = favourite</span></div>
-      <div class="mc2-odds">
-        <div class="mc2-ob ${favP1?'fav':''}">
-          <div class="mc2-obname">${p1s}</div>
-          <div class="mc2-obval">${m.odds_p1.toFixed(2)}</div>
-          <div class="mc2-obimp">implies ${Math.round(100/m.odds_p1)}%${favP1?' · <span class="mc2-obtag">FAVOURITE</span>':' · underdog'}</div>
-        </div>
-        <div class="mc2-ob ${!favP1?'fav':''}">
-          <div class="mc2-obname">${p2s}</div>
-          <div class="mc2-obval">${m.odds_p2.toFixed(2)}</div>
-          <div class="mc2-obimp">implies ${Math.round(100/m.odds_p2)}%${!favP1?' · <span class="mc2-obtag">FAVOURITE</span>':' · underdog'}</div>
-        </div>
-      </div>
-    </div>`:''}
-  </div>`;
-}
-
-// ── SIGNALS ───────────────────────────────────────────────────────────────────
-function renderSignals(signals){
-  const el=document.getElementById('signals');
-  if(!signals.length){el.innerHTML='<div class="empty">No signals in the last 24 hours</div>';return;}
-  el.innerHTML=signals.map(renderSignal).join('');
-}
-
-function renderSignal(s){
-  const emoji=SIG_EMOJI[s.signal_type]||'🎾';
-  const name=SIG_NAME[s.signal_type]||s.signal_type.replace(/_/g,' ');
-  const mkt=MKT_LABEL[s.market]||s.market;
-  const surf=SURFACE_DOT[s.surface]||'⚪';
-
-  // Outcome badge
-  let outcomeBadge='';
-  if(s.outcome==='won') outcomeBadge='<span class="sc-outcome-won">✓ WON</span>';
-  else if(s.outcome==='lost') outcomeBadge='<span class="sc-outcome-lost">✗ LOST</span>';
-  else outcomeBadge='<span class="sc-outcome-pending">Pending</span>';
-
-  // Win probability comparison
-  const modelProb=s.model_win_prob||0;
-  const marketProb=s.odds>1?Math.round(100/s.odds*10)/10:0;
-  const probHtml=`<div class="sc-probs">
-    <div class="sc-prob-row">
-      <span class="sc-prob-lbl">Model</span>
-      <div class="sc-prob-bar-wrap"><div class="sc-prob-bar sc-prob-bar-model" style="width:${Math.min(100,modelProb)}%"></div></div>
-      <span class="sc-prob-pct">${modelProb}%</span>
-    </div>
-    <div class="sc-prob-row">
-      <span class="sc-prob-lbl">Market</span>
-      <div class="sc-prob-bar-wrap"><div class="sc-prob-bar sc-prob-bar-market" style="width:${Math.min(100,marketProb)}%"></div></div>
-      <span class="sc-prob-pct">${marketProb}%</span>
-    </div>
-  </div>`;
-
-  const confBar='█'.repeat(Math.round(s.confidence/10))+'░'.repeat(10-Math.round(s.confidence/10));
-  const scoreNote=s.score_at_signal?`<span style="color:#64748b;font-size:10px"> · ${esc(s.score_at_signal)}</span>`:'';
-
-  return `<div class="signal-card">
-    <div class="sc-header">
-      <span class="sc-type sc-${s.signal_type}">${emoji} ${name}</span>
-      ${outcomeBadge}
-      <span class="sc-time">${fmtTime(s.timestamp)}</span>
-    </div>
-
-    <div class="sc-bet-banner">
-      <span class="sc-bet-arrow">🎯</span>
-      <div>
-        <div class="sc-bet-label">Bet on</div>
-        <div class="sc-bet-player">${esc(s.player_name)}</div>
-        <div class="sc-bet-market">${surf} ${esc(s.tournament)} &middot; ${mkt}</div>
-      </div>
-      <div class="sc-bet-odds">
-        <div class="sc-bet-odds-val">${s.odds.toFixed(2)}</div>
-        <div class="sc-bet-odds-fair">fair: ${s.fair_odds.toFixed(2)}</div>
-      </div>
-    </div>
-
-    <div class="sc-body">
-      <div class="sc-match">vs <strong>${esc(s.opponent_name)}</strong>${scoreNote}</div>
-      <div class="sc-why">${esc(s.trigger)}</div>
-      ${probHtml}
-    </div>
-
-    <div class="sc-footer">
-      <span class="sc-conf">${s.confidence}%</span>
-      <span class="sc-conf-bar">${confBar}</span>
-      <span class="sc-edge">+${s.edge_pct}% edge</span>
-      <span class="sc-stake">Stake ${s.stake_pct}%</span>
-    </div>
-  </div>`;
-}
-
-// ── STATUS ────────────────────────────────────────────────────────────────────
-function renderStatus(st){
-  const fs=st.flashscore||{}, espn=st.espn||{}, sc=st.sofascore||{}, oa=st.odds_api||{}, ba=st.bets_api||{}, sr=st.sportradar||{}, as_=st.api_sports||{};
-  const sources=[
-    {name:'ESPN',ok:true,detail:'Live scores (always on)'},
-    {name:'API-Sports',ok:as_.key_set,detail:as_.key_set?`${as_.last_live||0} live · ${as_.last_scheduled||0} upcoming · ${as_.quota_remaining!=null?as_.quota_remaining+' req left today':'checking...'} · every ${as_.poll_interval_secs}s`:'No key — add API_SPORTS_KEY (100 req/day FREE)'},
-    {name:'Sportradar',ok:sr.key_set,detail:sr.key_set?`All tours+leagues · every ${sr.poll_interval_secs}s`:'No key — add SPORTRADAR_API_KEY (free trial)'},
-    {name:'BetsAPI',ok:ba.token_set,detail:ba.token_set?`Live odds · ${ba.consecutive_failures||0} failures`:'No token — add BETS_API_TOKEN'},
-    {name:'Sofascore',ok:!sc.blocked,detail:sc.blocked?'Blocked on cloud IP':'Available (serve stats)'},
-    {name:'Flashscore',ok:fs.http_ok,detail:fs.http_ok?'OK':`${fs.consecutive_failures||0} failures`},
-    {name:'Odds API',ok:oa.key_set,detail:oa.key_set?`${oa.last_events_fetched||0} events · ${oa.quota_remaining!=null?oa.quota_remaining+' credits left':'checking...'} · every ${oa.poll_interval_secs}s`:'No API key — add ODDS_API_KEY'},
-  ];
-  document.getElementById('sources').innerHTML=sources.map(s=>`
-    <div class="status-card">
-      <div class="status-name"><span class="dot ${s.ok?'dot-green':'dot-red'}"></span>${s.name}</div>
-      <div class="status-val">${s.detail}</div>
-    </div>`).join('');
 }
 
 function esc(s){
@@ -2889,9 +1818,6 @@ const TAB_META = {
   accuracy: {title:'Accuracy',        sub:'Calibration, move size and setup performance'},
   historic: {title:'Historic Data',   sub:'Older than 7 days · read-only archive'},
   watchlist:{title:'Watchlist',       sub:'Symbols the collectors track'},
-  tennis:   {title:'Tennis',          sub:'Live matches'},
-  scalping: {title:'Scalping',        sub:'Sure-shot in-play winners'},
-  football: {title:'Football',        sub:'Live matches'},
 };
 
 function switchTab(tab){
@@ -2934,276 +1860,6 @@ function addCryptoSymbol2(){
   el.value='';
   fetch('/api/crypto/watchlist',{method:'POST',headers:{'Content-Type':'application/json'},
     body:JSON.stringify({symbol:v})}).then(()=>loadWatchlist());
-}
-
-// ── VIEW ROUTING ──────────────────────────────────────────────────────────────
-// One template serves two routes: "/" (crypto, the main page) and "/sports".
-// IS_SPORTS is decided once on load from the URL and never changes after.
-const IS_SPORTS = location.pathname.replace(/\/+$/,'') === '/sports';
-
-function initView(){
-  // Rewritten for the sidebar. The previous version's first statement touched
-  // grid-crypto, which the sidebar replaced — it threw before switchTab or
-  // refresh could run, so the whole page loaded empty with "Error — retrying".
-  // Everything here is null-safe for that reason.
-  const sportsOnly = ['tennis','scalping','football'];
-  const cryptoOnly = ['dashboard','crypto','paper','guard','accuracy','historic','watchlist','audit','predict'];
-  (IS_SPORTS ? cryptoOnly : sportsOnly).forEach(t => {
-    const el = document.getElementById('tab-' + t);
-    if(el) el.classList.remove('active');
-  });
-  document.querySelectorAll('.side-item').forEach(b => {
-    const t = b.dataset.tab;
-    if(!t) return;
-    const wrong = IS_SPORTS ? cryptoOnly.includes(t) : sportsOnly.includes(t);
-    b.style.display = wrong ? 'none' : '';
-  });
-  const banner = document.getElementById('sports-paused-banner');
-  if(banner) banner.style.display = IS_SPORTS ? '' : 'none';
-}
-
-// ── FOOTBALL MATCHES ──────────────────────────────────────────────────────────
-const FB_SIG_NAME={
-  late_lead:'⏱ Late Lead',
-  heavy_fav_dominating:'💪 Fav Dominating',
-  late_draw_fade:'🔄 Draw Fade',
-  red_card_advantage:'🟥 Red Card Edge',
-  clean_sheet_likely:'🧤 Clean Sheet',
-};
-const FB_MKT={match_winner:'Match Winner',draw_no_bet:'Draw No Bet',asian_handicap_0:'AH 0'};
-
-function renderFootballMatches(matches){
-  const el=document.getElementById('fb-matches');
-  if(!matches.length){el.innerHTML='<div class="empty">No live or upcoming football matches in next 24 hours</div>';return;}
-  el.innerHTML=matches.map(renderFootballMatch).join('');
-}
-
-function fmtKickoff(iso){
-  if(!iso) return '';
-  const d=new Date(iso.endsWith('Z')||iso.includes('+')?iso:iso+'Z');
-  return d.toLocaleTimeString('en-IN',{..._IST,hour:'2-digit',minute:'2-digit'})
-    +' IST ('+d.toLocaleDateString('en-IN',{..._IST,weekday:'short',month:'short',day:'numeric'})+')';
-}
-
-function minsUntil(iso){
-  if(!iso) return null;
-  const d=new Date(iso.endsWith('Z')||iso.includes('+')?iso:iso+'Z');
-  const diff=Math.round((d-Date.now())/60000);
-  if(diff<=0) return 'Starting now';
-  if(diff<60) return `in ${diff} min`;
-  const h=Math.floor(diff/60),m=diff%60;
-  return `in ${h}h${m>0?' '+m+'m':''}`;
-}
-
-function renderFootballMatch(m){
-  if(m.is_scheduled) return renderFootballUpcoming(m);
-
-  const hasOdds=m.home_odds>1.01&&m.away_odds>1.01&&m.draw_odds>1.01;
-  const favHome=hasOdds&&m.home_odds<=m.away_odds&&m.home_odds<=m.draw_odds;
-  const favAway=hasOdds&&m.away_odds<m.home_odds&&m.away_odds<=m.draw_odds;
-  const homeLeads=m.home_score>m.away_score;
-  const awayLeads=m.away_score>m.home_score;
-
-  const leagueLabel=m.league_key.replace(/\./g,' ').replace(/\b\w/g,c=>c.toUpperCase());
-  const htBadge=m.is_halftime?'<span class="fb-ht-badge">HT</span>':'';
-  const etBadge=m.is_extra_time?'<span class="fb-et-badge">ET</span>':'';
-  const minDisplay=m.is_halftime?'HT':(m.minute>0?m.minute+"'":"?'");
-  const header=`<div class="fb-header">
-    <span class="fb-league-tag">${esc(leagueLabel)}</span>
-    <span>${esc(m.tournament)}</span>
-    ${htBadge}${etBadge}
-    <span class="fb-minute"><span class="fb-live-dot"></span>${minDisplay}</span>
-  </div>`;
-
-  const homeRC=Array(m.home_red_cards).fill('<span class="fb-red-card"></span>').join('');
-  const awayRC=Array(m.away_red_cards).fill('<span class="fb-red-card"></span>').join('');
-  const scoreRow=`<div class="fb-score-row">
-    <div class="fb-team">
-      <div class="fb-team-name">${esc(m.home_team)}</div>
-      ${homeRC?`<div class="fb-red-cards">${homeRC}</div>`:''}
-      ${homeLeads?'<span class="fb-leading-badge">LEADING</span>':''}
-    </div>
-    <div class="fb-score-center">
-      <div class="fb-score">${m.home_score}&nbsp;:&nbsp;${m.away_score}</div>
-    </div>
-    <div class="fb-team right">
-      <div class="fb-team-name">${esc(m.away_team)}</div>
-      ${awayRC?`<div class="fb-red-cards" style="justify-content:flex-end">${awayRC}</div>`:''}
-      ${awayLeads?'<span class="fb-leading-badge">LEADING</span>':''}
-    </div>
-  </div>`;
-
-  const oddsRow=`<div class="fb-odds-row">
-    <div class="fb-odds-box">
-      <div class="fb-odds-label">1 · ${esc(m.home_team.split(' ').slice(-1)[0])}</div>
-      <div class="fb-odds-val ${hasOdds?(favHome?'fav':''):'none'}">${hasOdds?m.home_odds.toFixed(2):'—'}</div>
-    </div>
-    <div class="fb-odds-box">
-      <div class="fb-odds-label">X · Draw</div>
-      <div class="fb-odds-val draw">${hasOdds?m.draw_odds.toFixed(2):'—'}</div>
-    </div>
-    <div class="fb-odds-box">
-      <div class="fb-odds-label">2 · ${esc(m.away_team.split(' ').slice(-1)[0])}</div>
-      <div class="fb-odds-val ${hasOdds?(favAway?'fav':''):'none'}">${hasOdds?m.away_odds.toFixed(2):'—'}</div>
-    </div>
-  </div>`;
-
-  return `<div class="fb-card">${header}${scoreRow}${oddsRow}</div>`;
-}
-
-function renderFootballUpcoming(m){
-  const leagueLabel=m.league_key.replace(/\./g,' ').replace(/\b\w/g,c=>c.toUpperCase());
-  const until=minsUntil(m.kickoff_time);
-  const kt=fmtKickoff(m.kickoff_time);
-  return `<div class="fb-card" style="opacity:.82">
-    <div class="fb-header">
-      <span class="fb-league-tag" style="background:#1e3a2e;color:#6ee7b7">${esc(leagueLabel)}</span>
-      <span>${esc(m.tournament)}</span>
-      <span class="fb-minute" style="color:#6ee7b7">⏰ ${esc(until||'')}</span>
-    </div>
-    <div class="fb-score-row">
-      <div class="fb-team"><div class="fb-team-name">${esc(m.home_team)}</div></div>
-      <div class="fb-score-center">
-        <div style="font-size:13px;color:#64748b;font-weight:700">UPCOMING</div>
-        <div style="font-size:12px;color:#94a3b8;margin-top:4px">${esc(kt)}</div>
-      </div>
-      <div class="fb-team right"><div class="fb-team-name">${esc(m.away_team)}</div></div>
-    </div>
-  </div>`;
-}
-
-// ── FOOTBALL SIGNALS ──────────────────────────────────────────────────────────
-function renderFootballSignals(signals){
-  const el=document.getElementById('fb-signals');
-  if(!signals.length){el.innerHTML='<div class="empty">No football signals in the last 24 hours</div>';return;}
-  el.innerHTML=signals.map(renderFootballSignal).join('');
-}
-
-function renderFootballSignal(s){
-  const name=FB_SIG_NAME[s.signal_type]||s.signal_type.replace(/_/g,' ');
-  const mkt=FB_MKT[s.market]||s.market;
-  const side=s.is_home?'🏠 HOME':'✈️ AWAY';
-  const confBar='█'.repeat(Math.round(s.confidence/10))+'░'.repeat(10-Math.round(s.confidence/10));
-  const modelPct=s.fair_odds>1?Math.round(100/s.fair_odds):0;
-  const mktPct=s.current_odds>1?Math.round(100/s.current_odds):0;
-  const modelBar='▓'.repeat(Math.round(modelPct/5))+'░'.repeat(20-Math.round(modelPct/5));
-  const mktBarStr='▓'.repeat(Math.round(mktPct/5))+'░'.repeat(20-Math.round(mktPct/5));
-
-  return `<div class="fb-sig-card">
-    <div class="fb-sig-header">
-      <span class="fb-sig-type fb-sig-${s.signal_type}">${name}</span>
-      <span class="fb-sig-time">${fmtTime(s.timestamp)}</span>
-    </div>
-    <div class="sc-bet-banner">
-      <span class="sc-bet-arrow">🎯</span>
-      <div>
-        <div class="sc-bet-label">Bet on</div>
-        <div class="sc-bet-player">${esc(s.team_to_back)}</div>
-        <div class="sc-bet-market">${side} · ${mkt} · ${esc(s.tournament)}</div>
-      </div>
-      <div class="sc-bet-odds">
-        <div class="sc-bet-odds-val">${s.current_odds.toFixed(2)}</div>
-        <div class="sc-bet-odds-fair">fair: ${s.fair_odds.toFixed(2)}</div>
-      </div>
-    </div>
-    <div class="sc-body">
-      <div class="sc-match">vs <strong>${esc(s.opponent)}</strong> · <span style="color:#f59e0b">${esc(s.score_summary)}</span></div>
-      <div class="sc-why">${esc(s.trigger)}</div>
-      <div class="sc-probs">
-        <div class="sc-prob-row">
-          <span class="sc-prob-lbl">Model</span>
-          <div class="sc-prob-bar-wrap"><div class="sc-prob-bar sc-prob-bar-model" style="width:${Math.min(100,modelPct)}%"></div></div>
-          <span class="sc-prob-pct">${modelPct}%</span>
-        </div>
-        <div class="sc-prob-row">
-          <span class="sc-prob-lbl">Market</span>
-          <div class="sc-prob-bar-wrap"><div class="sc-prob-bar sc-prob-bar-market" style="width:${Math.min(100,mktPct)}%"></div></div>
-          <span class="sc-prob-pct">${mktPct}%</span>
-        </div>
-      </div>
-    </div>
-    <div class="sc-footer">
-      <span class="sc-conf">${s.confidence}%</span>
-      <span class="sc-conf-bar">${confBar}</span>
-      <span class="sc-edge">+${s.edge_pct}% edge</span>
-      <span class="sc-stake">Stake ${s.stake_pct}%</span>
-    </div>
-  </div>`;
-}
-
-// ── SCALPING ────────────────────────────────────────────────────────────────────
-const TIER_LABEL={lock:'🔒 LOCK',strong:'✅ STRONG',watch:'👀 WATCH'};
-function renderScalping(opps){
-  const el=document.getElementById('scalp-list');
-  const badge=document.getElementById('scalp-count-badge');
-  const locks=opps.filter(o=>o.tier==='lock').length;
-  if(badge){
-    if(opps.length){badge.style.display='inline-block';badge.textContent=opps.length;
-      badge.style.background=locks?'#16a34a':'#0ea5e9';}
-    else{badge.style.display='none';}
-  }
-  if(!opps.length){
-    el.innerHTML='<div class="empty">No sure-shot opportunities right now.<br><span style="font-size:11px;color:#334155">Appears when a favourite leads decisively & is priced ≤'+'1.25. Needs live odds (Odds API / Parimatch push) for best accuracy.</span></div>';
-    return;
-  }
-  el.innerHTML=opps.map(renderScalpCard).join('');
-}
-
-function renderScalpCard(o){
-  const oddsTxt=o.market_odds>1.01?o.market_odds.toFixed(2):'—';
-  const hasOdds=o.market_odds>1.01;
-  const evClass=o.ev_pct>=0?'scalp-ev-pos':'scalp-ev-neg';
-  const evTxt=(o.ev_pct>=0?'+':'')+o.ev_pct+'%';
-  const win=o.win_prob;
-  const reasons=(o.reasons||[]).map(r=>`<span class="scalp-reason">${esc(r)}</span>`).join('');
-  const window=o.scalp_window?'<span class="scalp-window">⚡ SCALP WINDOW</span>':'';
-  const serving=o.is_serving?' 🎾 serving':'';
-  return `<div class="scalp-card tier-${o.tier}">
-    <div class="scalp-head">
-      <span class="scalp-tier tier-${o.tier}">${TIER_LABEL[o.tier]||o.tier}</span>
-      <span class="scalp-src">${esc(o.source)}</span>
-      <span class="scalp-tourney">${esc(o.tournament)}</span>
-      ${window}
-    </div>
-    <div class="scalp-body">
-      <div class="scalp-bet">
-        <div class="scalp-bet-info">
-          <div class="scalp-bet-label">Back to win${serving}</div>
-          <div class="scalp-player">${esc(o.player_name)}</div>
-          <div class="scalp-vs">vs ${esc(o.opponent_name)}</div>
-        </div>
-        <div class="scalp-odds">
-          <div class="scalp-odds-val ${hasOdds?'':'none'}">${oddsTxt}</div>
-          <div class="scalp-odds-cap">${hasOdds?'back odds':'no odds'}</div>
-        </div>
-      </div>
-      <div class="scalp-score">${esc(o.score_summary)}</div>
-      <div class="scalp-prob-wrap"><div class="scalp-prob-bar" style="width:${Math.min(100,win)}%"></div></div>
-      <div class="scalp-prob-lbls"><span>Model win prob</span><span><b>${win}%</b>${hasOdds?' · market '+o.market_implied+'%':''}</span></div>
-      ${reasons?`<div class="scalp-reasons">${reasons}</div>`:''}
-    </div>
-    <div class="scalp-foot">
-      ${hasOdds?`<span class="scalp-stat">Edge <b>${(o.edge_pct>=0?'+':'')+o.edge_pct}%</b></span>`:''}
-      ${hasOdds?`<span class="scalp-stat">EV <span class="${evClass}">${evTxt}</span></span>`:''}
-      <span class="scalp-stat" style="margin-left:auto">${esc(o.surface)}</span>
-    </div>
-  </div>`;
-}
-
-// ── WC GROUP STANDINGS ───────────────────────────────────────────────────────
-function renderWcGroups(data){
-  const sec=document.getElementById('wc-groups-section');
-  const el=document.getElementById('wc-groups');
-  const groups=(data&&data.groups)||[];
-  if(!groups.length){sec.style.display='none';return;}
-  sec.style.display='';
-  el.innerHTML='<div class="wc-groups">'+groups.map(g=>{
-    const rows=g.teams.map((t,i)=>{
-      const gd=t.gd>0?`<span class="gd pos">+${t.gd}</span>`:t.gd<0?`<span class="gd neg">${t.gd}</span>`:`<span class="gd">0</span>`;
-      return `<tr><td class="team-col">${esc(t.team)}</td><td>${t.p}</td><td>${t.w}</td><td>${t.d}</td><td>${t.l}</td><td>${t.gf}:${t.ga}</td><td>${gd}</td><td class="pts">${t.pts}</td></tr>`;
-    }).join('');
-    return `<div class="wc-group"><div class="wc-group-hd">${esc(g.group)}</div><table class="wc-table"><tr><th class="team-col">Team</th><th>P</th><th>W</th><th>D</th><th>L</th><th>GF:GA</th><th>GD</th><th>Pts</th></tr>${rows}</table></div>`;
-  }).join('')+'</div>';
 }
 
 // ── CRYPTO ────────────────────────────────────────────────────────────────────
@@ -3469,51 +2125,25 @@ function setHTML(id, value){
 
 async function refresh(){
   try{
-    // Only fetch what the current view actually renders — the crypto page
-    // doesn't need the sports endpoints and vice versa.
     const status = await jget('/api/status',{});
-    setText(IS_SPORTS?'stat-uptime-sports':'stat-uptime', fmtUptime(status.uptime_seconds));
-    // The sidebar footer is where uptime actually lives now.
+    // The sidebar footer is where uptime lives.
     setText('side-uptime', 'up ' + fmtUptime(status.uptime_seconds));
-    setText('side-status', status.sports_enabled===false ? 'Crypto only' : 'Running');
+    setText('side-status', 'Running');
 
-    if(IS_SPORTS){
-      const [matches,signals,fbMatches,fbSignals,scalps,wcGroups]=await Promise.all([
-        jget('/api/matches',[]),
-        jget('/api/signals',[]),
-        jget('/api/football/matches',[]),
-        jget('/api/football/signals',[]),
-        jget('/api/scalping',[]),
-        jget('/api/football/wc-groups',{}),
-      ]);
-      setText('stat-matches', matches.length);
-      setText('stat-fb-matches', fbMatches.length);
-      setText('stat-signals', signals.length+fbSignals.length);
-      const banner=document.getElementById('sports-paused-banner');
-      if(banner) banner.style.display = status.sports_enabled===false ? '' : 'none';
-      renderStatus(status);
-      renderMatches(matches);
-      renderSignals(signals);
-      renderFootballMatches(fbMatches);
-      renderWcGroups(wcGroups);
-      renderFootballSignals(fbSignals);
-      renderScalping(scalps||[]);
-    } else {
-      const [crCoins,crSignals,crCommodities]=await Promise.all([
-        jget('/api/crypto/coins',[]),
-        jget('/api/crypto/signals',[]),
-        jget('/api/commodities',[]),
-      ]);
-      setText('stat-crypto-coins', crCoins.length);
-      setText('stat-crypto-signals', crSignals.length);
-      renderCryptoCoins(crCoins);
-      renderCryptoSignals(crSignals);
-      renderCommodities(crCommodities);
-    }
+    const [crCoins,crSignals,crCommodities]=await Promise.all([
+      jget('/api/crypto/coins',[]),
+      jget('/api/crypto/signals',[]),
+      jget('/api/commodities',[]),
+    ]);
+    setText('stat-crypto-coins', crCoins.length);
+    setText('stat-crypto-signals', crSignals.length);
+    renderCryptoCoins(crCoins);
+    renderCryptoSignals(crSignals);
+    renderCommodities(crCommodities);
 
     // Only when the tab is actually visible — polling a hidden panel is
-    // wasted work on a free instance with one shared CPU tenth.
-    if(!IS_SPORTS && document.getElementById('tab-paper')
+    // wasted work on a small instance with one shared CPU tenth.
+    if(document.getElementById('tab-paper')
        && document.getElementById('tab-paper').classList.contains('active')){
       await loadPaper();
     }
@@ -3525,7 +2155,6 @@ async function refresh(){
     setText('refresh-label', 'Error — retrying…');
   }
 }
-initView();
 switchTab((location.hash||'#dashboard').slice(1));
 refresh();
 setInterval(refresh,30000);
@@ -3539,7 +2168,7 @@ _DATA_HTML = """<!DOCTYPE html>
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Database Dump — Tennis Bet</title>
+<title>Database Dump — Crypto Signal Engine</title>
 <style>
 *{box-sizing:border-box;margin:0;padding:0}
 body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:#0f172a;color:#e2e8f0;min-height:100vh;padding-bottom:40px}
@@ -3643,224 +2272,6 @@ load();
 </script>
 </body>
 </html>"""
-
-
-async def _api_collectors_debug(runner, request: web.Request) -> web.Response:
-    """
-    Live diagnostic: fires every cloud-safe collector once and returns raw results.
-    Helps diagnose why the dashboard shows 0 matches.
-    GET /api/debug/collectors
-    """
-    import traceback
-
-    from config.settings import settings
-
-    out: dict = {
-        "generated_at_ist": (
-            datetime.now(UTC)
-            .astimezone(__import__("zoneinfo").ZoneInfo("Asia/Kolkata"))
-            .strftime("%Y-%m-%d %H:%M:%S IST")
-        ),
-        "collectors": {},
-    }
-
-    # ── Odds API ──────────────────────────────────────────────────────────────
-    if settings.odds_api_key:
-        import httpx as _httpx
-        try:
-            key = settings.odds_api_key
-            async with _httpx.AsyncClient(timeout=12) as c:
-                sports_resp = await c.get(
-                    "https://api.the-odds-api.com/v4/sports/",
-                    params={"apiKey": key, "all": "true"})
-                all_sports = sports_resp.json() if sports_resp.status_code == 200 else []
-                tennis_keys = [s["key"] for s in all_sports if "tennis" in s.get("key","")]
-                active_tennis = [s for s in all_sports
-                                 if "tennis" in s.get("key","") and s.get("active")]
-
-                # Fetch odds for active keys + Grand Slam fallbacks
-                from datetime import timedelta
-                _now = datetime.now(UTC)
-                _from = (_now - timedelta(hours=12)).strftime("%Y-%m-%dT%H:%M:%SZ")
-                _to = (_now + timedelta(hours=24)).strftime("%Y-%m-%dT%H:%M:%SZ")
-                sample_events: list[dict] = []
-                keys_tried: list[dict] = []
-                try_keys = [s["key"] for s in active_tennis] or [
-                    "tennis_atp_french_open", "tennis_wta_french_open",
-                    "tennis_atp_wimbledon", "tennis_atp", "tennis_wta"]
-                for sk in try_keys[:6]:
-                    r = await c.get(
-                        f"https://api.the-odds-api.com/v4/sports/{sk}/odds/",
-                        params={"apiKey": key, "regions": "eu",
-                                "markets": "h2h", "oddsFormat": "decimal",
-                                "commenceTimeFrom": _from, "commenceTimeTo": _to})
-                    q_rem = r.headers.get("x-requests-remaining", "?")
-                    keys_tried.append({"key": sk, "status": r.status_code,
-                                       "events": len(r.json()) if r.status_code == 200 else 0,
-                                       "quota_remaining": q_rem})
-                    if r.status_code == 200:
-                        for e in r.json()[:5]:
-                            home = e.get("home_team", "")
-                            away = e.get("away_team", "")
-                            bks = e.get("bookmakers", [])
-                            # Match odds by name (correct way)
-                            h_p = a_p = 0.0
-                            for bm in bks:
-                                for mkt in bm.get("markets", []):
-                                    if mkt.get("key") == "h2h":
-                                        for oc in mkt.get("outcomes", []):
-                                            nm = oc.get("name","").lower()
-                                            pr = float(oc.get("price", 0))
-                                            if nm == home.lower() and pr > h_p:
-                                                h_p = pr
-                                            elif nm == away.lower() and pr > a_p:
-                                                a_p = pr
-                            mins_u = int(
-                                (datetime.fromisoformat(e["commence_time"].replace("Z","+00:00")) - _now
-                                 ).total_seconds() / 60) if e.get("commence_time") else None
-                            sample_events.append({
-                                "sport": sk,
-                                "match": f"{home} vs {away}",
-                                "commence_time": e.get("commence_time"),
-                                "mins_until": mins_u,
-                                "bookmakers": len(bks),
-                                "odds_home": h_p, "odds_away": a_p,
-                            })
-
-            out["collectors"]["odds_api"] = {
-                "status": "ok",
-                "all_tennis_keys": tennis_keys,
-                "active_tennis_keys": [s.get("key") for s in active_tennis],
-                "keys_tried": keys_tried,
-                "quota_remaining": runner.odds_api.quota_remaining,
-                "sample_events": sample_events,
-            }
-        except Exception:
-            out["collectors"]["odds_api"] = {"status": "error", "detail": traceback.format_exc()[-400:]}
-    else:
-        out["collectors"]["odds_api"] = {"status": "no_key"}
-
-    # ── Sportradar ────────────────────────────────────────────────────────────
-    if settings.sportradar_api_key:
-        import httpx as _httpx
-        key = settings.sportradar_api_key
-        try:
-            today = datetime.now(UTC).strftime("%Y-%m-%d")
-            async with _httpx.AsyncClient(timeout=12) as c:
-                live_r = await c.get(
-                    "https://api.sportradar.com/tennis/trial/v3/en/schedules/live/summaries.json",
-                    headers={"x-api-key": key})
-                sched_r = await c.get(
-                    f"https://api.sportradar.com/tennis/trial/v3/en/schedules/{today}/schedule.json",
-                    headers={"x-api-key": key})
-
-            def _sr_sample(data, key_name):
-                items = data.get(key_name, []) if isinstance(data, dict) else []
-                out = []
-                for item in items[:5]:
-                    ev = item.get("sport_event", item)
-                    comps = ev.get("competitors", [])
-                    p1 = comps[0].get("name", "?") if comps else "?"
-                    p2 = comps[1].get("name", "?") if len(comps) > 1 else "?"
-                    st = (item.get("sport_event_status") or {}).get("status", ev.get("status","?"))
-                    out.append({"match": f"{p1} vs {p2}", "status": st,
-                                "start": ev.get("start_time") or ev.get("scheduled")})
-                return out
-
-            out["collectors"]["sportradar"] = {
-                "live_status": live_r.status_code,
-                "schedule_status": sched_r.status_code,
-                "live_count": len(live_r.json().get("summaries", [])) if live_r.status_code == 200 else 0,
-                "schedule_count": len(sched_r.json().get("sport_events", [])) if sched_r.status_code == 200 else 0,
-                "live_sample": _sr_sample(live_r.json() if live_r.status_code == 200 else {}, "summaries"),
-                "schedule_sample": _sr_sample(sched_r.json() if sched_r.status_code == 200 else {}, "sport_events"),
-            }
-        except Exception:
-            out["collectors"]["sportradar"] = {"status": "error", "detail": traceback.format_exc()[-400:]}
-    else:
-        out["collectors"]["sportradar"] = {"status": "no_key"}
-
-    # ── API-Sports Tennis ─────────────────────────────────────────────────────
-    if settings.api_sports_key:
-        try:
-            async with _httpx.AsyncClient(
-                timeout=8,
-                headers={
-                    "x-apisports-key": settings.api_sports_key,
-                    "x-apisports-host": "v1.tennis.api-sports.io",
-                },
-            ) as c:
-                r = await c.get("https://v1.tennis.api-sports.io/games",
-                                params={"live": "all"})
-            quota = r.headers.get("x-ratelimit-requests-remaining", "?")
-            games = r.json().get("response", []) if r.status_code == 200 else []
-            out["collectors"]["api_sports"] = {
-                "status_code": r.status_code,
-                "live_games": len(games),
-                "quota_remaining": quota,
-                "sample": [
-                    f"{g.get('teams',{}).get('home',{}).get('name','?')} vs "
-                    f"{g.get('teams',{}).get('away',{}).get('name','?')}"
-                    for g in games[:5]
-                ],
-            }
-        except Exception:
-            out["collectors"]["api_sports"] = {"status": "error", "detail": traceback.format_exc()[-400:]}
-    else:
-        out["collectors"]["api_sports"] = {"status": "no_key", "note": "Add API_SPORTS_KEY — 100 req/day free at api-sports.io"}
-
-    # ── ESPN (cloud-safe check — tests the same URLs as the real collector) ──────
-    import httpx as _httpx
-    _ESPN_TEST_URLS = [
-        "https://site.api.espn.com/apis/site/v2/sports/tennis/atp/scoreboard",
-        "https://site.api.espn.com/apis/site/v2/sports/tennis/wta/scoreboard",
-        "https://site.api.espn.com/apis/site/v2/sports/tennis/french-open/scoreboard",
-    ]
-    espn_results = []
-    try:
-        async with _httpx.AsyncClient(timeout=8) as c:
-            for url in _ESPN_TEST_URLS:
-                try:
-                    r = await c.get(url, params={"limit": "20"})
-                    events = r.json().get("events", []) if r.status_code == 200 else []
-                    statuses: dict[str, int] = {}
-                    for e in events:
-                        s = e.get("status", {}).get("type", {}).get("name", "?")
-                        statuses[s] = statuses.get(s, 0) + 1
-                    espn_results.append({
-                        "url": url.split("/sports/tennis/")[1],
-                        "status_code": r.status_code,
-                        "events": len(events),
-                        "statuses": statuses,
-                        "sample": [
-                            e.get("name", "?") for e in events[:3]
-                        ],
-                    })
-                except Exception as _e:
-                    espn_results.append({"url": url, "error": str(_e)})
-        out["collectors"]["espn"] = {
-            "endpoints": espn_results,
-            "blocked": all(x.get("status_code") == 403 for x in espn_results),
-            "total_events": sum(x.get("events", 0) for x in espn_results),
-        }
-    except Exception:
-        out["collectors"]["espn"] = {"status": "error", "detail": traceback.format_exc()[-200:]}
-
-    # ── In-memory store ───────────────────────────────────────────────────────
-    all_states = await runner.store.get_all()
-    out["store"] = {
-        "total": len(all_states),
-        "live": sum(1 for s in all_states if not s.is_scheduled),
-        "scheduled": sum(1 for s in all_states if s.is_scheduled),
-        "matches": [
-            {"id": s.match_id, "p1": s.player1_name, "p2": s.player2_name,
-             "tournament": s.tournament, "scheduled": s.is_scheduled}
-            for s in all_states[:20]
-        ],
-    }
-
-    return web.Response(text=json.dumps(out, default=str, indent=2),
-                        content_type="application/json")
 
 
 async def _api_tables(runner, request: web.Request) -> web.Response:
@@ -4088,7 +2499,6 @@ async def _api_strategy_config_get(runner, request: web.Request) -> web.Response
             "orderflow_enabled": cfg.orderflow_enabled,
             "groq_signal_review_enabled": cfg.groq_signal_review_enabled,
             "groq_model": cfg.groq_model,
-            "sports_enabled": cfg.sports_enabled,
             "bank_size": cfg.bank_size,
             "min_confidence": cfg.min_confidence,
         })
@@ -4114,7 +2524,6 @@ async def _api_strategy_config_post(runner, request: web.Request) -> web.Respons
                 orderflow_enabled=bool(body["orderflow_enabled"]) if "orderflow_enabled" in body else None,
                 groq_signal_review_enabled=bool(body["groq_signal_review_enabled"]) if "groq_signal_review_enabled" in body else None,
                 groq_model=str(body["groq_model"]) if "groq_model" in body else None,
-                sports_enabled=bool(body["sports_enabled"]) if "sports_enabled" in body else None,
                 bank_size=float(body["bank_size"]) if "bank_size" in body else None,
                 min_confidence=float(body["min_confidence"]) if "min_confidence" in body else None,
             )
@@ -4124,7 +2533,7 @@ async def _api_strategy_config_post(runner, request: web.Request) -> web.Respons
 
 
 async def _api_collector_toggle(runner, request: web.Request) -> web.Response:
-    """POST /api/settings/toggle  body: {"collector": "sportradar", "enabled": true}"""
+    """POST /api/settings/toggle  body: {"collector": "coindcx", "enabled": true}"""
     from scheduler.security import check_bearer_auth
     is_admin = await _verify_admin_session(request)
     if not is_admin:
@@ -4163,41 +2572,6 @@ async def _api_collector_states(runner, request: web.Request) -> web.Response:
             states[name] = {"enabled": enabled}
 
         # Enrich with quota / key info — safely access with getattr
-        states["sportradar"].update({
-            "key_set": bool(_settings.sportradar_api_key),
-            "poll_interval_secs": _settings.sportradar_poll_interval_seconds,
-            "quota_total": 1000,
-            "calls_per_poll": 3,
-            "polls_per_day": round(86400 / _settings.sportradar_poll_interval_seconds, 1),
-            "est_calls_per_month": round(3 * 86400 / _settings.sportradar_poll_interval_seconds * 30),
-        })
-        states["odds_api"].update({
-            "key_set": bool(_settings.odds_api_key),
-            "poll_interval_secs": _settings.odds_poll_interval_seconds,
-            "quota_remaining": getattr(runner.odds_api, "quota_remaining", None),
-            "quota_used": getattr(runner.odds_api, "quota_used", None),
-        })
-        states["api_sports"].update({
-            "key_set": bool(_settings.api_sports_key),
-            "poll_interval_secs": _settings.api_sports_poll_interval_seconds,
-            "quota_remaining": getattr(runner.api_sports, "quota_remaining", None),
-        })
-        states["espn"].update({"key_set": True, "poll_interval_secs": _settings.sofascore_poll_interval})
-        states["bets_api"].update({"key_set": bool(_settings.bets_api_token)})
-
-        # New collectors with safe access
-        if hasattr(runner, "sportsdata"):
-            states["sportsdata"].update({
-                "key_set": bool(_settings.sportsdata_api_key),
-                "poll_interval_secs": _settings.sportsdata_poll_interval_seconds,
-                "quota_remaining": getattr(runner.sportsdata, "quota_remaining", None),
-                "quota_total": getattr(runner.sportsdata, "quota_total", 250),
-            })
-        if hasattr(runner, "api_tennis"):
-            states["api_tennis"].update({
-                "key_set": bool(_settings.api_tennis_key),
-                "poll_interval_secs": _settings.api_tennis_poll_interval_seconds,
-            })
         if hasattr(runner, "coindcx"):
             states["coindcx"].update({
                 "consecutive_failures": runner.coindcx._consecutive_failures,
@@ -4487,16 +2861,9 @@ input:checked+.slider:before{transform:translateX(20px)}
 
 <script>
 const SOURCES = [
-  {id:'sportradar',name:'Sportradar Tennis',icon:'🎾',desc:'Live + scheduled matches, all tours (ATP, WTA, ITF, Challengers)',quota_total:1000},
-  {id:'odds_api',name:'Odds API',icon:'💰',desc:'Pre-match odds for French Open, ATP, WTA (free tier: 500 req/month)',quota_total:500},
-  {id:'espn',name:'ESPN',icon:'📡',desc:'Live scores backup, cloud-safe, unlimited',quota_total:null},
-  {id:'bets_api',name:'BetsAPI',icon:'📈',desc:'Live in-play odds (requires paid token)',quota_total:null},
-  {id:'api_sports',name:'API-Sports',icon:'🏆',desc:'Live scores (100 req/day free)',quota_total:100},
-  {id:'sportsdata',name:'SportsData.io',icon:'📊',desc:'Live + scheduled tennis (250 req/day free trial)',quota_total:250},
-  {id:'api_tennis',name:'API-Tennis.com',icon:'🎯',desc:'Live + scheduled tennis (no hard quota limits)',quota_total:null},
   {id:'coindcx',name:'CoinDCX',icon:'🪙',desc:'Crypto price polling — preferred source, exact exchange prices',quota_total:null},
   {id:'coingecko',name:'CoinGecko',icon:'🦎',desc:'Crypto price polling — fallback for unlisted symbols',quota_total:null},
-  {id:'binance_ws',name:'Binance WebSocket',icon:'🚫',desc:'Real-time crypto streaming (OFF by default on Render)',quota_total:null},
+  {id:'binance_ws',name:'Binance WebSocket',icon:'🚫',desc:'Real-time crypto streaming (OFF by default)',quota_total:null},
   {id:'twelvedata_ws',name:'Twelve Data',icon:'🥇',desc:'Gold / Silver / Crude Oil live prices',quota_total:null},
 ];
 
@@ -5582,21 +3949,11 @@ async def make_app(runner) -> web.Application:
         return _bound
 
     app.router.add_get("/", _dashboard)
-    app.router.add_get("/sports", lambda req: web.HTTPFound("/"))
     app.router.add_get("/data", _data_page)
     app.router.add_get("/api/tables", _bind(_api_tables))
     app.router.add_get("/health", _bind(_health))
     app.router.add_get("/api/status", _bind(_api_status))
-    app.router.add_get("/api/matches", _bind(_api_matches))
-    app.router.add_get("/api/signals", _bind(_api_signals))
-    app.router.add_get("/api/football/matches", _bind(_api_football_matches))
-    app.router.add_get("/api/football/signals", _bind(_api_football_signals))
-    app.router.add_get("/api/football/wc-groups", _api_wc_groups)
     app.router.add_get("/api/debug", _bind(_api_debug))
-    app.router.add_get("/api/debug/collectors", _bind(_api_collectors_debug))
-    app.router.add_get("/api/h2h", _bind(_api_h2h))
-    app.router.add_get("/api/scalping", _bind(_api_scalping))
-    app.router.add_post("/api/ingest", _bind(_api_ingest))
     app.router.add_get("/settings", _settings_page)
     app.router.add_get("/api/settings", _bind(_api_collector_states))
     app.router.add_post("/api/auth/verify", _bind(_api_auth_verify))

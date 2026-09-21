@@ -1,11 +1,8 @@
 import structlog
 from telegram import Bot
-from telegram.constants import ParseMode
 from telegram.error import Forbidden, InvalidToken, TelegramError
 
-from analysis.signal import Signal
 from config.settings import settings
-from notifications.formatter import format_signal
 
 log = structlog.get_logger()
 
@@ -14,33 +11,11 @@ class TelegramNotifier:
     def __init__(self) -> None:
         token = settings.telegram_bot_token
         if token is None or not token.get_secret_value().strip():
-            log.info("telegram_bot_token_not_set", hint="Running with Telegram notifications disabled")
+            log.info("telegram_bot_token_not_set",
+                     hint="Running with Telegram notifications disabled")
             self._bot = None
             return
         self._bot = Bot(token=token.get_secret_value())
-
-    async def send_signal(self, sig: Signal) -> bool:
-        if self._bot is None or not settings.telegram_chat_id:
-            return False
-        message = format_signal(sig)
-        try:
-            await self._bot.send_message(
-                chat_id=settings.telegram_chat_id,
-                text=message,
-                parse_mode=ParseMode.MARKDOWN_V2,
-            )
-            log.info(
-                "telegram_signal_sent",
-                signal_type=sig.signal_type,
-                player=sig.player_name,
-                confidence=sig.confidence,
-                odds=sig.current_odds,
-            )
-            return True
-        except TelegramError as e:
-            log.error("telegram_send_failed", signal_type=sig.signal_type,
-                      error=str(e), error_type=type(e).__name__)
-            return False
 
     async def send_text(self, text: str, parse_mode: str | None = None) -> bool:
         """Send a message. Pass parse_mode=ParseMode.HTML for messages built with <b>/<i> tags —
