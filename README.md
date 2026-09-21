@@ -163,13 +163,13 @@ toolchain as of the last commit that touched it.
 | Language | Python 3.11+ |
 | Web / API | aiohttp |
 | Scheduling | APScheduler (in-process, 24/7 interval + cron jobs) |
-| Database | SQLAlchemy (async) — SQLite locally, Postgres (asyncpg) in production |
-| Live data | `websockets` (Binance), `httpx` (CoinDCX, CoinGecko, CryptoPanic REST) |
-| Numerics | pandas, pyarrow, scikit-learn (used by the dormant tennis model — see below) |
+| Database | SQLAlchemy (async) — SQLite locally, Aiven.io PostgreSQL in production |
+| Live data | `websockets` (Binance), `httpx` (CoinDCX, CoinGecko, TwelveData, CryptoPanic REST) |
+| AI Sentinel | Groq API (Qwen 3.8 27B / Llama 3.3 70B, selectable via Admin UI) |
 | Logging | structlog |
 | Notifications | python-telegram-bot |
-| Tests | pytest (586 tests as of this write-up) |
-| Deployment | Docker, deployed on Render (free tier) |
+| Tests | pytest (606 tests, 100% passing) |
+| Deployment | AWS EC2 (`systemd` service: `crypto-engine`), automated via GitHub Actions CI/CD |
 
 ## Running locally
 
@@ -187,34 +187,27 @@ Dashboard: `http://localhost:8080/`
 Run the tests:
 
 ```bash
-python -m pytest tests -q
+.venv/bin/pytest tests/
 ```
 
 ## Deployment
 
-Containerised (`Dockerfile`), deployed to Render via `render.yaml`. The
-health check hits `/health`. `PORT` is read from the environment (Render
-sets it); it falls back to `8080` locally.
+Deployed on **AWS EC2** as a systemd service (`crypto-engine`). Auto-deployment is powered by GitHub Actions (`.github/workflows/deploy.yml`) on every push to `main`, featuring automated Telegram alerts for deployment start, success, and failure.
+
+See [`SYSTEM_CONTEXT.md`](SYSTEM_CONTEXT.md) for full operational runbook, service commands, and disaster recovery.
 
 ## Configuration
 
-Settings are environment variables, loaded via `pydantic-settings`
-(`config/settings.py`). A non-exhaustive list of what actually matters for
-the crypto path:
+Core secret credentials are kept in `.env`. Operational levers (Paper Trading on/off, leverage, risk, trailing stops, Groq AI models, and coin watchlist) are managed dynamically in PostgreSQL via the `/settings` Admin UI.
 
 | Variable | Default | Purpose |
 |---|---|---|
-| `TELEGRAM_BOT_TOKEN` / `TELEGRAM_CHAT_ID` | — | Signal and trade alerts |
-| `DATABASE_URL` | local SQLite | Postgres URL in production |
-| `SPORTS_ENABLED` | `false` | Master switch for the tennis/football engine — see below |
-| `PAPER_TRADING_ENABLED` | `false` | Runs the simulated trading cycle |
-| `PAPER_LEVERAGE` / `PAPER_STOP_PCT_OF_MARGIN` / `PAPER_REWARD_RISK` | `10` / `0.20` / `2.0` | Paper position sizing and risk |
-| `API_AUTH_TOKEN` | unset (endpoints refuse) | Bearer token for the three mutating API endpoints |
-| `SENTIMENT_INGEST_TOKEN` | unset (endpoint refuses) | Shared secret for external news-sentiment ingestion |
-| `BINANCE_KLINES_ENABLED` | `true` | Live candle source |
-| `COINGECKO_API_KEY` | unset | Optional — raises the CoinGecko rate limit |
-
-Full list in `config/settings.py`.
+| `PORT` | `8080` | Web server port |
+| `DATABASE_URL` | `sqlite+aiosqlite:///./tennis_bet.db` | PostgreSQL connection URL (e.g. Aiven) |
+| `ADMIN_PASSWORD` | — | Secret password to unlock `/settings` and manual controls |
+| `TELEGRAM_BOT_TOKEN` / `TELEGRAM_CHAT_ID` | — | Signal and trade alerts via Telegram |
+| `GROQ_API_KEY` | — | Groq API key for trade pre-signal reviews |
+| `TWELVEDATA_API_KEY` | — | Optional: TwelveData API for Gold, Silver, and Crude Oil |
 
 ## Project structure
 
