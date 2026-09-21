@@ -284,7 +284,7 @@ class Repository:
 
     # ── Maintenance ────────────────────────────────────────────
 
-    async def delete_old_odds_snapshots(self, days: int = 7) -> None:
+    async def delete_old_odds_snapshots(self, days: int = 3) -> None:
         cutoff = _now_utc() - timedelta(days=days)
         result = await self.session.execute(
             select(OddsSnapshot).where(OddsSnapshot.timestamp < cutoff)
@@ -293,7 +293,7 @@ class Repository:
             await self.session.delete(row)
         await self.session.commit()
 
-    async def delete_old_crypto_data(self, days: int = 7) -> None:
+    async def delete_old_crypto_data(self, days: int = 3) -> None:
         """Bound the growth of crypto/commodity snapshots + old signal log rows.
 
         These are written every crypto_snapshot_interval_seconds (default 2 min)
