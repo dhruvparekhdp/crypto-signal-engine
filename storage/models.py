@@ -390,6 +390,7 @@ class PaperTradingConfig(Base):
     __tablename__ = "paper_trading_config"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, default=1)
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True)
     starting_wallet: Mapped[float] = mapped_column(Float, default=3000.0)
     target_wallet: Mapped[float] = mapped_column(Float, default=20000.0)
     leverage: Mapped[float] = mapped_column(Float, default=10.0)

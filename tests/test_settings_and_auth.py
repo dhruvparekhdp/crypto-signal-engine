@@ -51,10 +51,12 @@ async def test_admin_auth_and_configs(mem_sessionmaker):
         pcfg = await repo.get_paper_config()
         assert pcfg.starting_wallet == 3000.0
         assert pcfg.leverage == 10.0
+        assert pcfg.enabled is True
 
-        updated_pcfg = await repo.update_paper_config(starting_wallet=5000.0, leverage=15.0)
+        updated_pcfg = await repo.update_paper_config(starting_wallet=5000.0, leverage=15.0, enabled=False)
         assert updated_pcfg.starting_wallet == 5000.0
         assert updated_pcfg.leverage == 15.0
+        assert updated_pcfg.enabled is False
 
         # 3. Test Strategy Config
         scfg = await repo.get_strategy_config()
@@ -110,6 +112,7 @@ async def test_settings_api_endpoints(mem_sessionmaker):
             assert resp.status == 200
             pdata = await resp.json()
             assert pdata["starting_wallet"] == 3000.0
+            assert pdata["enabled"] is True
 
             # POST without auth -> 401
             resp = await client.post("/api/paper/config", json={"starting_wallet": 4500.0})
@@ -119,10 +122,11 @@ async def test_settings_api_endpoints(mem_sessionmaker):
             resp = await client.post(
                 "/api/paper/config",
                 headers={"X-Settings-Token": token},
-                json={"starting_wallet": 4500.0, "leverage": 20.0},
+                json={"starting_wallet": 4500.0, "leverage": 20.0, "enabled": False},
             )
             assert resp.status == 200
             assert (await resp.json())["starting_wallet"] == 4500.0
+            assert (await resp.json())["enabled"] is False
 
             # 5. GET & POST strategy config
             resp = await client.get("/api/strategy/config")
@@ -141,10 +145,10 @@ async def test_settings_api_endpoints(mem_sessionmaker):
             resp = await client.post(
                 "/api/settings/toggle",
                 headers={"X-Settings-Token": token},
-                json={"collector": "sportradar", "enabled": False},
+                json={"collector": "coindcx", "enabled": False},
             )
             assert resp.status == 200
-            assert runner.collector_enabled["sportradar"] is False
+            assert runner.collector_enabled["coindcx"] is False
 
             # 7. Logout
             resp = await client.post("/api/settings/auth/logout", headers={"X-Settings-Token": token})

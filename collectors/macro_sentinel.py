@@ -37,7 +37,7 @@ class GroqSentinel:
         return bool(settings.groq_api_key and settings.groq_api_key.get_secret_value())
 
     async def review_signal_candidate(
-        self, sig: CryptoSignal, state: CryptoState
+        self, sig: CryptoSignal, state: CryptoState, model: str | None = None
     ) -> tuple[float, str]:
         """
         Pre-signal second opinion.
@@ -50,7 +50,7 @@ class GroqSentinel:
             return 0.0, ""
 
         api_key = settings.groq_api_key.get_secret_value()  # type: ignore[union-attr]
-        model = getattr(settings, "groq_model", "llama-3.3-70b-versatile")
+        active_model = model or getattr(settings, "groq_model", "qwen/qwen3.8-27b")
 
         # Context payload
         funding_str = (f"{state.funding_rate_per_8h * 100:+.3f}%"
@@ -94,7 +94,7 @@ class GroqSentinel:
             "Content-Type": "application/json",
         }
         payload: dict[str, Any] = {
-            "model": model,
+            "model": active_model,
             "messages": [
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_content},

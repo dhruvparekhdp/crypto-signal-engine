@@ -41,18 +41,11 @@ from analysis.paper_cycle import (
 )
 from analysis.paper_trading import Position, Side
 from analysis.crypto_state_store import CommodityStateStore, CryptoStateStore
-from analysis.engine import AnalysisEngine
-from analysis.football_engine import FootballEngine
 from analysis.football_state import FootballStateStore
 from analysis.match_state import MatchState
-from analysis.ml_predictor import MLPredictor
 from analysis.multi_horizon_predictor import MultiHorizonPredictor
-from analysis.scalping import scan_all
 from analysis.sentiment import SentimentAnalyzer
 from analysis.state_store import MatchStateStore
-from analysis.win_probability import compute_win_probability
-from collectors.api_tennis import ApiTennisCollector
-from collectors.bets_api import BetsAPICollector
 from collectors.binance_futures_oi import BinanceFuturesOICollector
 from collectors.binance_klines import BinanceKlines
 from collectors.binance_ws import BinanceWSCollector
@@ -60,17 +53,7 @@ from collectors.coindcx import CoinDCXCollector
 from collectors.coingecko import CoinGeckoCollector
 from collectors.macro_sentinel import GroqSentinel
 from collectors.cryptopanic import CryptoPanicCollector
-from collectors.espn import ESPNCollector
-from collectors.flashscore import FlashscoreCollector
-from collectors.football_espn import FootballESPNCollector
-from collectors.football_odds_api import FootballOddsApiCollector
 from collectors.historical_importer import run_import
-from collectors.odds_api import OddsApiCollector
-from collectors.slam_pbp_importer import run_slam_import
-from collectors.sofascore import SofascoreCollector
-from collectors.sportradar import SportradarCollector
-from collectors.sportsdata import SportsDataCollector
-from collectors.thesportsdb import TheSportsDBCollector
 from collectors.sentiment_feeds import adjust_confidence, fetch_fear_greed
 from collectors.twelvedata_ws import TwelveDataWSCollector
 from config.settings import settings
@@ -79,75 +62,25 @@ from notifications.crypto_formatter import (
     format_cycle_end,
     format_paper_trade,
 )
-from notifications.football_formatter import format_football_signal
 from notifications.telegram_notifier import TelegramNotifier
 from storage.database import AsyncSessionFactory
 from storage.repository import Repository
 
 log = structlog.get_logger()
 
-# Save a snapshot every this many data polls (30s * 4 = ~2 minutes)
-_SNAPSHOT_EVERY_N_POLLS = 4
-
-
-def _infer_winner(state: MatchState) -> int | None:
-    """Infer match winner from final sets score. Returns None if inconclusive."""
-    if state.sets_p1 > state.sets_p2:
-        return 1
-    if state.sets_p2 > state.sets_p1:
-        return 2
-    return None
-
-
-def _format_score(state: MatchState) -> str:
-    return f"{state.sets_p1}-{state.sets_p2} sets ({state.games_in_set_p1}-{state.games_in_set_p2} current)"
-
 
 class AppRunner:
     def __init__(self) -> None:
         self.store = MatchStateStore()
-        self.flashscore = FlashscoreCollector(self.store)
-        self.espn = ESPNCollector(self.store)
-        self.sofascore = SofascoreCollector(self.store)
-        self.thesportsdb = TheSportsDBCollector(api_key=settings.thesportsdb_api_key)
-        self.odds_api = OddsApiCollector(self.store)
-        self.bets_api = BetsAPICollector(self.store)
-        self.ml_predictor = MLPredictor()
+        self.football_store = FootballStateStore()
         self.notifier = TelegramNotifier()
         self.scheduler = AsyncIOScheduler()
-        # Tennis: persistent engine so _cooldowns survive across poll cycles
-        self._engine: AnalysisEngine | None = None
-        # Track last-seen match states to detect completions
-        self._last_states: dict[str, MatchState] = {}
-        # Per-match poll counter for snapshot throttling
-        self._poll_counters: dict[str, int] = {}
-        # Football
-        self.football_store = FootballStateStore()
-        self.football_espn = FootballESPNCollector(self.football_store)
-        self.football_odds = FootballOddsApiCollector(self.football_store)
-        self.football_engine = FootballEngine()
-        # Sportradar — covers ALL tennis (Challengers, ITF) + ALL football in one call each
-        self.sportradar = SportradarCollector(self.store, self.football_store)
-        # SportsData.io — live + scheduled tennis
-        self.sportsdata = SportsDataCollector(self.store)
-        # API-Tennis — live + scheduled, no quota limits
-        self.api_tennis = ApiTennisCollector(self.store)
-        # Scalping alerts — track last Telegram ping per match to avoid spam
-        self._scalp_alert_times: dict[str, datetime] = {}
         # Crypto & Commodities — watchlist itself is DB-backed, loaded in start()
         self.crypto_store = CryptoStateStore()
         self.commodity_store = CommodityStateStore()
-        # CoinDCX is the preferred crypto price source (free, no key, exact
-        # exchange prices). CoinGecko fills in anything CoinDCX doesn't list.
-        # Binance's WebSocket API returns HTTP 451 (geoblocked) from Render's
-        # IPs, so it can't be relied on there — binance_ws is kept available
-        # as an opt-in toggle (e.g. for a non-US deploy region) but starts
-        # disabled.
         self.coindcx = CoinDCXCollector(self.crypto_store)
         self.coingecko = CoinGeckoCollector(self.crypto_store)
         self.binance_ws = BinanceWSCollector(self.crypto_store)
-        # Real klines and depth over REST. The websocket is geo-blocked from
-        # this region; the REST mirror generally is not.
         self.klines = BinanceKlines(self.crypto_store)
         self.twelvedata_ws = TwelveDataWSCollector(self.commodity_store)
         self.cryptopanic = CryptoPanicCollector()
@@ -156,280 +89,16 @@ class AppRunner:
         self.groq_sentinel = GroqSentinel()
         self.oi_collector = BinanceFuturesOICollector(self.crypto_store)
         self._pending_paper_signals: list[tuple[CryptoSignal, object]] = []
-        # Cached because it only updates daily; refreshed by its own job.
         self.fear_greed = None
         self.multi_horizon = MultiHorizonPredictor()
         self._ws_tasks: list[asyncio.Task] = []
-        # Collector enable/disable toggles (runtime, not persisted across restarts)
         self.collector_enabled: dict[str, bool] = {
-            "sportradar": True,
-            "sportsdata": True,
-            "api_tennis": True,
-            "odds_api": True,
-            "api_sports": True,
-            "espn": True,
-            "bets_api": True,
             "coindcx": True,
             "coingecko": True,
-            # Driven by env: main Binance host is geo-blocked (451) from Render's
-            # US IPs. Probe /api/debug/binance first, then flip BINANCE_WS_ENABLED.
             "binance_ws": settings.binance_ws_enabled,
             "twelvedata_ws": True,
         }
 
-    async def _data_poll_job(self) -> None:
-        await self.flashscore.fetch()
-        await self.espn.fetch()
-        await self.bets_api.fetch()
-
-        if self.sofascore._consecutive_failures < 5:
-            await self.sofascore.fetch()
-
-        current_states = {s.match_id: s for s in await self.store.get_all()}
-
-        # Detect matches that just completed (were live last poll, gone now)
-        completed_ids = set(self._last_states) - set(current_states)
-        if completed_ids:
-            await self._handle_completions(completed_ids)
-
-        # Run analysis + take snapshots
-        await self._run_analysis(current_states)
-
-        self._last_states = current_states
-
-    async def _handle_completions(self, completed_ids: set[str]) -> None:
-        """Process matches that disappeared from the live feed."""
-        async with AsyncSessionFactory() as session:
-            repo = Repository(session)
-            for match_id in completed_ids:
-                state = self._last_states[match_id]
-                winner = _infer_winner(state)
-                if winner is None:
-                    log.info("match_completion_inconclusive", match_id=match_id,
-                             sets=f"{state.sets_p1}-{state.sets_p2}")
-                    continue
-
-                total_sigs, correct_sigs = await repo.update_signal_outcomes(match_id, winner)
-                await repo.label_match_snapshots(match_id, winner)
-                await repo.save_match_completion(
-                    match_id=match_id,
-                    player1_name=state.player1_name,
-                    player2_name=state.player2_name,
-                    winner=winner,
-                    final_sets_p1=state.sets_p1,
-                    final_sets_p2=state.sets_p2,
-                    final_score_str=_format_score(state),
-                    tournament=state.tournament,
-                    surface=state.surface,
-                    total_games=state.total_games_played(),
-                    total_signals=total_sigs,
-                    signals_correct=correct_sigs,
-                )
-                await repo.mark_match_finished(match_id)
-
-                winner_name = state.player1_name if winner == 1 else state.player2_name
-                accuracy = f"{correct_sigs}/{total_sigs}" if total_sigs > 0 else "no signals"
-                log.info(
-                    "match_completed",
-                    match_id=match_id,
-                    winner=winner_name,
-                    score=_format_score(state),
-                    signal_accuracy=accuracy,
-                )
-                # Clean up poll counter
-                self._poll_counters.pop(match_id, None)
-
-    async def _run_analysis(self, current_states: dict[str, MatchState]) -> None:
-        if not current_states:
-            return
-        async with AsyncSessionFactory() as session:
-            repo = Repository(session)
-            if self._engine is None:
-                self._engine = AnalysisEngine(repo)
-            else:
-                self._engine.repository = repo
-
-            for match_id, state in current_states.items():
-                try:
-                    # Run signal analysis
-                    signals = await self._engine.process(state)
-                    for sig in signals:
-                        await self.notifier.send_signal(sig)
-                        log.info(
-                            "signal_fired",
-                            signal_type=sig.signal_type,
-                            match_id=sig.match_id,
-                            player=sig.player_name,
-                            confidence=sig.confidence,
-                        )
-
-                    # Take periodic snapshot (every N polls per match)
-                    counter = self._poll_counters.get(match_id, 0) + 1
-                    self._poll_counters[match_id] = counter
-                    if counter % _SNAPSHOT_EVERY_N_POLLS == 0:
-                        await self._save_snapshot(repo, state)
-
-                except Exception:
-                    log.exception("analysis_job_failed", match_id=match_id)
-
-    async def _save_snapshot(self, repo: Repository, state: MatchState) -> None:
-        """Save a periodic match state snapshot for ML training."""
-        try:
-            model_p1, model_p2 = compute_win_probability(state)
-            # Momentum: positive = p1 streak, negative = p2 streak
-            p1_streak = state.consecutive_games_won_by(1)
-            p2_streak = state.consecutive_games_won_by(2)
-            momentum = p1_streak if p1_streak > 0 else -p2_streak
-
-            await repo.save_match_snapshot(
-                match_id=state.match_id,
-                player1_name=state.player1_name,
-                player2_name=state.player2_name,
-                surface=state.surface,
-                tournament=state.tournament,
-                sets_p1=state.sets_p1,
-                sets_p2=state.sets_p2,
-                games_p1=state.games_in_set_p1,
-                games_p2=state.games_in_set_p2,
-                current_set=state.current_set,
-                total_games_played=state.total_games_played(),
-                p1_momentum=momentum,
-                odds_p1=state.odds_p1,
-                odds_p2=state.odds_p2,
-                model_win_prob_p1=round(model_p1, 4),
-                model_win_prob_p2=round(model_p2, 4),
-                serve_pct_p1=state.serve_stats_p1.first_serve_pct,
-                serve_pct_p2=state.serve_stats_p2.first_serve_pct,
-                game_log=state.game_log,
-            )
-        except Exception:
-            log.exception("snapshot_save_failed", match_id=state.match_id)
-
-    async def _football_poll_job(self) -> None:
-        try:
-            await self.football_espn.fetch()
-            # Enrich with Odds API odds + upcoming matches (if key configured)
-            if settings.odds_api_key:
-                try:
-                    await self.football_odds.fetch(settings.odds_api_key)
-                except Exception:
-                    log.exception("football_odds_api_failed")
-            for state in await self.football_store.get_all():
-                if state.is_scheduled:
-                    continue  # don't run signals on upcoming matches
-                try:
-                    signals = self.football_engine.process(state)
-                    for sig in signals:
-                        msg = format_football_signal(sig)
-                        await self.notifier.send_text(msg)
-                except Exception:
-                    log.exception("football_analysis_failed", match_id=state.match_id)
-        except Exception:
-            log.exception("football_poll_job_failed")
-
-    async def _odds_job(self) -> None:
-        try:
-            await self.odds_api.fetch()
-        except Exception:
-            log.exception("odds_job_failed")
-
-    async def _scalp_job(self) -> None:
-        """Scan live tennis for sure-shot 'lock' scalps and ping Telegram (deduped)."""
-        if not settings.scalp_alert_telegram:
-            return
-        try:
-            states = await self.store.get_all()
-            opps = scan_all(
-                states,
-                min_win_prob=settings.scalp_min_win_prob,
-                lock_win_prob=settings.scalp_lock_win_prob,
-                max_odds=settings.scalp_max_odds,
-                lock_max_odds=settings.scalp_lock_max_odds,
-            )
-            now = datetime.now(timezone.utc)
-            cooldown = settings.scalp_alert_cooldown_minutes * 60
-            for o in opps:
-                if o.tier != "lock":
-                    continue
-                last = self._scalp_alert_times.get(o.match_id)
-                if last and (now - last).total_seconds() < cooldown:
-                    continue
-                self._scalp_alert_times[o.match_id] = now
-                odds_txt = f"{o.market_odds:.2f}" if o.market_odds > 1.01 else "n/a"
-                ev_txt = f"{o.ev_pct:+.1f}%" if o.market_odds > 1.01 else "n/a"
-                reasons = ", ".join(o.reasons) if o.reasons else "decisive lead"
-                window = "\n⚡ SCALP WINDOW — odds drifted up, better entry now" if o.scalp_window else ""
-                await self.notifier.send_text(
-                    f"🔒 SURE-SHOT SCALP\n"
-                    f"Back: {o.player_name}\n"
-                    f"vs {o.opponent_name}\n"
-                    f"{o.tournament} ({o.surface})\n"
-                    f"Score: {o.score_summary}\n"
-                    f"Win prob: {o.win_prob*100:.0f}% · Odds: {odds_txt} · EV: {ev_txt}\n"
-                    f"Why: {reasons}{window}"
-                )
-                log.info("scalp_alert_sent", match_id=o.match_id,
-                         player=o.player_name, win_prob=round(o.win_prob, 3))
-            # Drop stale alert-time entries for matches no longer live
-            live_ids = {s.match_id for s in states}
-            for mid in list(self._scalp_alert_times):
-                if mid not in live_ids:
-                    self._scalp_alert_times.pop(mid, None)
-        except Exception:
-            log.exception("scalp_job_failed")
-
-    async def _ml_retrain_job(self) -> None:
-        try:
-            async with AsyncSessionFactory() as session:
-                repo = Repository(session)
-                await self.ml_predictor.maybe_retrain(repo)
-        except Exception:
-            log.exception("ml_retrain_job_failed")
-
-    async def _schedule_job(self) -> None:
-        await self.thesportsdb.fetch()
-
-    async def _historical_import_job(self) -> None:
-        # Only run match-level import on cloud — slam PBP (2.5M rows) is local-only
-        # Run scripts/scrape_history.py on your laptop for slam point-by-point data
-        try:
-            async with AsyncSessionFactory() as session:
-                await run_import(session)
-        except Exception:
-            log.exception("historical_import_failed_non_fatal")
-
-    async def _sportradar_job(self) -> None:
-        key = settings.sportradar_api_key
-        if not key:
-            return
-        try:
-            await self.sportradar.fetch_tennis(key)
-        except Exception:
-            log.exception("sportradar_tennis_job_failed")
-        try:
-            await self.sportradar.fetch_soccer(key)
-        except Exception:
-            log.exception("sportradar_soccer_job_failed")
-
-    async def _sportsdata_job(self) -> None:
-        if not settings.sportsdata_api_key:
-            return
-        if not self.collector_enabled.get("sportsdata", True):
-            return
-        try:
-            await self.sportsdata.fetch()
-        except Exception:
-            log.exception("sportsdata_job_failed")
-
-    async def _api_tennis_job(self) -> None:
-        if not settings.api_tennis_key:
-            return
-        if not self.collector_enabled.get("api_tennis", True):
-            return
-        try:
-            await self.api_tennis.fetch()
-        except Exception:
-            log.exception("api_tennis_job_failed")
 
     async def _coindcx_job(self) -> None:
         if not self.collector_enabled.get("coindcx", True):
@@ -541,12 +210,12 @@ class AppRunner:
         new ones — so a position can never be opened and closed on the same
         tick using the same information.
         """
-        if not settings.paper_trading_enabled:
-            return
         try:
             async with AsyncSessionFactory() as session:
                 repo = Repository(session)
                 pcfg = await repo.get_paper_config()
+                if not pcfg.enabled:
+                    return
                 cycle = await self._ensure_cycle(repo)
                 if cycle is None:
                     return
@@ -804,6 +473,7 @@ class AppRunner:
             async with AsyncSessionFactory() as session:
                 repo = Repository(session)
                 scfg = await repo.get_strategy_config()
+                pcfg = await repo.get_paper_config()
 
             states = await self.crypto_store.get_all()
             for state in states:
@@ -817,7 +487,9 @@ class AppRunner:
 
                     # Groq AI Pre-Signal Sanity Review (advisory sanity check)
                     if self.groq_sentinel.is_available and scfg.groq_signal_review_enabled:
-                        delta, ai_summary = await self.groq_sentinel.review_signal_candidate(sig, state)
+                        delta, ai_summary = await self.groq_sentinel.review_signal_candidate(
+                            sig, state, model=scfg.groq_model
+                        )
                         if ai_summary:
                             sig.ai_review = ai_summary
                             sig.confidence = max(0.50, min(0.95, round(sig.confidence + delta, 4)))
@@ -826,7 +498,7 @@ class AppRunner:
                     if settings.crypto_alert_telegram:
                         await self.notifier.send_text(msg, parse_mode=ParseMode.HTML)
 
-                    if settings.paper_trading_enabled:
+                    if pcfg.enabled:
                         self._pending_paper_signals.append((sig, state))
 
                     # Log to DB
@@ -986,31 +658,15 @@ class AppRunner:
             max_instances=1,
         )
 
-        # ── Sports (tennis + football) — all gated behind one master switch ──
-        # With SPORTS_ENABLED=false none of these are scheduled, so they spend
-        # no API quota and no CPU. Crypto below is unaffected either way.
-        if settings.sports_enabled:
-            self._setup_sports_jobs()
-        else:
-            log.info("sports_jobs_disabled", hint="set SPORTS_ENABLED=true to re-enable")
-
-        # Paper trading simulator — off unless PAPER_TRADING_ENABLED is set.
-        if settings.paper_trading_enabled:
-            self.scheduler.add_job(
-                self._paper_trading_job,
-                "interval",
-                seconds=settings.paper_tick_interval_seconds,
-                id="paper_trading_tick",
-                max_instances=1,
-                next_run_time=datetime.now(timezone.utc) + timedelta(seconds=45),
-            )
-            log.info("paper_trading_enabled",
-                     wallet=settings.paper_starting_wallet,
-                     leverage=settings.paper_leverage,
-                     tick_seconds=settings.paper_tick_interval_seconds)
-        else:
-            log.info("paper_trading_disabled",
-                     hint="set PAPER_TRADING_ENABLED=true to run a cycle")
+        # Paper trading simulator — dynamic tick job managed via database PaperTradingConfig
+        self.scheduler.add_job(
+            self._paper_trading_job,
+            "interval",
+            seconds=settings.paper_tick_interval_seconds,
+            id="paper_trading_tick",
+            max_instances=1,
+            next_run_time=datetime.now(timezone.utc) + timedelta(seconds=15),
+        )
 
         self.scheduler.add_job(
             self._resolve_signal_outcomes_job,
@@ -1089,92 +745,6 @@ class AppRunner:
                 next_run_time=datetime.now(timezone.utc),
             )
 
-    def _setup_sports_jobs(self) -> None:
-        """All tennis + football jobs. Only called when settings.sports_enabled."""
-        self.scheduler.add_job(
-            self._data_poll_job,
-            "interval",
-            seconds=settings.sofascore_poll_interval,
-            id="data_poll",
-            max_instances=1,
-            next_run_time=datetime.now(timezone.utc),  # run immediately on startup
-        )
-        self.scheduler.add_job(
-            self._schedule_job,
-            "interval",
-            seconds=settings.schedule_poll_interval,
-            id="schedule_poll",
-            max_instances=1,
-        )
-        self.scheduler.add_job(
-            self._odds_job,
-            "interval",
-            seconds=settings.odds_poll_interval_seconds,
-            id="odds_poll",
-            max_instances=1,
-            next_run_time=datetime.now(timezone.utc),
-        )
-        self.scheduler.add_job(
-            self._ml_retrain_job,
-            "interval",
-            hours=6,
-            id="ml_retrain",
-            max_instances=1,
-        )
-        if settings.sportradar_api_key:
-            self.scheduler.add_job(
-                self._sportradar_job,
-                "interval",
-                seconds=settings.sportradar_poll_interval_seconds,
-                id="sportradar",
-                max_instances=1,
-                next_run_time=datetime.now(timezone.utc),
-            )
-        if settings.sportsdata_api_key:
-            self.scheduler.add_job(
-                self._sportsdata_job,
-                "interval",
-                seconds=settings.sportsdata_poll_interval_seconds,
-                id="sportsdata",
-                max_instances=1,
-                next_run_time=datetime.now(timezone.utc),
-            )
-        if settings.api_tennis_key:
-            self.scheduler.add_job(
-                self._api_tennis_job,
-                "interval",
-                seconds=settings.api_tennis_poll_interval_seconds,
-                id="api_tennis",
-                max_instances=1,
-                next_run_time=datetime.now(timezone.utc),
-            )
-        self.scheduler.add_job(
-            self._scalp_job,
-            "interval",
-            seconds=60,
-            id="scalp_alerts",
-            max_instances=1,
-            next_run_time=datetime.now(timezone.utc),
-        )
-        self.scheduler.add_job(
-            self._football_poll_job,
-            "interval",
-            seconds=60,
-            id="football_poll",
-            max_instances=1,
-            next_run_time=datetime.now(timezone.utc),
-        )
-        # Historical import — runs immediately on startup, then weekly
-        self.scheduler.add_job(
-            self._historical_import_job,
-            "interval",
-            weeks=1,
-            id="historical_import",
-            max_instances=1,
-            next_run_time=datetime.now(timezone.utc),
-        )
-        log.info("sports_jobs_scheduled")
-
     async def start(self) -> None:
         await self.notifier.verify()
 
@@ -1201,75 +771,19 @@ class AppRunner:
         await HistoricalDataService.preload_states(self.crypto_store)
 
         crypto_count = await self.crypto_store.count()
-        if settings.sports_enabled:
-            bets_api_status = "BetsAPI: active" if settings.bets_api_token else "BetsAPI: no token"
-            sports_line = (
-                f"Tennis: ESPN + Flashscore + {bets_api_status} (every {settings.sofascore_poll_interval}s)\n"
-                f"Football: ESPN all leagues (every 60s)\n"
-            )
-        else:
-            sports_line = "Sports (tennis + football): paused — no polling, no quota used\n"
         await self.notifier.send_text(
-            "🪙 Crypto monitor started.\n"
+            "🪙 Crypto Signal Engine started.\n"
             f"Crypto: CoinDCX + CoinGecko {crypto_count}-symbol watchlist "
             f"(poll every {settings.coindcx_poll_interval_seconds}s/{settings.coingecko_poll_interval_seconds}s)\n"
             f"Commodities: Twelve Data Gold/Silver/Oil ({'active' if settings.twelvedata_api_key else 'no key'})\n"
             f"News Sentiment: CryptoPanic ({'active' if settings.cryptopanic_auth_token else 'no token'})\n"
-            f"{sports_line}"
-            f"Min confidence: {settings.crypto_min_confidence} (Crypto)"
+            f"Paper Trading: Active in background\n"
+            f"AI Sentinel: {'Active' if settings.groq_api_key else 'Disabled (no key)'}"
         )
-        log.info("scheduler_started", crypto_symbols_count=crypto_count,
-                 sports_enabled=settings.sports_enabled)
+        log.info("scheduler_started", crypto_symbols_count=crypto_count)
 
     def get_status(self) -> dict:
         return {
-            "flashscore": {
-                "http_ok": self.flashscore._consecutive_failures == 0,
-                "consecutive_failures": self.flashscore._consecutive_failures,
-                "consecutive_zeros": self.flashscore._consecutive_zero_matches,
-            },
-            "espn": {"ok": True},
-            "sofascore": {
-                "blocked": self.sofascore._consecutive_failures >= 5,
-                "consecutive_failures": self.sofascore._consecutive_failures,
-            },
-            "odds_api": {
-                "key_set": bool(settings.odds_api_key),
-                "poll_interval_secs": settings.odds_poll_interval_seconds,
-                "quota_remaining": self.odds_api.quota_remaining,
-                "quota_used": self.odds_api.quota_used,
-                "last_events_fetched": self.odds_api.last_events_fetched,
-            },
-            "bets_api": {
-                "token_set": bool(settings.bets_api_token),
-                "consecutive_failures": self.bets_api._consecutive_failures,
-            },
-            "sportradar": {
-                "key_set": bool(settings.sportradar_api_key),
-                "consecutive_failures": self.sportradar._consecutive_failures,
-                "poll_interval_secs": settings.sportradar_poll_interval_seconds,
-            },
-            "sportsdata": {
-                "key_set": bool(settings.sportsdata_api_key),
-                "consecutive_failures": self.sportsdata._consecutive_failures,
-                "poll_interval_secs": settings.sportsdata_poll_interval_seconds,
-                "quota_remaining": self.sportsdata.quota_remaining,
-                "quota_total": self.sportsdata.quota_total,
-                "last_live": self.sportsdata.last_live_count,
-                "last_scheduled": self.sportsdata.last_scheduled_count,
-            },
-            "api_tennis": {
-                "key_set": bool(settings.api_tennis_key),
-                "consecutive_failures": self.api_tennis._consecutive_failures,
-                "poll_interval_secs": settings.api_tennis_poll_interval_seconds,
-                "last_live": self.api_tennis.last_live_count,
-                "last_scheduled": self.api_tennis.last_scheduled_count,
-            },
-            "football": {
-                "live_matches": 0,  # filled by health.py via football_store.count()
-                "signals_today": len(self.football_engine.get_recent_signals(24)),
-                "odds_api_football": bool(settings.odds_api_key),
-            },
             "crypto": {
                 "coindcx_consecutive_failures": self.coindcx._consecutive_failures,
                 "coindcx_matched_symbols": len(self.coindcx.last_matched_symbols),
@@ -1289,6 +803,5 @@ class AppRunner:
         self.twelvedata_ws.stop()
         for task in self._ws_tasks:
             task.cancel()
-        await self.sofascore.close()
-        await self.notifier.send_text("Tennis + Football + Crypto monitor stopped.")
+        await self.notifier.send_text("Crypto signal engine stopped.")
         log.info("scheduler_stopped")

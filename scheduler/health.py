@@ -1873,7 +1873,6 @@ section h2{color:var(--accent-soft)}
   <div class="side-item side-secondary" data-tab="historic" onclick="switchTab('historic')"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 5a9 3 0 1018 0 9 3 0 10-18 0M3 5v14a9 3 0 0018 0V5"/></svg><span>Historic Data</span></div>
   <div class="side-item side-secondary" data-tab="watchlist" onclick="switchTab('watchlist')"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l2.6 5.3 5.9.9-4.3 4.1 1 5.8-5.2-2.7-5.2 2.7 1-5.8L3.5 9.2l5.9-.9z"/></svg><span>Watchlist</span></div>
   <div class="side-group">Other</div>
-  <a class="side-item side-secondary" data-tab="sports" href="/sports"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 3a9 9 0 000 18M3 12h18"/></svg><span>Sports</span></a>
   <a class="side-item side-secondary" data-tab="audit" href="/audit"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 3h6v5l4 9a2 2 0 01-1.8 3H6.8A2 2 0 015 16l4-9z"/><path d="M9 8h6"/></svg><span>Signal Audit</span></a>
   <a class="side-item side-secondary" data-tab="diag" href="/api/debug/collectors"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2v4M12 18v4M4.9 4.9l2.8 2.8M16.3 16.3l2.8 2.8M2 12h4M18 12h4"/></svg><span>Diagnostics</span></a>
   <a class="side-item side-secondary" data-tab="settings" href="/settings"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19 12a7 7 0 00-.1-1l2-1.6-2-3.4-2.4 1a7 7 0 00-1.7-1L14.5 3h-4l-.4 2.6a7 7 0 00-1.7 1l-2.4-1-2 3.4L6 11a7 7 0 000 2l-2 1.6 2 3.4 2.4-1a7 7 0 001.7 1l.4 2.6h4l.4-2.6a7 7 0 001.7-1l2.4 1 2-3.4-2-1.6a7 7 0 00.1-1z"/></svg><span>Settings</span></a>
@@ -4020,6 +4019,7 @@ async def _api_paper_config_get(runner, request: web.Request) -> web.Response:
     async with AsyncSessionFactory() as session:
         cfg = await Repository(session).get_paper_config()
         return web.json_response({
+            "enabled": cfg.enabled,
             "starting_wallet": cfg.starting_wallet,
             "target_wallet": cfg.target_wallet,
             "leverage": cfg.leverage,
@@ -4036,7 +4036,6 @@ async def _api_paper_config_get(runner, request: web.Request) -> web.Response:
             "max_leverage": cfg.max_leverage,
             "usdt_inr": cfg.usdt_inr,
             "alert_telegram": cfg.alert_telegram,
-            "enabled": _SETTINGS.paper_trading_enabled,
         })
 
 
@@ -4051,6 +4050,7 @@ async def _api_paper_config_post(runner, request: web.Request) -> web.Response:
         async with AsyncSessionFactory() as session:
             repo = Repository(session)
             cfg = await repo.update_paper_config(
+                enabled=bool(body["enabled"]) if "enabled" in body else None,
                 starting_wallet=float(body["starting_wallet"]) if "starting_wallet" in body else None,
                 target_wallet=float(body["target_wallet"]) if "target_wallet" in body else None,
                 leverage=float(body["leverage"]) if "leverage" in body else None,
@@ -4068,7 +4068,7 @@ async def _api_paper_config_post(runner, request: web.Request) -> web.Response:
                 usdt_inr=float(body["usdt_inr"]) if "usdt_inr" in body else None,
                 alert_telegram=bool(body["alert_telegram"]) if "alert_telegram" in body else None,
             )
-            return web.json_response({"ok": True, "starting_wallet": cfg.starting_wallet})
+            return web.json_response({"ok": True, "enabled": cfg.enabled, "starting_wallet": cfg.starting_wallet})
     except Exception as exc:
         return web.json_response({"error": str(exc)}, status=400)
 
@@ -4342,6 +4342,13 @@ input:checked+.slider:before{transform:translateX(20px)}
   <h2>📈 Paper Trading Configuration</h2>
   <p class="subtitle">Stored directly in database — updates apply live to simulator cycle without redeployment.</p>
   <div class="card">
+    <div style="background: rgba(30, 41, 59, 0.7); border: 1px solid #334155; padding: 14px 18px; border-radius: 8px; margin-bottom: 18px; display: flex; align-items: center; justify-content: space-between;">
+      <div>
+        <div style="font-weight: 600; font-size: 15px; color: #f8fafc;">🚀 Paper Trading Simulator Master Switch</div>
+        <div style="font-size: 12px; color: #94a3b8;">When active, signals matching conviction thresholds will open paper positions and simulate live trades.</div>
+      </div>
+      <label class="toggle"><input type="checkbox" id="p-enabled"><span class="slider"></span></label>
+    </div>
     <div class="form-grid">
       <div class="form-group">
         <label>Starting Wallet (₹)</label>
@@ -4419,8 +4426,14 @@ input:checked+.slider:before{transform:translateX(20px)}
   <div class="card">
     <div class="form-grid">
       <div class="form-group">
-        <label>Groq AI Model</label>
-        <input type="text" id="s-groq-model" placeholder="qwen/qwen3.8-27b">
+        <label>Groq AI Model Selection</label>
+        <select id="s-groq-model" style="background:#0f172a; color:#f8fafc; border:1px solid #334155; padding:8px 10px; border-radius:6px; width:100%; font-size:13px;">
+          <option value="qwen/qwen3.8-27b">Qwen 3.8 27B (Recommended - Fast & Analytical)</option>
+          <option value="llama-3.3-70b-versatile">Llama 3.3 70B Versatile (Deep Reasoning)</option>
+          <option value="llama-3.1-8b-instant">Llama 3.1 8B Instant (Ultra-fast)</option>
+          <option value="mixtral-8x7b-32768">Mixtral 8x7B (High Context)</option>
+          <option value="deepseek-r1-distill-llama-70b">DeepSeek R1 Distill Llama 70B (Math & Logic)</option>
+        </select>
       </div>
       <div class="form-group">
         <label>Crypto Min Confidence (0.50 - 0.95)</label>
@@ -4460,10 +4473,6 @@ input:checked+.slider:before{transform:translateX(20px)}
       <div class="toggle-item">
         <span>HTF Trend Filter</span>
         <label class="toggle"><input type="checkbox" id="s-htf-filter"><span class="slider"></span></label>
-      </div>
-      <div class="toggle-item">
-        <span>Sports Betting Engine (Tennis/Football)</span>
-        <label class="toggle"><input type="checkbox" id="s-sports-enabled"><span class="slider"></span></label>
       </div>
     </div>
     <button class="save-btn" onclick="saveStrategyConfig()">💾 Save Strategy & AI Configuration</button>
@@ -4664,6 +4673,7 @@ async function loadPaperConfig() {
   try {
     const r = await fetch('/api/paper/config');
     const c = await r.json();
+    document.getElementById('p-enabled').checked = c.enabled !== false;
     document.getElementById('p-starting-wallet').value = c.starting_wallet;
     document.getElementById('p-target-wallet').value = c.target_wallet;
     document.getElementById('p-usdt-inr').value = c.usdt_inr;
@@ -4687,6 +4697,7 @@ async function loadPaperConfig() {
 
 async function savePaperConfig() {
   const payload = {
+    enabled: document.getElementById('p-enabled').checked,
     starting_wallet: parseFloat(document.getElementById('p-starting-wallet').value),
     target_wallet: parseFloat(document.getElementById('p-target-wallet').value),
     usdt_inr: parseFloat(document.getElementById('p-usdt-inr').value),
@@ -4732,7 +4743,6 @@ async function loadStrategyConfig() {
     document.getElementById('s-binance-klines').checked = c.binance_klines_enabled;
     document.getElementById('s-volume-spike').checked = c.crypto_volume_spike_enabled;
     document.getElementById('s-htf-filter').checked = c.crypto_htf_filter_enabled;
-    document.getElementById('s-sports-enabled').checked = c.sports_enabled;
   } catch(e) {
     console.error('Failed to load strategy config', e);
   }
@@ -4750,7 +4760,6 @@ async function saveStrategyConfig() {
     binance_klines_enabled: document.getElementById('s-binance-klines').checked,
     crypto_volume_spike_enabled: document.getElementById('s-volume-spike').checked,
     crypto_htf_filter_enabled: document.getElementById('s-htf-filter').checked,
-    sports_enabled: document.getElementById('s-sports-enabled').checked,
   };
   try {
     const res = await apiFetch('/api/strategy/config', {
@@ -5573,7 +5582,7 @@ async def make_app(runner) -> web.Application:
         return _bound
 
     app.router.add_get("/", _dashboard)
-    app.router.add_get("/sports", _dashboard)
+    app.router.add_get("/sports", lambda req: web.HTTPFound("/"))
     app.router.add_get("/data", _data_page)
     app.router.add_get("/api/tables", _bind(_api_tables))
     app.router.add_get("/health", _bind(_health))

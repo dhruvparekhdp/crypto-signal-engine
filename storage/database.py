@@ -171,6 +171,7 @@ async def _migrate_columns(conn) -> None:
         # paper_trading_config table — user configurable paper trading settings in DB
         """CREATE TABLE IF NOT EXISTS paper_trading_config (
             id INTEGER PRIMARY KEY,
+            enabled BOOLEAN DEFAULT TRUE,
             starting_wallet FLOAT DEFAULT 3000.0,
             target_wallet FLOAT DEFAULT 20000.0,
             leverage FLOAT DEFAULT 10.0,
@@ -189,6 +190,7 @@ async def _migrate_columns(conn) -> None:
             alert_telegram BOOLEAN DEFAULT TRUE
         )""",
         "INSERT INTO paper_trading_config (id) VALUES (1) ON CONFLICT (id) DO NOTHING",
+        "ALTER TABLE paper_trading_config ADD COLUMN IF NOT EXISTS enabled BOOLEAN DEFAULT TRUE",
         # admin_auth table — password hash + salt + active session
         """CREATE TABLE IF NOT EXISTS admin_auth (
             id INTEGER PRIMARY KEY,

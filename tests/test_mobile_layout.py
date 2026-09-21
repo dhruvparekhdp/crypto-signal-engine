@@ -46,7 +46,7 @@ class TestPhoneNavigation(unittest.TestCase):
                 self.assertIn(f'class="side-item" data-tab="{tab}"', self.html)
 
     def test_the_rest_are_behind_more(self):
-        for tab in ("historic", "watchlist", "sports", "diag", "settings"):
+        for tab in ("historic", "watchlist", "diag", "settings"):
             with self.subTest(tab=tab):
                 self.assertIn(f'class="side-item side-secondary" data-tab="{tab}"', self.html)
 
