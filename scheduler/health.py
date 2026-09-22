@@ -2663,7 +2663,7 @@ function renderTable(t){
     +'<h2>'+esc(t.name)+'</h2>'
     +'<span class="count">showing <b>'+t.shown+'</b> of '+t.total.toLocaleString()+' rows</span></div>';
   if(t.error) return head+'<div class="err">error: '+esc(t.error)+'</div>';
-  if(!t.rows.length) return head+'<div class="empty">— empty —</div>';
+  if(!t.rows.length) return head+'<div class="pnl pnl-empty"><div class="pnl-t">No rows</div><div class="pnl-d">This table exists but nothing has written to it yet.</div></div>';
   let h='<div class="scroll"><table><thead><tr>';
   for(const c of t.columns) h+='<th>'+esc(c)+'</th>';
   h+='</tr></thead><tbody>';
@@ -2679,7 +2679,9 @@ async function load(){
   const lim=Math.max(1,Math.min(2000,parseInt(document.getElementById('limit').value)||100));
   document.getElementById('status').textContent='loading…';
   try{
-    const data=await fetch('/api/tables?limit='+lim).then(r=>r.json());
+    const resp=await fetch('/api/tables?limit='+lim);
+    if(!resp.ok) throw new Error('server returned ' + resp.status);
+    const data=await resp.json();
     const tables=data.tables||[];
     document.getElementById('toc').innerHTML=tables.map(t=>
       '<a href="#t_'+esc(t.name)+'">'+esc(t.name)+' <b>'+t.total.toLocaleString()+'</b></a>').join('');
@@ -2689,8 +2691,8 @@ async function load(){
     document.getElementById('status').textContent=
       tables.length+' tables · '+totRows.toLocaleString()+' rows total';
   }catch(e){
-    document.getElementById('status').textContent='Error: '+e;
-    document.getElementById('tables').innerHTML='<div class="err" style="padding:20px">Failed to load: '+esc(e)+'</div>';
+    document.getElementById('status').textContent='failed';
+    Panel.error(document.getElementById('tables'), 'the tables', e, load);
   }
 }
 load();
@@ -3834,8 +3836,12 @@ async function reload(){
   document.getElementById('hdr-sub').textContent = 'loading…';
   try{
     const [a,m] = await Promise.all([
-      fetch('/api/audit?days='+days).then(r=>r.json()),
-      METHODS ? Promise.resolve({stages:METHODS}) : fetch('/api/audit/methods').then(r=>r.json()),
+      fetch('/api/audit?days='+days).then(r=>{
+        if(!r.ok) throw new Error('audit returned ' + r.status); return r.json(); }),
+      METHODS ? Promise.resolve({stages:METHODS})
+              : fetch('/api/audit/methods').then(r=>{
+                  if(!r.ok) throw new Error('methods returned ' + r.status);
+                  return r.json(); }),
     ]);
     DATA = a; METHODS = m.stages;
     buildFilterOptions();
@@ -3843,7 +3849,15 @@ async function reload(){
     document.getElementById('hdr-sub').textContent =
       `${a.records.length} signals · last ${a.days}d · round trip ${a.cost_model.round_trip_pct}%`;
   }catch(e){
-    document.getElementById('hdr-sub').textContent = 'failed to load — ' + e;
+    // The subtitle alone left an empty page, which reads as "no signals yet"
+    // rather than "the request died".
+    document.getElementById('hdr-sub').textContent = 'failed to load';
+    Panel.error(document.getElementById('slice-body'), 'the audit', e, reload);
+    const tb = document.getElementById('tbody');
+    if(tb) tb.innerHTML =
+      '<tr><td colspan="99" style="padding:0">'
+      + '<div class="pnl pnl-err"><div class="pnl-t">Could not load the audit</div>'
+      + '<div class="pnl-d">' + (e && e.message ? e.message : e) + '</div></div></td></tr>';
   }
 }
 
@@ -3980,7 +3994,10 @@ function renderSlices(){
     <td class="num">${r.avg_move_pct==null?'&mdash;':r.avg_move_pct.toFixed(3)+'%'}</td>
     <td class="num ${r.avg_x_cost>=3?'pos':(r.avg_x_cost<1?'neg':'')}">${r.avg_x_cost==null?'&mdash;':r.avg_x_cost.toFixed(1)+'×'}</td>
     <td class="num">${r.avg_confidence_pct==null?'&mdash;':r.avg_confidence_pct+'%'}</td>
-  </tr>`).join('') : '<tr><td colspan="12" class="empty">Nothing in this window</td></tr>';
+  </tr>`).join('') : '<tr><td colspan="12" style="padding:0">'
+      + '<div class="pnl pnl-empty"><div class="pnl-t">Nothing in this window</div>'
+      + '<div class="pnl-d">No signals fired over this period, or none match the '
+      + 'filters above. Widen the day range to look further back.</div></div></td></tr>';
 }
 
 function renderMethods(){
@@ -4149,8 +4166,17 @@ function cell(f, price){
 
 async function load(){
   let d;
-  try{ d=await fetch('/api/predict').then(r=>r.json()); }
-  catch(e){ document.getElementById('tick').textContent='failed — '+e; return; }
+  try{
+    const r = await fetch('/api/predict');
+    if(!r.ok) throw new Error('server returned ' + r.status);
+    d = await r.json();
+  }catch(e){
+    // The ticker line alone left the table sitting on "loading…", which
+    // reads as a quiet market rather than a dead request.
+    document.getElementById('tick').textContent = 'failed to update';
+    Panel.error(document.getElementById('rows'), 'the outlook', e, load);
+    return;
+  }
 
   document.getElementById('tick').textContent=
     'updated '+new Date(d.generated_at).toLocaleTimeString('en-IN',{timeZone:'Asia/Kolkata'})
@@ -4193,6 +4219,17 @@ load(); setInterval(load, 20000);
 _THEME_SNIPPET = """
 <style>
 /* Theme palettes */
+/* Panel states — one look for loading, empty and failed, on every page. */
+.pnl{padding:20px 16px;text-align:center;border-radius:10px;
+  background:var(--panel2,#111827);border:1px solid var(--line,#28324a)}
+.pnl-t{font-size:13px;font-weight:600;color:var(--text,#e8edf6)}
+.pnl-d{font-size:11.5px;color:var(--muted,#9fadc4);margin-top:5px;line-height:1.6}
+.pnl-err .pnl-t{color:var(--neg,#ff6b5e)}
+.pnl-load .pnl-t{color:var(--muted,#9fadc4);font-weight:500}
+.pnl-r{margin-top:11px;font:inherit;font-size:12px;padding:7px 15px;min-height:38px;
+  border-radius:7px;cursor:pointer;background:var(--accent,#e3b341);
+  color:var(--sunk,#0c1220);border:0;font-weight:600}
+
 /* ── Palette ───────────────────────────────────────────────────────────────
    One variable set drives the sidebar, tables and signal cards. The older
    components are still reskinned by the !important block in the theme
@@ -4330,6 +4367,52 @@ async function apiFetch(url, opts){
   }
   return res;
 }
+
+// ── Panel states ────────────────────────────────────────────────────────
+// A blank panel means one of three different things — still loading, loaded
+// and genuinely empty, or failed — and until now they all looked the same.
+// /audit had five fetches and one catch that wrote anything to the screen,
+// so four of its failure paths left the page sitting on whatever was there
+// before, with no way to tell a quiet market from a dead endpoint.
+//
+// Panel.load() makes that distinction unavoidable: it writes the loading
+// state, runs the fetch, and turns any failure into a message naming what
+// broke and offering a retry. A caller cannot forget the catch because the
+// catch is the wrapper.
+window.Panel = (function(){
+  function box(el, cls, title, detail, retry){
+    if(!el) return;
+    el.innerHTML =
+      '<div class="pnl pnl-' + cls + '">'
+      + '<div class="pnl-t">' + title + '</div>'
+      + (detail ? '<div class="pnl-d">' + detail + '</div>' : '')
+      + (retry ? '<button class="pnl-r" type="button">Try again</button>' : '')
+      + '</div>';
+    if(retry){
+      var b = el.querySelector('.pnl-r');
+      if(b) b.addEventListener('click', retry);
+    }
+  }
+  function loading(el, what){ box(el, 'load', 'Loading ' + (what || 'data') + '…'); }
+  // `why` is the point: "nothing yet" and "nothing matching your filters"
+  // are different answers and send the reader somewhere different.
+  function empty(el, what, why){ box(el, 'empty', 'No ' + what, why || ''); }
+  function error(el, what, err, retry){
+    box(el, 'err', 'Could not load ' + what,
+        (err && err.message ? err.message : String(err || 'the request failed')),
+        retry);
+  }
+  async function load(el, what, fn){
+    loading(el, what);
+    try { return await fn(); }
+    catch(e){
+      console.error('panel ' + what + ':', e);
+      error(el, what, e, function(){ load(el, what, fn); });
+      return null;
+    }
+  }
+  return {loading: loading, empty: empty, error: error, load: load, box: box};
+})();
 
 // ── Display currency ────────────────────────────────────────────────────
 // Every money figure the server sends is INR — margin, P&L, fees, wallet —
