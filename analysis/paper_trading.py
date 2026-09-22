@@ -597,6 +597,8 @@ def open_position(
     lot_step: float = 0.0,
     slippage: SlippageModel = NO_SLIPPAGE,
     drift_pct: float = 0.0,
+    stop_price: float | None = None,
+    target_price: float | None = None,
 ) -> Position:
     # The signal quotes a price; we fill somewhere near it. Everything after
     # this point — stop, target, liquidation, size — is measured from where we
@@ -604,7 +606,17 @@ def open_position(
     signal_price = entry_price
     entry_price = slippage.entry_fill(entry_price, side, drift_pct)
 
-    stop, target = stop_and_target(entry_price, side, leverage, stop_pct_of_margin, reward_risk)
+    # Levels the caller supplies win. Deriving them from a margin-risk budget
+    # instead produced a book that shared only direction and timing with the
+    # signals it claimed to be testing: a gold signal published a 0.231%
+    # target and the trade opened against a 4% one, seventeen times wider, so
+    # it expired untouched and paid fees. A paper trade that does not take the
+    # signal's own levels is measuring a different strategy.
+    if stop_price is not None and target_price is not None:
+        stop, target = stop_price, target_price
+    else:
+        stop, target = stop_and_target(
+            entry_price, side, leverage, stop_pct_of_margin, reward_risk)
     pos = Position(
         symbol=symbol,
         side=side,

@@ -125,6 +125,31 @@ def should_open(
     return True, "ok"
 
 
+def _hold_minutes(signal: CryptoSignal, cfg: CycleConfig) -> float:
+    """
+    How long to give this setup, from the signal's own expected duration.
+
+    The level policy derives a horizon from how far the target is and how fast
+    the market moves; holding every trade for a flat four hours ignores it. A
+    16-minute gold setup sat open until the clock ran out and closed at
+    -0.067%, having paid fees to learn nothing. Half again the expected time
+    leaves room to be slow without waiting on a setup that has clearly failed,
+    and the configured maximum is still the ceiling.
+    """
+    tf = (signal.timeframe or "").strip().lower()
+    minutes = None
+    try:
+        if tf.endswith("m"):
+            minutes = float(tf[:-1]) * 1.5
+        elif tf.endswith("h"):
+            minutes = float(tf[:-1]) * 90.0
+    except ValueError:
+        minutes = None
+    if not minutes or minutes <= 0:
+        return cfg.max_hold_minutes
+    return min(max(minutes, 15.0), cfg.max_hold_minutes)
+
+
 def open_from_signal(
     signal: CryptoSignal,
     cfg: CycleConfig,
@@ -147,6 +172,10 @@ def open_from_signal(
         return None
 
     spec = spec_for(signal.symbol)
+    # The signal already decided where this setup is wrong and what it is
+    # worth, from the cost floor and the market's own volatility. Recomputing
+    # that from a margin-risk budget throws all of it away and leaves the
+    # paper book testing something the engine never proposed.
     pos = open_position(
         symbol=signal.symbol,
         side=Side.LONG if signal.direction == "long" else Side.SHORT,
@@ -156,11 +185,13 @@ def open_from_signal(
         fees=fees_for(signal.symbol),
         stop_pct_of_margin=cfg.stop_pct_of_margin,
         reward_risk=cfg.reward_risk,
+        stop_price=signal.stop_loss,
+        target_price=signal.target_price,
         opened_at=now,
         signal_type=signal.signal_type,
         timeframe=signal.timeframe,
         confidence=signal.confidence,
-        expires_at=now + timedelta(minutes=cfg.max_hold_minutes),
+        expires_at=now + timedelta(minutes=_hold_minutes(signal, cfg)),
         usdt_inr=usdt_inr,
         lot_step=spec.lot_step,
         slippage=cfg.slippage,
