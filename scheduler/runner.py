@@ -149,6 +149,12 @@ class AppRunner:
 
     async def _ensure_cycle(self, repo) -> object | None:
         """Return the running cycle, starting one if none exists."""
+        # Retire any duplicate first, so a second cycle created by a second
+        # worker cannot quietly take ownership of the next trade.
+        closed = await repo.close_duplicate_cycles()
+        if closed:
+            log.error("duplicate_paper_cycles_closed", closed=closed,
+                      hint="more than one worker was running the paper job")
         cycle = await repo.get_running_cycle()
         if cycle is not None:
             return cycle

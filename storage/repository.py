@@ -188,6 +188,37 @@ class Repository:
         )
         return res.scalar_one_or_none()
 
+    async def running_cycles(self) -> list[PaperCycle]:
+        """Every cycle claiming to be running. There should only ever be one."""
+        res = await self.session.execute(
+            select(PaperCycle).where(PaperCycle.status == "running")
+            .order_by(PaperCycle.id))
+        return list(res.scalars())
+
+    async def close_duplicate_cycles(self) -> int:
+        """
+        Keep the oldest running cycle and retire the rest.
+
+        _ensure_cycle checks then creates with nothing held between, so two
+        workers — two processes after a restart that left the old one alive —
+        can both see no cycle and both start one. Trades then land on
+        whichever cycle their worker holds while the dashboard reads
+        `ORDER BY id DESC LIMIT 1` and shows the other, so a trade reported on
+        Telegram is missing from the page and the wallets disagree.
+
+        The oldest survives because it owns the earlier trades; the newer one
+        is the accident.
+        """
+        rows = await self.running_cycles()
+        if len(rows) < 2:
+            return 0
+        for extra in rows[1:]:
+            extra.status = "superseded"
+            extra.ended_at = _now_utc()
+            extra.note = (extra.note or "") + " closed as a duplicate running cycle"
+        await self.session.commit()
+        return len(rows) - 1
+
     async def start_cycle(
         self,
         starting_wallet: float,

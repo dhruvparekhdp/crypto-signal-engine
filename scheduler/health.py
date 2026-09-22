@@ -673,6 +673,10 @@ async def _api_paper(runner, request: web.Request) -> web.Response:
         rows = await repo.get_open_positions(cycle.id)
         trades = await repo.get_cycle_trades(cycle.id, limit=200)
         cfg = config_for_cycle(cycle)
+        # More than one cycle claiming to be running means trades are being
+        # split across them: the page reads the newest and a trade announced
+        # on Telegram can be missing here with nothing to explain it.
+        running = await repo.running_cycles()
 
     states = {st.symbol: st for st in await runner.crypto_store.get_all()}
     positions = []
@@ -721,6 +725,7 @@ async def _api_paper(runner, request: web.Request) -> web.Response:
         "trades": [_trade_row(t) for t in trades[:60]],
         # Current rate, for figures that are not tied to one trade.
         "usdt_inr": _SETTINGS.paper_usdt_inr,
+        "running_cycles": [c.id for c in running],
     }), content_type="application/json")
 
 
@@ -1672,7 +1677,12 @@ function renderPaper(){
   if(!d) return;
   const banner = document.getElementById('paper-banner');
 
-  if(!d.enabled){
+  if((d.running_cycles || []).length > 1){
+    banner.innerHTML = '<div class="cr-sig-warn">Two paper cycles are running ('
+      + d.running_cycles.join(', ') + '). Trades are split between them, so this '
+      + 'page is showing only one. The engine retires the duplicate on its next '
+      + 'tick — check for a second crypto-engine process.</div>';
+  } else if(!d.enabled){
     banner.innerHTML = '<div class="cr-sig-warn">Paper trading is switched off — '
       + 'turn it on in <a href="/settings">Settings</a>.</div>';
   } else if(!d.running){
