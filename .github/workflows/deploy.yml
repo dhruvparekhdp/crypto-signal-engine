@@ -35,11 +35,11 @@ jobs:
             SHORT_SHA=$(echo "${COMMIT_SHA}" | cut -c1-7)
             FIRST_LINE=$(echo "${COMMIT_MSG:-Manual dispatch}" | head -n 1)
             MSG="🚀 <b>Deploying to EC2...</b>
-📦 <b>Repo:</b> ${{ github.repository }}
-🌿 <b>Branch:</b> <code>${{ github.ref_name }}</code>
-🔖 <b>Commit:</b> <code>${SHORT_SHA}</code>
-👤 <b>Author:</b> ${ACTOR}
-📝 <b>Message:</b> ${FIRST_LINE}"
+          📦 <b>Repo:</b> ${{ github.repository }}
+          🌿 <b>Branch:</b> <code>${{ github.ref_name }}</code>
+          🔖 <b>Commit:</b> <code>${SHORT_SHA}</code>
+          👤 <b>Author:</b> ${ACTOR}
+          📝 <b>Message:</b> ${FIRST_LINE}"
 
             curl -s -X POST "https://api.telegram.org/bot${TG_TOKEN}/sendMessage" \
               -d "chat_id=${TG_CHAT}" \
@@ -104,10 +104,10 @@ jobs:
           if [ -n "${TG_TOKEN}" ] && [ -n "${TG_CHAT}" ]; then
             SHORT_SHA=$(echo "${COMMIT_SHA}" | cut -c1-7)
             MSG="✅ <b>Deployment Successful!</b>
-🖥️ <b>Host:</b> EC2 (<code>${EC2_HOST}</code>)
-🔖 <b>Commit:</b> <code>${SHORT_SHA}</code>
-⚙️ <b>Service:</b> <code>crypto-engine</code> restarted & healthy 🟢
-🌐 <b>Dashboard:</b> http://${EC2_HOST}:8080"
+          🖥️ <b>Host:</b> EC2 (<code>${EC2_HOST}</code>)
+          🔖 <b>Commit:</b> <code>${SHORT_SHA}</code>
+          ⚙️ <b>Service:</b> <code>crypto-engine</code> restarted & healthy 🟢
+          🌐 <b>Dashboard:</b> http://${EC2_HOST}:8080"
 
             curl -s -X POST "https://api.telegram.org/bot${TG_TOKEN}/sendMessage" \
               -d "chat_id=${TG_CHAT}" \
@@ -131,9 +131,9 @@ jobs:
           if [ -n "${TG_TOKEN}" ] && [ -n "${TG_CHAT}" ]; then
             SHORT_SHA=$(echo "${COMMIT_SHA}" | cut -c1-7)
             MSG="❌ <b>Deployment Failed!</b>
-🖥️ <b>Host:</b> EC2 (<code>${EC2_HOST}</code>)
-🔖 <b>Commit:</b> <code>${SHORT_SHA}</code>
-⚠️ <i>Check GitHub Actions log for details.</i>"
+          🖥️ <b>Host:</b> EC2 (<code>${EC2_HOST}</code>)
+          🔖 <b>Commit:</b> <code>${SHORT_SHA}</code>
+          ⚠️ <i>Check GitHub Actions log for details.</i>"
 
             curl -s -X POST "https://api.telegram.org/bot${TG_TOKEN}/sendMessage" \
               -d "chat_id=${TG_CHAT}" \
