@@ -320,6 +320,37 @@ class AppRunner:
         except Exception:
             log.exception("paper_trading_job_failed")
 
+    async def _log_signal(self, sig, suppressed_by: str = "") -> int:
+        """
+        Record a signal, whether or not it was published.
+
+        A suppressed row carries the name of the filter that stopped it and
+        is otherwise identical, so the outcome resolver scores it the same
+        way. That is what makes "what did this filter cost me" answerable
+        instead of a matter of opinion.
+        """
+        try:
+            async with AsyncSessionFactory() as session:
+                return await Repository(session).log_crypto_signal(
+                    symbol=sig.symbol,
+                    signal_type=sig.signal_type,
+                    direction=sig.direction,
+                    trigger_description=sig.trigger_description,
+                    confidence=sig.confidence,
+                    current_price=sig.current_price,
+                    target_price=sig.target_price,
+                    stop_loss=sig.stop_loss,
+                    edge_pct=sig.edge_pct,
+                    stake_pct=sig.stake_pct,
+                    timeframe=sig.timeframe,
+                    sentiment_score=sig.sentiment_score,
+                    indicators_summary=sig.indicators_summary,
+                    suppressed_by=suppressed_by,
+                )
+        except Exception:
+            log.exception("crypto_signal_db_log_failed", symbol=sig.symbol)
+            return 0
+
     async def _review_closed_trade(self, trade, row) -> None:
         """
         Ask what the trade taught, once the answer is in.
@@ -562,6 +593,11 @@ class AppRunner:
                                      confidence_after=sig.confidence,
                                      threshold=scfg.crypto_min_confidence,
                                      reason=ai_summary)
+                            # Logged as a shadow, not discarded. The resolver
+                            # scores it like any other signal, so the cost of
+                            # blocking it is measurable. A filter only ever
+                            # judged on what it let through cannot be wrong.
+                            await self._log_signal(sig, suppressed_by="ai_review")
                             continue
 
                     msg = format_crypto_signal(sig)
@@ -571,27 +607,7 @@ class AppRunner:
                     if pcfg.enabled:
                         self._pending_paper_signals.append((sig, state))
 
-                    # Log to DB
-                    try:
-                        async with AsyncSessionFactory() as session:
-                            repo = Repository(session)
-                            await repo.log_crypto_signal(
-                                symbol=sig.symbol,
-                                signal_type=sig.signal_type,
-                                direction=sig.direction,
-                                trigger_description=sig.trigger_description,
-                                confidence=sig.confidence,
-                                current_price=sig.current_price,
-                                target_price=sig.target_price,
-                                stop_loss=sig.stop_loss,
-                                edge_pct=sig.edge_pct,
-                                stake_pct=sig.stake_pct,
-                                timeframe=sig.timeframe,
-                                sentiment_score=sig.sentiment_score,
-                                indicators_summary=sig.indicators_summary,
-                            )
-                    except Exception:
-                        log.exception("crypto_signal_db_log_failed", symbol=sig.symbol)
+                    await self._log_signal(sig)
 
                     log.info(
                         "crypto_signal_fired",

@@ -144,6 +144,8 @@ async def _migrate_columns(conn) -> None:
             alert_telegram BOOLEAN DEFAULT TRUE
         )""",
         "ALTER TABLE paper_trades ADD COLUMN IF NOT EXISTS usdt_inr FLOAT DEFAULT 102.0",
+        "ALTER TABLE crypto_signal_log ADD COLUMN IF NOT EXISTS suppressed_by VARCHAR DEFAULT ''",
+        "CREATE INDEX IF NOT EXISTS ix_csl_suppressed ON crypto_signal_log (suppressed_by)",
         """CREATE TABLE IF NOT EXISTS signal_reviews (
             id SERIAL PRIMARY KEY,
             phase VARCHAR, symbol VARCHAR, signal_type VARCHAR DEFAULT '',

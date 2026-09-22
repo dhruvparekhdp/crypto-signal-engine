@@ -73,6 +73,12 @@ class CryptoSignalLog(Base):
     indicators_summary: Mapped[str] = mapped_column(String, default="")
     outcome: Mapped[str] = mapped_column(String, default="pending") # pending/won/lost/expired
     pnl_pct: Mapped[float] = mapped_column(Float, default=0.0)
+    # Empty for a signal that fired. Otherwise names the filter that stopped
+    # it — "ai_review", "confidence". A suppressed signal is still logged and
+    # still scored against what price did next, because a filter that is only
+    # ever measured on the trades it allowed can only ever look good. This is
+    # the row that answers "what did blocking that cost me".
+    suppressed_by: Mapped[str] = mapped_column(String, default="", index=True)
     timestamp: Mapped[datetime] = mapped_column(DateTime, index=True)
 
 

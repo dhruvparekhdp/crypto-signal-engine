@@ -486,6 +486,27 @@ async def _api_audit(runner, request: web.Request) -> web.Response:
     return web.json_response(report)
 
 
+async def _api_reviewer_scorecard(runner, request: web.Request) -> web.Response:
+    """
+    GET /api/audit/reviewer — was the AI reviewer actually right?
+
+    Graded against resolved outcomes, including the signals it suppressed,
+    which is the only way the question has an honest answer. If REJECT shows
+    a better win rate than APPROVE, the reviewer is costing money.
+    """
+    from storage.database import AsyncSessionFactory
+    from storage.repository import Repository
+
+    days = max(1, min(90, int(request.query.get("days", 14))))
+    async with AsyncSessionFactory() as session:
+        repo = Repository(session)
+        return web.json_response({
+            "days": days,
+            "scorecard": await repo.reviewer_scorecard(days),
+            "post_trade_factors": await repo.review_factor_counts("post", days),
+        })
+
+
 async def _api_audit_methods(runner, request: web.Request) -> web.Response:
     """
     The code that produces a signal, read out of the modules themselves.
@@ -4400,6 +4421,7 @@ async def make_app(runner) -> web.Application:
     app.router.add_get("/audit", _audit_page)
     app.router.add_get("/api/audit", _bind(_api_audit))
     app.router.add_get("/api/audit/methods", _bind(_api_audit_methods))
+    app.router.add_get("/api/audit/reviewer", _bind(_api_reviewer_scorecard))
     app.router.add_get("/api/debug/volume", _bind(_api_debug_volume))
     app.router.add_post("/api/crypto/watchlist/add", _bind(_api_crypto_watchlist_add))
     app.router.add_post("/api/crypto/watchlist/remove", _bind(_api_crypto_watchlist_remove))

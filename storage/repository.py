@@ -108,8 +108,9 @@ class Repository:
         timeframe: str,
         sentiment_score: float = 0.0,
         indicators_summary: str = "",
-    ) -> None:
-        self.session.add(CryptoSignalLog(
+        suppressed_by: str = "",
+    ) -> int:
+        row = CryptoSignalLog(
             symbol=symbol,
             signal_type=signal_type,
             direction=direction,
@@ -125,9 +126,13 @@ class Repository:
             indicators_summary=indicators_summary,
             outcome="pending",
             pnl_pct=0.0,
+            suppressed_by=suppressed_by,
             timestamp=_now_utc(),
-        ))
+        )
+        self.session.add(row)
         await self.session.commit()
+        await self.session.refresh(row)
+        return row.id
 
     async def get_recent_crypto_signals(self, hours: int = 24) -> list[CryptoSignalLog]:
         since = _now_utc() - timedelta(hours=hours)
@@ -476,14 +481,22 @@ class Repository:
 
     async def crypto_signals_between(self, newer_than_days: int,
                                      older_than_days: int = 0,
-                                     limit: int = 400) -> list[CryptoSignalLog]:
+                                     limit: int = 400,
+                                     include_suppressed: bool = False,
+                                     ) -> list[CryptoSignalLog]:
         """
         Signals inside a window. `older_than_days` carves out the recent end,
         which is what splits the live dashboard from the archive.
+
+        Suppressed signals are excluded by default: they never fired, so
+        counting them would misreport what the engine actually published.
+        The scorecard asks for them on purpose.
         """
         now = _now_utc()
         q = select(CryptoSignalLog).where(
             CryptoSignalLog.timestamp >= now - timedelta(days=newer_than_days))
+        if not include_suppressed:
+            q = q.where(CryptoSignalLog.suppressed_by == "")
         if older_than_days:
             q = q.where(CryptoSignalLog.timestamp < now - timedelta(days=older_than_days))
         res = await self.session.execute(
@@ -554,6 +567,70 @@ class Repository:
             await self.session.commit()
         except Exception:
             await self.session.rollback()
+
+    async def reviewer_scorecard(self, days: int = 14) -> dict:
+        """
+        Was the reviewer right? Graded against what price actually did.
+
+        Only answerable because suppressed signals are still logged and still
+        resolved. A filter measured solely on the trades it let through cannot
+        be wrong by construction — every rejection it got wrong is invisible.
+        Here a REJECT that would have won shows up as exactly that.
+
+        Read it as: if REJECT has a higher win rate than APPROVE, the reviewer
+        is costing money and the penalty should come down or go.
+        """
+        from storage.models import SignalReview
+        since = _now_utc() - timedelta(days=days)
+
+        res = await self.session.execute(
+            select(SignalReview).where(SignalReview.phase == "pre",
+                                       SignalReview.created_at >= since))
+        reviews = list(res.scalars())
+        if not reviews:
+            return {"verdicts": {}, "reviewed": 0, "resolved": 0}
+
+        sig_res = await self.session.execute(
+            select(CryptoSignalLog).where(CryptoSignalLog.timestamp >= since))
+        # Match on (symbol, setup) within the window: a pre-review is written
+        # in the same breath as its signal, so the pairing is unambiguous in
+        # practice and does not need a foreign key it never had.
+        by_key: dict[tuple, list] = {}
+        for row in sig_res.scalars():
+            by_key.setdefault((row.symbol, row.signal_type), []).append(row)
+
+        out: dict[str, dict] = {}
+        resolved = 0
+        for rv in reviews:
+            verdict = (rv.verdict or "NONE").upper()
+            slot = out.setdefault(verdict, {
+                "seen": 0, "resolved": 0, "won": 0, "lost": 0,
+                "suppressed": 0, "net_pnl_pct": 0.0})
+            slot["seen"] += 1
+            candidates = by_key.get((rv.symbol, rv.signal_type), [])
+            match = min(
+                (c for c in candidates
+                 if abs((c.timestamp - rv.created_at).total_seconds()) < 120),
+                key=lambda c: abs((c.timestamp - rv.created_at).total_seconds()),
+                default=None)
+            if match is None or match.outcome not in ("won", "lost", "expired"):
+                continue
+            slot["resolved"] += 1
+            resolved += 1
+            if match.suppressed_by:
+                slot["suppressed"] += 1
+            if match.outcome == "won":
+                slot["won"] += 1
+            elif match.outcome == "lost":
+                slot["lost"] += 1
+            slot["net_pnl_pct"] += match.pnl_pct or 0.0
+
+        for slot in out.values():
+            decided = slot["won"] + slot["lost"]
+            slot["win_rate_pct"] = (round(slot["won"] / decided * 100, 1)
+                                    if decided else None)
+            slot["net_pnl_pct"] = round(slot["net_pnl_pct"], 2)
+        return {"verdicts": out, "reviewed": len(reviews), "resolved": resolved}
 
     async def review_factor_counts(self, phase: str = "post", days: int = 30) -> dict:
         """
