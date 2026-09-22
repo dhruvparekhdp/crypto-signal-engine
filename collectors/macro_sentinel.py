@@ -9,13 +9,11 @@ Uses ultra-fast Groq Llama 3.3 (via async HTTP) to:
 """
 from __future__ import annotations
 
-import json
-import time
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
-import httpx
 import structlog
 
+from collectors.llm_client import ask_json, chain_for
 from config.settings import settings
 
 if TYPE_CHECKING:
@@ -23,9 +21,6 @@ if TYPE_CHECKING:
     from analysis.crypto_state import CryptoState
 
 log = structlog.get_logger()
-
-GROQ_ENDPOINT = "https://api.groq.com/openai/v1/chat/completions"
-FALLBACK_MODEL = "qwen/qwen3.8-27b"
 
 # A closed vocabulary, because free text cannot be counted. "The stop was a
 # little tight given how the market was moving" and "stop inside noise" mean
@@ -85,7 +80,15 @@ def market_context(states, current: str, limit: int = 8) -> str:
 
 
 class GroqSentinel:
-    """Async client for Groq-powered sanity review and macro regime assessment."""
+    """
+    The model's seat at the table, before a trade and after it.
+
+    Still named for Groq because Groq is still what answers the pre-trade
+    call, and renaming a class that six modules import earns nothing. What
+    changed underneath is that the vendor is no longer written into the
+    method: both calls go through the role router, so which provider serves
+    them is configuration.
+    """
 
     def __init__(self, timeout: float = 4.0) -> None:
         self.timeout = timeout
@@ -93,7 +96,20 @@ class GroqSentinel:
 
     @property
     def is_available(self) -> bool:
-        return bool(settings.groq_api_key and settings.groq_api_key.get_secret_value())
+        """
+        Whether any provider is configured for the pre-trade role.
+
+        This used to ask specifically whether Groq had a key, which was the
+        same question while Groq was the only account and is the wrong one
+        now — it would report the reviewer as unavailable with three other
+        providers sitting configured and idle.
+        """
+        return bool(chain_for("pre_trade"))
+
+    @property
+    def postmortem_available(self) -> bool:
+        """The post-trade chain is configured separately and may differ."""
+        return bool(chain_for("post_trade"))
 
     async def review_signal_candidate(
         self, sig: CryptoSignal, state: CryptoState, model: str | None = None,
@@ -114,9 +130,6 @@ class GroqSentinel:
         """
         if not self.is_available or not getattr(settings, "groq_signal_review_enabled", True):
             return 0.0, "", ""
-
-        api_key = settings.groq_api_key.get_secret_value()  # type: ignore[union-attr]
-        active_model = model or getattr(settings, "groq_model", "qwen/qwen3.8-27b")
 
         # Context payload
         funding_str = (f"{state.funding_rate_per_8h * 100:+.3f}%"
@@ -161,50 +174,28 @@ class GroqSentinel:
             '"summary": "one sentence as you would say it, under 120 chars"}'
         )
 
-        headers = {
-            "Authorization": f"Bearer {api_key}",
-            "Content-Type": "application/json",
-        }
-        payload: dict[str, Any] = {
-            "model": active_model,
-            "messages": [
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_content},
-            ],
-            "response_format": {"type": "json_object"},
-            "temperature": 0.2,
-            "max_tokens": 320,
-        }
-
-        try:
-            async with httpx.AsyncClient(timeout=self.timeout) as client:
-                resp = await client.post(GROQ_ENDPOINT, json=payload, headers=headers)
-                if resp.status_code in (400, 404) and payload["model"] != FALLBACK_MODEL:
-                    payload["model"] = FALLBACK_MODEL
-                    resp = await client.post(GROQ_ENDPOINT, json=payload, headers=headers)
-
-                if resp.status_code != 200:
-                    log.warning("groq_review_failed", status=resp.status_code)
-                    return 0.0, "", ""
-
-                res_json = resp.json()
-                content_str = res_json["choices"][0]["message"]["content"]
-                parsed = json.loads(content_str)
-
-                delta = float(parsed.get("confidence_delta", 0.0))
-                # Strictly clamp influence
-                clamped_delta = max(-0.04, min(0.03, delta))
-                summary = str(parsed.get("summary", "")).strip()
-                verdict = str(parsed.get("verdict", "")).strip().upper()
-                self.last_factors = _clean_factors(parsed.get("factors"), PRE_FACTORS)
-
-                log.info("groq_signal_reviewed", symbol=sig.symbol, verdict=verdict,
-                         delta=clamped_delta, factors=self.last_factors, summary=summary)
-                return clamped_delta, summary, verdict
-
-        except Exception as exc:
-            log.debug("groq_review_exception", symbol=sig.symbol, error=str(exc))
+        # This one IS on the clock. The signal it is reviewing is priced off a
+        # market that keeps moving, so a thorough answer arriving ten seconds
+        # late is worth less than a quick one now — hence the short timeout
+        # and the fast end of the chain.
+        reply = await ask_json("pre_trade", system_prompt, user_content,
+                               max_tokens=320, temperature=0.2, timeout=self.timeout)
+        if not reply:
             return 0.0, "", ""
+
+        parsed = reply.data
+        # Clamped hard. The model is a stakeholder in the decision, not the
+        # decider: it can nudge a confidence score, never overturn the maths
+        # that produced it.
+        clamped_delta = max(-0.04, min(0.03, float(parsed.get("confidence_delta", 0.0) or 0.0)))
+        summary = str(parsed.get("summary", "")).strip()
+        verdict = str(parsed.get("verdict", "")).strip().upper()
+        self.last_factors = _clean_factors(parsed.get("factors"), PRE_FACTORS)
+
+        log.info("signal_reviewed", symbol=sig.symbol, verdict=verdict,
+                 delta=clamped_delta, factors=self.last_factors, summary=summary,
+                 served_by=reply.served_by)
+        return clamped_delta, summary, verdict
 
     async def review_closed_trade(self, trade, pre_review: str = "",
                                   model: str | None = None) -> dict:
@@ -220,12 +211,6 @@ class GroqSentinel:
         Deliberately uses a slower, larger model than the pre-trade pass. No
         signal is waiting on this, so there is no reason to buy speed.
         """
-        if not self.is_available:
-            return {}
-
-        api_key = settings.groq_api_key.get_secret_value()  # type: ignore[union-attr]
-        active_model = model or settings.groq_postmortem_model
-
         move_pct = ((trade.exit_price - trade.entry_price) / trade.entry_price * 100.0
                     if trade.entry_price else 0.0)
         if trade.side == "short":
@@ -264,45 +249,14 @@ class GroqSentinel:
             '"lesson": "one or two sentences as you would say them, under 200 chars"}'
         )
 
-        payload: dict[str, Any] = {
-            "model": active_model,
-            "messages": [
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_content},
-            ],
-            "response_format": {"type": "json_object"},
-            "temperature": 0.3,
-            "max_tokens": 700,
-        }
-        if settings.groq_reasoning_effort:
-            payload["reasoning_effort"] = settings.groq_reasoning_effort
-        headers = {"Authorization": f"Bearer {api_key}",
-                   "Content-Type": "application/json"}
-
-        started = time.monotonic()
-        try:
-            # Generous timeout: nothing is blocked on this, and a post-mortem
-            # that gives up early is worth less than one that waits.
-            async with httpx.AsyncClient(timeout=20.0) as client:
-                resp = await client.post(GROQ_ENDPOINT, json=payload, headers=headers)
-                # A 400 is more often the extra parameter than the model, so
-                # drop that first; downgrading the model on a parameter fault
-                # would quietly cost judgement for no reason.
-                if resp.status_code == 400 and "reasoning_effort" in payload:
-                    payload.pop("reasoning_effort")
-                    resp = await client.post(GROQ_ENDPOINT, json=payload, headers=headers)
-                if resp.status_code in (400, 404) and active_model != FALLBACK_MODEL:
-                    payload["model"] = FALLBACK_MODEL
-                    active_model = FALLBACK_MODEL
-                    resp = await client.post(GROQ_ENDPOINT, json=payload, headers=headers)
-                if resp.status_code != 200:
-                    log.warning("groq_postmortem_failed", status=resp.status_code,
-                                symbol=trade.symbol)
-                    return {}
-                parsed = json.loads(resp.json()["choices"][0]["message"]["content"])
-        except Exception as exc:
-            log.debug("groq_postmortem_exception", symbol=trade.symbol, error=str(exc))
+        # Generous token ceiling and no speed pressure: the trade is booked
+        # and nothing is waiting on this. What it produces is a dataset row,
+        # and a rushed row is worse than a slow one.
+        reply = await ask_json("post_trade", system_prompt, user_content,
+                               max_tokens=700, temperature=0.3, timeout=30.0)
+        if not reply:
             return {}
+        parsed = reply.data
 
         out = {
             "verdict": str(parsed.get("verdict", "")).strip().upper(),
@@ -310,9 +264,10 @@ class GroqSentinel:
             "summary": (str(parsed.get("lesson", "")).strip()
                         + (" | why: " + str(parsed.get("reasoning", "")).strip()
                            if parsed.get("reasoning") else ""))[:400],
-            "model": active_model,
-            "latency_ms": int((time.monotonic() - started) * 1000),
+            "model": reply.served_by,
+            "latency_ms": reply.latency_ms,
         }
-        log.info("groq_trade_reviewed", symbol=trade.symbol, outcome=trade.exit_reason,
-                 verdict=out["verdict"], factors=out["factors"], lesson=out["summary"])
+        log.info("trade_reviewed", symbol=trade.symbol, outcome=trade.exit_reason,
+                 verdict=out["verdict"], factors=out["factors"], lesson=out["summary"],
+                 served_by=reply.served_by)
         return out

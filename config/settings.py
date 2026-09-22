@@ -65,6 +65,41 @@ class Settings(BaseSettings):
     # parameter as an unsupported model and silently downgrading.
     groq_reasoning_effort: str = "high"
 
+    # ── Model providers ──────────────────────────────────────────────────
+    #
+    # Four accounts, three jobs, and the jobs want different things.
+    #
+    # A pre-trade check sits in the signal path: if it has not answered in a
+    # couple of seconds the price it was asked about is gone, so it wants the
+    # fastest model that follows instructions. Groq at ~1000 tok/s is that,
+    # and OpenRouter behind it turns a free-tier rate limit — which arrives at
+    # the worst moment, by definition — into a slower answer rather than a
+    # silently missing one.
+    #
+    # A post-mortem on a closed trade has no deadline whatsoever. The trade is
+    # booked; nothing waits on it. What it produces is a labelled dataset that
+    # only becomes worth having if the labels are any good, so it gets real
+    # reasoning. At roughly 600 reviews a month this is a couple of dollars.
+    #
+    # The weekly research pass reads aggregated statistics — a few kilobytes,
+    # never raw candles — and proposes what to test next. Four calls a month,
+    # so it gets the strongest model available and the cost is a rounding
+    # error.
+    #
+    # Format: "provider:model, provider:model" in preference order. Unknown
+    # providers and entries whose key is unset are skipped, so a chain can
+    # name a provider you have not signed up for yet without breaking.
+    openrouter_api_key: SecretStr | None = None
+    gemini_api_key: SecretStr | None = None
+    anthropic_api_key: SecretStr | None = None
+
+    llm_chain_pre_trade: str = (
+        "groq:openai/gpt-oss-20b, openrouter:qwen/qwen3-32b")
+    llm_chain_post_trade: str = (
+        "anthropic:claude-sonnet-5, gemini:gemini-2.5-flash, groq:openai/gpt-oss-120b")
+    llm_chain_research: str = (
+        "anthropic:claude-opus-5, gemini:gemini-2.5-pro")
+
     # Market Data & External APIs
     twelvedata_api_key: str | None = None
     twelvedata_symbols: str = "XAU/USD,XAG/USD,WTI/USD"

@@ -257,7 +257,7 @@ class AppRunner:
                     # recorded, so a slow or failing reviewer must not hold up
                     # the rest of the tick or the positions still to resolve.
                     if (settings.groq_postmortem_enabled
-                            and self.groq_sentinel.is_available):
+                            and self.groq_sentinel.postmortem_available):
                         asyncio.create_task(self._review_closed_trade(trade, row))
                     log.info("paper_trade_closed", symbol=pos.symbol,
                              reason=trade.reason.value, net=round(trade.net_pnl, 2),

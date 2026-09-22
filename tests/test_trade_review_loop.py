@@ -108,6 +108,44 @@ async def test_a_closed_trade_produces_a_stored_verdict():
     assert out["factors"] == "stopped_by_noise"      # invented label dropped
     assert "ordinary range" in out["summary"]
     assert out["latency_ms"] >= 0
+    # Provenance, not diagnostics. These rows accumulate into a dataset, and
+    # one whose rows were written by three different models with no way to
+    # tell which is a dataset you cannot later draw a conclusion from.
+    assert out["model"].startswith("groq/")
+
+
+@pytest.mark.asyncio
+async def test_the_post_mortem_is_not_pinned_to_one_vendor():
+    """
+    The post-trade chain leads with real reasoning and falls back to the fast
+    model, because nothing is waiting on a post-mortem and the quality of the
+    label is the entire point of writing it down.
+    """
+    sentinel = GroqSentinel()
+    with patch("collectors.llm_client.chain_for",
+               return_value=[("anthropic", "claude-sonnet-5")]), \
+         patch("collectors.llm_client._call_anthropic", new_callable=AsyncMock) as call:
+        call.return_value = ('{"verdict": "GOOD_TRADE", "factors": ["worked_as_designed"],'
+                             ' "lesson": "Plan held."}')
+        out = await sentinel.review_closed_trade(_Trade())
+
+    assert out["verdict"] == "GOOD_TRADE"
+    assert out["model"] == "anthropic/claude-sonnet-5"
+
+
+@pytest.mark.asyncio
+async def test_a_reviewer_outage_does_not_reach_the_trade():
+    """
+    The trade is closed and booked before any of this runs. Every provider
+    being down must cost the review and nothing else.
+    """
+    sentinel = GroqSentinel()
+    with patch("collectors.llm_client.chain_for",
+               return_value=[("groq", "a"), ("openrouter", "b")]), \
+         patch("collectors.llm_client._call_openai_shaped",
+               new_callable=AsyncMock) as call:
+        call.side_effect = RuntimeError("everything is on fire")
+        assert await sentinel.review_closed_trade(_Trade()) == {}
 
 
 @pytest.mark.asyncio
