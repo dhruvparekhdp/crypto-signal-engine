@@ -3098,7 +3098,34 @@ input:checked+.slider:before{transform:translateX(20px)}
 @media(max-width:640px){
   .form-grid{grid-template-columns:1fr !important}
   .toggle-grid{grid-template-columns:1fr !important}
-  .container{padding:12px}
+  /* Keep the bottom clearance the desktop rule had; `padding:12px` on its
+     own dropped it, so the save button sat against the edge of the screen. */
+  .container{margin:14px auto;padding:0 12px 48px}
+
+  /* The bar was one unwrapping flex row: two links, a title and the lock
+     button held right by margin-left:auto. At 360px the button went off the
+     side of the screen, which is a bad place for the only way to log out.
+     Wrap, and let the title take its own line. */
+  .topbar{flex-wrap:wrap;padding:10px 12px;gap:8px}
+  .topbar h1{order:-1;flex:1 0 100%;margin-left:0;font-size:15px}
+  .btn-lock{margin-left:auto}
+
+  /* Safari zooms the whole page in when a focused field is under 16px, and
+     nothing zooms it back — every tap on a number left the page enlarged and
+     the user pinching. 16px is the threshold, not a preference. */
+  .form-group input,.form-group select{font-size:16px;padding:11px 12px}
+
+  /* Label and value collided when both were long, because space-between
+     gives no minimum to either. Stack instead. */
+  .meta-row{flex-direction:column;gap:1px;margin-top:9px}
+  .meta-value{font-weight:600}
+
+  /* A toggle row is a tap target; 12px of padding and a 44px switch is not
+     enough of one at arm's length on a moving train. */
+  .toggle-item{padding:14px}
+  .theme-row{gap:7px}
+  .theme-sw{padding:8px 12px}
+  .toast{left:12px;right:12px;bottom:12px;text-align:center}
 }
 </style>
 </head>

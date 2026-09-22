@@ -132,6 +132,39 @@ class TestOtherPagesAreAlsoResponsive(unittest.TestCase):
                 self.assertIn("viewport", page)
 
 
+class TestSettingsOnAPhone(unittest.TestCase):
+    """
+    /settings had a breakpoint that only collapsed two grids to one column.
+    Everything else about it was still built for a mouse on a wide screen.
+    """
+
+    def setUp(self):
+        page = health._SETTINGS_HTML
+        self.phone = page[page.index("@media(max-width:640px)"):]
+
+    def test_fields_are_sixteen_px_so_ios_does_not_zoom(self):
+        """
+        Under 16px Safari zooms the page in on focus and never zooms back.
+        Every tap on a number left the operator pinching their way out.
+        """
+        self.assertIn(".form-group input,.form-group select{font-size:16px", self.phone)
+
+    def test_the_topbar_wraps_instead_of_pushing_logout_off_screen(self):
+        """
+        Two links, a title and a right-aligned lock button in one unwrapping
+        row. At 360px the button — the only way to log out — left the screen.
+        """
+        self.assertIn(".topbar{flex-wrap:wrap", self.phone)
+
+    def test_the_container_keeps_its_bottom_clearance(self):
+        """`padding:12px` replaced `padding-bottom:60px`, not just the sides."""
+        self.assertNotIn(".container{padding:12px}", self.phone)
+        self.assertIn("48px", self.phone)
+
+    def test_meta_rows_stack_rather_than_collide(self):
+        self.assertIn(".meta-row{flex-direction:column", self.phone)
+
+
 class TestOnlyOneViewIsActive(unittest.TestCase):
     def test_exactly_one_tab_starts_active(self):
         """Two hardcoded actives stacked the dashboard and the signals page."""
