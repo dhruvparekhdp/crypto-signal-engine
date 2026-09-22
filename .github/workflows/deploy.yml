@@ -78,9 +78,33 @@ jobs:
             if systemctl is-active --quiet crypto-engine; then
               echo "🔄 Restarting crypto-engine service..."
               sudo systemctl restart crypto-engine
-              sleep 2
-              echo "🔍 Service status check:"
-              sudo systemctl status crypto-engine --no-pager -n 5
+
+              # Wait for the app to actually answer, do not just look busy.
+              # `systemctl status` two seconds after a restart says "active"
+              # for a process that is seconds away from crashing on an import
+              # error, so every deploy reported success regardless — including
+              # the ones that took the dashboard down. Poll /health instead,
+              # which only answers once the app is up and serving.
+              echo "🩺 Waiting for /health to answer..."
+              ok=""
+              for attempt in 1 2 3 4 5 6 7 8 9 10; do
+                code=$(curl -sS -o /tmp/health -w '%{http_code}' --max-time 10 \
+                       http://127.0.0.1:8080/health || echo 000)
+                if [ "$code" = "200" ]; then
+                  echo "✅ healthy after ${attempt} attempt(s)"
+                  ok="yes"
+                  break
+                fi
+                echo "  attempt ${attempt}: HTTP ${code}"
+                sleep 3
+              done
+
+              if [ -z "$ok" ]; then
+                echo "::error::/health did not return 200 within 30s of restart."
+                sudo systemctl status crypto-engine --no-pager -n 30 || true
+                journalctl -u crypto-engine -n 50 --no-pager || true
+                exit 1
+              fi
             else
               echo "ℹ️ [Notice] crypto-engine service not yet active. Run: bash deploy/setup_ec2.sh"
             fi

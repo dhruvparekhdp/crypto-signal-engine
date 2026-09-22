@@ -72,9 +72,9 @@ why Price Outlook was ported before the signal engine).
 7. **Once it builds:** run it on a simulator, exercise the Face ID lock
    screen (the simulator has a Face ID menu to simulate success/failure),
    and confirm the Price Outlook tab loads real data from
-   `https://tennis-bet-izye.onrender.com/api/predict` (no auth needed for
+   `http://52.62.37.4:8080/api/predict` (no auth needed for
    that call — it's a public read endpoint). Try the Settings tab's token
-   field too, but note it needs `API_AUTH_TOKEN` set on the Render
+   field too, but note it needs `API_AUTH_TOKEN` set on the EC2
    deployment first, which may not have happened yet — check with the owner
    if it 401s or 503s.
 

@@ -17,7 +17,7 @@ file before touching anything. Then read `PORT_NOTES.md` (repo root) and
 
 `dhruvparekhdp/Tennis-bet` on GitHub. Started as a tennis/football betting
 monitor, pivoted entirely to a crypto signal-and-forecast system. Python
-(aiohttp) backend deployed on Render at `https://tennis-bet-izye.onrender.com`,
+(aiohttp) backend deployed on an AWS EC2 box at `http://52.62.37.4:8080`,
 with a browser dashboard served from the same process. The owner (Dhruv)
 wants a native iOS companion app, which is a separate existing Xcode project
 at `~/personal/HelloWorld/dhruv` (bundle ID `dp.dhruv`, its own git repo,
@@ -88,7 +88,7 @@ multi-user auth system):
   `/api/auth/verify` (`API_AUTH_RATE_LIMIT_REQUESTS` /
   `API_AUTH_RATE_LIMIT_WINDOW_SECONDS`, default 10/300s) — because that
   endpoint's whole job is accepting attempts at the shared secret. Reads
-  client IP from `X-Forwarded-For` first (Render terminates TLS at a proxy;
+  client IP from `X-Forwarded-For` first (a reverse proxy would terminate TLS in front of this;
   `request.remote` alone would bucket every client together).
 - **Security headers** on every response (nosniff, frame-deny, no-referrer,
   `Cache-Control: no-store` on JSON responses) via middleware, not
@@ -103,7 +103,7 @@ multi-user auth system):
   token automatically and prompts once on a 401.
 
 **Operator action required, not yet done as far as this session knows:**
-set `API_AUTH_TOKEN` on the Render deployment. Pick a long random string.
+set `API_AUTH_TOKEN` on the EC2 box. Pick a long random string.
 Without it, the three protected endpoints stay refused (503) — which is
 safe, but the watchlist-edit UI and the iOS Settings token flow won't work
 until it's set.
@@ -119,7 +119,7 @@ target project's own layout so it drops straight into
 ios-port/
   dhruv/
     App/
-      AppConfig.swift          — base URL (tennis-bet-izye.onrender.com), Keychain key name
+      AppConfig.swift          — base URL (52.62.37.4:8080), Keychain key name
       RootView.swift           — AppLockView (Face ID gate + re-lock on backgrounding)
                                   + MainTabView (5 tabs)
     Models/
@@ -158,7 +158,7 @@ module. None of it has been through a Swift compiler.
 **The iOS app is a client of the existing Python backend, not a
 reimplementation of the forecast/signal logic in Swift talking to Binance
 directly.** `LiveMarketDataClient` calls `GET /api/predict` and
-`POST /api/auth/verify` on `tennis-bet-izye.onrender.com`.
+`POST /api/auth/verify` on `52.62.37.4:8080`.
 
 This departs from `PORT_NOTES.md`'s original Phase 0 mapping table, which
 sketched a fuller on-device port (`collectors/binance_klines.py` →
@@ -173,7 +173,7 @@ Swift creates two implementations that drift the moment either side changes.
 **This has not been explicitly confirmed by the owner as the permanent
 direction** — it was flagged as a reversible choice in `INTEGRATION.md`. If
 the owner wants the fuller on-device port after all (offline capability,
-no dependence on the Render deployment staying up), that's a real fork:
+no dependence on the EC2 box staying up), that's a real fork:
 say so before building further on the current client-of-backend design.
 
 ## 6. What is verified vs. not — be precise about this
@@ -236,11 +236,11 @@ can make:
    Bundle target** — File → New → Target → Unit Testing Bundle, name it
    `dhruvTests`, host application `dhruv`. Then add the two files under
    `dhruvTests/` to that target.
-5. **Set `API_AUTH_TOKEN` on Render** if not already done (§3) — needed for
+5. **Set `API_AUTH_TOKEN` on the EC2 box** if not already done (§3) — needed for
    the Settings tab's token-verify flow to succeed, though Price Outlook
    itself works without it.
-6. **Confirm `AppConfig.baseURL`** (`https://tennis-bet-izye.onrender.com`)
-   is still the correct, current Render URL.
+6. **Confirm `AppConfig.baseURL`** (`http://52.62.37.4:8080`)
+   is still the correct, current server URL.
 
 ## 8. Standing conventions from the Tennis-bet side of this project, worth carrying over
 
@@ -279,7 +279,7 @@ are worth knowing if this session also touches the Python backend:
    expected to take real iteration — the Swift was reviewed, not compiled.
 5. Once it builds, run on a simulator or device, exercise Face ID (or the
    simulator's Face ID menu simulation), confirm Price Outlook renders
-   against the live Render backend.
+   against the live backend.
 6. Set up the test target (§7.4) and run `xcodebuild test` if time allows.
 7. Report back (or continue independently) — either way, update this file
    or leave a note of what was fixed, so the record stays accurate for

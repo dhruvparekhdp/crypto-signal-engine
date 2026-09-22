@@ -77,8 +77,8 @@ add the matching key there instead of hand-editing `project.pbxproj`:
 
 ## 4. Point it at your server
 
-`dhruv/App/AppConfig.swift` hardcodes `https://tennis-bet-izye.onrender.com`
-as the backend — that's the Render URL referenced throughout this project's
+`dhruv/App/AppConfig.swift` hardcodes `http://52.62.37.4:8080`
+as the backend — that's the server URL referenced throughout this project's
 history. Confirm it's still correct; change the one line if not.
 
 ## 5. (Optional, recommended by the plan's own Phase 5) Set up the test target
@@ -97,7 +97,7 @@ under the new target's synchronized group if Xcode created one).
 
 ## 6. Set the API token (needed for anything beyond reading)
 
-On your Render deployment, set the `API_AUTH_TOKEN` environment variable if
+On your EC2 deployment, set the `API_AUTH_TOKEN` environment variable if
 you haven't already (see the backend commit that added `scheduler/security.py`
 for what it protects: settings toggles and watchlist edits — Price Outlook
 itself needs no token). Enter that same value once in the app's Settings tab;

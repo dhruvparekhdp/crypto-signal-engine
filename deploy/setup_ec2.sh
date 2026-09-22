@@ -18,6 +18,17 @@ echo "-> 🔐 Configuring passwordless systemctl restart for ubuntu..."
 echo "ubuntu ALL=(ALL) NOPASSWD: /bin/systemctl restart ${SERVICE_NAME}, /usr/bin/systemctl restart ${SERVICE_NAME}, /bin/systemctl status ${SERVICE_NAME}, /usr/bin/systemctl status ${SERVICE_NAME}, /bin/systemctl stop ${SERVICE_NAME}, /usr/bin/systemctl stop ${SERVICE_NAME}, /bin/systemctl start ${SERVICE_NAME}, /usr/bin/systemctl start ${SERVICE_NAME}" | sudo tee "/etc/sudoers.d/${SERVICE_NAME}" > /dev/null
 sudo chmod 0440 "/etc/sudoers.d/${SERVICE_NAME}"
 
+# 2b. Cap the journal.
+# This service logs a structured line per collector tick, 24/7. On the default
+# journald config that grows until it has eaten 10% of the disk, and the first
+# symptom is writes failing everywhere else on the box rather than anything
+# that points at the logs. 500M of history is several weeks at this rate.
+echo "-> 🪵 Capping journald disk use at 500M..."
+sudo mkdir -p /etc/systemd/journald.conf.d
+printf '[Journal]\nSystemMaxUse=500M\nSystemMaxFileSize=50M\n' \
+  | sudo tee /etc/systemd/journald.conf.d/99-crypto-engine.conf > /dev/null
+sudo systemctl restart systemd-journald
+
 # 3. Reload systemd daemon and enable service
 echo "-> 🔄 Reloading systemd and enabling service on boot..."
 sudo systemctl daemon-reload

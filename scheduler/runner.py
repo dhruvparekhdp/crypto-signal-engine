@@ -13,17 +13,15 @@ Jobs:
   - crypto_news / sentiment     → CryptoPanic headlines, Fear & Greed
   - paper_trading_tick (30s)    → resolve open positions, then consider new ones
   - resolve_signal_outcomes     → score fired signals against what price did next
-  - crypto_snapshot / db_cleanup / heartbeat / self_ping
+  - crypto_snapshot / db_cleanup / heartbeat
 
 Candles are never persisted — they live in memory, capped per symbol, and are
 refetched on boot. Only fired signals, snapshots and paper trades reach the DB.
 """
 import asyncio
-import os
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 
-import httpx
 import structlog
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from telegram.constants import ParseMode
@@ -503,46 +501,6 @@ class AppRunner:
             coingecko_failures=self.coingecko._consecutive_failures,
         )
 
-    def _self_ping_url(self) -> tuple[str, bool]:
-        """
-        Where to ping, and whether it actually counts as traffic.
-
-        This has to leave the container and come back through Render's router.
-        A request to http://localhost never reaches the load balancer, so it
-        does not reset the idle timer — the job logged self_ping_ok every five
-        minutes for weeks while the service went right on spinning down.
-
-        RENDER_EXTERNAL_URL is injected by Render automatically. The loopback
-        fall-back is kept only as a liveness check, and says so.
-        """
-        external = (os.environ.get("RENDER_EXTERNAL_URL")
-                    or settings.self_ping_url
-                    or "").strip().rstrip("/")
-        if not external:
-            host = os.environ.get("RENDER_EXTERNAL_HOSTNAME", "").strip()
-            if host:
-                external = f"https://{host}"
-        if external:
-            return f"{external}/health", True
-        port = int(os.environ.get("PORT", 8080))
-        return f"http://localhost:{port}/health", False
-
-    async def _self_ping_job(self) -> None:
-        url, is_external = self._self_ping_url()
-        try:
-            async with httpx.AsyncClient(timeout=20.0, follow_redirects=True) as client:
-                resp = await client.get(url)
-            if is_external:
-                log.debug("self_ping_ok", status=resp.status_code, url=url)
-            else:
-                # Worth a warning rather than a debug line: this is the state
-                # in which the service will sleep despite the job "working".
-                log.warning("self_ping_loopback_only",
-                            hint="set RENDER_EXTERNAL_URL or SELF_PING_URL; "
-                                 "a localhost ping does not keep the service awake")
-        except Exception as exc:
-            log.warning("self_ping_failed", url=url, error=str(exc))
-
     async def _crypto_analysis_job(self) -> None:
         """Run crypto signal detection across all symbols in the watchlist."""
         try:
@@ -742,14 +700,6 @@ class AppRunner:
             minutes=10,
             id="heartbeat",
         )
-        self.scheduler.add_job(
-            self._self_ping_job,
-            "interval",
-            minutes=5,
-            id="self_ping",
-            max_instances=1,
-        )
-
         # Paper trading simulator — dynamic tick job managed via database PaperTradingConfig
         self.scheduler.add_job(
             self._paper_trading_job,
