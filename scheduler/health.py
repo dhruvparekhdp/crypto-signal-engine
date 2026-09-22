@@ -680,6 +680,10 @@ async def _api_paper(runner, request: web.Request) -> web.Response:
             "unrealised": round(net, 2),
             "roe_pct": round(net / r.margin * 100, 2) if r.margin else 0.0,
             "opened_at": _iso(r.opened_at),
+            # When this position times out. Exposed because a position that
+            # outlives its own expiry is the visible symptom of the resolver
+            # not reaching it, and that is invisible without this field.
+            "expires_at": _iso(r.expires_at),
             "usdt_inr": r.usdt_inr,
             "notional": round(r.coin_qty * mark * r.usdt_inr, 2),
         })
@@ -1616,6 +1620,14 @@ function _ptQty(q){
   const dp = q >= 1000 ? 2 : q >= 1 ? 4 : 6;
   return q.toFixed(dp);
 }
+// A position past its own expiry is still open only if nothing resolved it.
+// Saying "overdue" is the difference between noticing that and not.
+function _ptExpiry(iso){
+  if(!iso) return '<span class="pt-down">no expiry</span>';
+  const mins = (new Date(iso) - Date.now()) / 60000;
+  if(mins < 0) return `<span class="pt-down">overdue ${Math.round(-mins)}m</span>`;
+  return `<span class="pt-muted">in ${Math.round(mins)}m</span>`;
+}
 
 async function loadPaper(){
   let d;
@@ -1653,7 +1665,11 @@ function renderPaper(){
 
   const c = d.cycle, rate = d.usdt_inr || 102;
   const margin = (d.positions || []).reduce((a, p) => a + p.margin, 0);
-  const realised = c.wallet - c.starting_wallet;
+  // Margin locked in an open position has left the wallet but has not been
+  // lost. Measuring realised P&L as wallet-minus-start counts it as a loss:
+  // a 554 margin made a -252 cycle read as -806, three times worse than the
+  // truth, and the error grows with every position left open.
+  const realised = c.wallet + margin - c.starting_wallet;
   const span = Math.max(1, c.target_wallet - c.starting_wallet);
   const pct = Math.max(0, Math.min(100, (c.wallet - c.starting_wallet) / span * 100));
 
@@ -1688,6 +1704,7 @@ function renderPaperPositions(rows, rate){
     + '<th>Market</th><th class="r">Quantity</th><th class="r">Entry</th><th class="r">Mark</th>'
     + '<th>Stop &middot; Target</th><th class="r">Margin</th><th class="r">Liq.</th>'
     + '<th class="r">Unrealised</th><th class="r">ROE</th><th class="r">Opened</th>'
+    + '<th class="r">Expires</th>'
     + '</tr></thead><tbody>'
     + rows.map(p => {
         const long = p.side === 'long';
@@ -1721,6 +1738,7 @@ function renderPaperPositions(rows, rate){
           <td class="r pt-num ${_ptCls(p.unrealised)}">${_ptMoney(p.unrealised, rate, true)}</td>
           <td class="r pt-num ${_ptCls(p.roe_pct)}">${p.roe_pct > 0 ? '+' : ''}${p.roe_pct}%</td>
           <td class="r pt-num pt-muted">${fmtTime(p.opened_at)}</td>
+          <td class="r pt-num">${_ptExpiry(p.expires_at)}</td>
         </tr>`;
       }).join('')
     + '</tbody></table>';

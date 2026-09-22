@@ -453,3 +453,39 @@ class TestDashboardSurface(unittest.TestCase):
 
     def test_the_page_says_plainly_that_nothing_is_real(self):
         self.assertIn("never places a real order", self.html)
+
+
+def _dashboard_html():
+    from scheduler.health import _HTML
+    return _HTML
+
+class TestRealisedPnLExcludesLockedMargin(unittest.TestCase):
+    """
+    Margin in an open position has left the wallet but has not been lost.
+
+    Captured 22 Sep 21:15 from the live desk: wallet 2194.11, one position
+    holding 554.35 of margin, unrealised -11.22, start 3000. The page read
+    realised P&L as wallet-minus-start and showed -805.89. The cycle was
+    actually down 251.54 — the difference is the locked margin exactly, and
+    the error grows with every position left open.
+    """
+
+    WALLET, MARGIN, UNREALISED, START = 2194.11, 554.35, -11.22, 3000.0
+
+    def test_the_wrong_formula_reproduces_the_screenshot(self):
+        self.assertAlmostEqual(self.WALLET - self.START, -805.89, places=2)
+
+    def test_locked_margin_is_not_a_loss(self):
+        realised = self.WALLET + self.MARGIN - self.START
+        self.assertAlmostEqual(realised, -251.54, places=2)
+
+    def test_equity_reconciles_with_the_corrected_figure(self):
+        """Equity must equal start + realised + unrealised, or something lies."""
+        equity = self.WALLET + self.MARGIN + self.UNREALISED
+        realised = self.WALLET + self.MARGIN - self.START
+        self.assertAlmostEqual(equity, self.START + realised + self.UNREALISED, places=2)
+
+    def test_the_page_uses_the_corrected_formula(self):
+        html = _dashboard_html()
+        self.assertIn("c.wallet + margin - c.starting_wallet", html)
+        self.assertNotIn("const realised = c.wallet - c.starting_wallet", html)
