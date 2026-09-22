@@ -265,3 +265,42 @@ class TestNoDanglingElementReferences(unittest.TestCase):
         block = self.html[self.html.index("async function refresh(){"):
                           self.html.index("switchTab((location.hash")]
         self.assertNotIn(".textContent=", block.replace("if(el) el.textContent", ""))
+
+
+class TestEveryDestinationIsReachableOnAPhone(unittest.TestCase):
+    """
+    Six pages had no way in on a phone.
+
+    The bar holds five items and a More button reveals the rest. The default
+    `.side-more{display:none}` was declared *after* the phone rule that sets
+    `display:flex`, at the same specificity — so the cascade resolved to none
+    at every width, More never rendered, and Accuracy, Historic Data,
+    Watchlist, Signal Audit, Diagnostics and Settings were unreachable.
+
+    Nothing looked broken, which is why it survived: the bar rendered, five
+    tabs worked, and the missing sixth control left no trace.
+    """
+
+    def setUp(self):
+        from scheduler.health import _HTML
+        self.html = _HTML
+
+    def test_the_more_button_exists(self):
+        self.assertIn("side-more", self.html)
+
+    def test_the_phone_rule_is_declared_after_the_default(self):
+        """Same specificity means source order decides; the phone rule must win."""
+        default = self.html.index(".side-more{display:none}")
+        phone = self.html.index(".side-more{display:flex}")
+        self.assertLess(default, phone,
+                        "the default must come first or it overrides the phone rule")
+
+    def test_every_secondary_destination_is_in_the_sheet(self):
+        for tab in ("accuracy", "historic", "watchlist", "audit", "diag", "settings"):
+            with self.subTest(tab=tab):
+                self.assertIn(f'data-tab="{tab}"', self.html)
+
+    def test_a_hidden_tab_does_not_strand_the_refresh_label(self):
+        """A label reading 'Paused' outlived the pause and looked like a fault."""
+        self.assertNotIn("setText('refresh-label', 'Paused')", self.html)
+        self.assertIn("pageshow", self.html)

@@ -1344,7 +1344,13 @@ section h2{color:var(--accent-soft)}
 }
 /* Ten destinations do not fit a phone bar, and a sideways scroller with no
    affordance hides half of them. Five live on the bar; the rest open in a
-   sheet. */
+   sheet.
+
+   The default has to be declared BEFORE the phone rule. It used to sit after
+   it at the same specificity, so `display:none` won at every width, the More
+   button never rendered, and six pages had no way in on a phone at all. */
+.side-more{display:none}
+
 @media(max-width:640px){
   .sidebar{overflow-x:visible;justify-content:space-around}
   .side-secondary{display:none}
@@ -1354,7 +1360,6 @@ section h2{color:var(--accent-soft)}
   .more-scrim{position:fixed;inset:0;background:rgba(0,0,0,.62);z-index:40;display:none}
   .more-scrim.on{display:block}
 }
-.side-more{display:none}
 
 @media(max-width:380px){
   .cards,.cr-grid{grid-template-columns:1fr !important}
@@ -2515,7 +2520,7 @@ function _activeTab(){
 async function refresh(){
   // Nothing on a backgrounded tab is worth a request. The browser throttles
   // the timer anyway; this stops the work the timer would still queue up.
-  if(document.hidden){ setText('refresh-label', 'Paused'); return; }
+  if(document.hidden) return;   // no label change: a backgrounded tab has no reader
   try{
     const need = TAB_NEEDS[_activeTab()] || [];
     const status = await jget('/api/status',{});
@@ -2546,7 +2551,11 @@ async function refresh(){
 
 // Coming back to a tab that was paused should show current data at once,
 // not whatever was on screen when it was hidden.
+// iOS restores a backgrounded tab from cache without always firing
+// visibilitychange, which left the page showing whatever it had when it went
+// away. pageshow covers that path; both are cheap and idempotent.
 document.addEventListener('visibilitychange', () => { if(!document.hidden) refresh(); });
+window.addEventListener('pageshow', () => { if(!document.hidden) refresh(); });
 
 switchTab((location.hash||'#dashboard').slice(1));
 refresh();
