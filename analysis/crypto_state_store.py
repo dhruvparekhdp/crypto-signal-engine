@@ -12,6 +12,34 @@ from config.settings import settings
 log = structlog.get_logger()
 
 
+def price_is_plausible(symbol: str, current: float, incoming: float) -> bool:
+    """
+    Reject a tick that cannot be a price move.
+
+    A feed once resolved XAUUSDT to an unrelated token and reported gold at
+    $0.00004049 against a running $4,341. The value was written straight into
+    state, poisoned the forming candle, drove the 1-minute ATR from 1.2 to
+    ~311, and the level policy turned that into a published 43% target with a
+    36-minute horizon — every stage working correctly on one bad number.
+
+    The check is deliberately loose. It is not trying to catch a sharp move;
+    it is trying to catch a different asset, a scaling error or a decimal
+    slip, all of which miss by orders of magnitude rather than by percent.
+    """
+    if incoming <= 0:
+        return False
+    if current <= 0:
+        return True          # nothing to compare against yet
+    move = abs(incoming - current) / current
+    if move <= settings.max_price_jump_pct:
+        return True
+    log.error("price_tick_rejected", symbol=symbol, current=current,
+              incoming=incoming, move_pct=round(move * 100, 2),
+              hint="tick is too far from the running price to be a move; "
+                   "check the feed's symbol mapping for this pair")
+    return False
+
+
 def _compute_rsi(closes: list[float], period: int = 14) -> float:
     if len(closes) < period + 1:
         return 50.0
@@ -240,7 +268,11 @@ class CryptoStateStore:
             # The last bar is still forming; marking it closed would let the
             # next poll append beside it instead of updating it.
             state.candles_1m[-1].is_closed = False
-            if state.current_price <= 0:
+            # Normally a ticker collector owns the price and this only seeds a
+            # cold start. With one source there is no ticker, so the newest
+            # close is the price — and price and candles then cannot disagree,
+            # which is the disagreement that produced the 43% gold target.
+            if settings.binance_only_mode or state.current_price <= 0:
                 state.current_price = state.candles_1m[-1].close
             recalculate_indicators(state)
 
@@ -283,6 +315,9 @@ class CryptoStateStore:
                 base = sym.replace("usdt", "").replace("busd", "").upper()
                 state = CryptoState(symbol=sym, base_asset=base)
                 self._states[sym] = state
+
+            if not price_is_plausible(sym, state.current_price, price):
+                return
 
             state.current_price = price
             state.high_24h = high_24h
@@ -398,6 +433,9 @@ class CommodityStateStore:
                 name = "Gold" if "XAU" in symbol else ("Silver" if "XAG" in symbol else "Crude Oil")
                 state = CommodityState(symbol=symbol, name=name)
                 self._states[symbol] = state
+
+            if not price_is_plausible(symbol, state.current_price, price):
+                return
 
             state.current_price = price
             state.timestamp = timestamp

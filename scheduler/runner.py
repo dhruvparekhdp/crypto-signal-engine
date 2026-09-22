@@ -87,11 +87,14 @@ class AppRunner:
         self.fear_greed = None
         self.multi_horizon = MultiHorizonPredictor()
         self._ws_tasks: list[asyncio.Task] = []
+        # Binance-only leaves klines as the single source of candles, depth
+        # and price, so the three of them cannot disagree with each other.
+        binance_only = settings.binance_only_mode
         self.collector_enabled: dict[str, bool] = {
-            "coindcx": True,
-            "coingecko": True,
+            "coindcx": not binance_only,
+            "coingecko": not binance_only,
             "binance_ws": settings.binance_ws_enabled,
-            "twelvedata_ws": True,
+            "twelvedata_ws": not binance_only,
         }
 
 
@@ -486,9 +489,19 @@ class AppRunner:
 
                     # Groq AI Pre-Signal Sanity Review (advisory sanity check)
                     if self.groq_sentinel.is_available and scfg.groq_signal_review_enabled:
-                        delta, ai_summary = await self.groq_sentinel.review_signal_candidate(
-                            sig, state, model=scfg.groq_model
+                        delta, ai_summary, verdict = (
+                            await self.groq_sentinel.review_signal_candidate(
+                                sig, state, model=scfg.groq_model)
                         )
+                        # A clamped confidence nudge cannot say "impossible".
+                        # When the reviewer rejects outright, drop the signal:
+                        # it called a 43% gold target structurally unsound and
+                        # was overruled by arithmetic that could only move
+                        # confidence by 0.04.
+                        if verdict == "REJECT":
+                            log.info("crypto_signal_vetoed_by_ai", symbol=sig.symbol,
+                                     type=sig.signal_type, reason=ai_summary)
+                            continue
                         if ai_summary:
                             sig.ai_review = ai_summary
                             sig.confidence = max(0.50, min(0.95, round(sig.confidence + delta, 4)))
@@ -676,7 +689,7 @@ class AppRunner:
             next_run_time=datetime.now(UTC) + timedelta(minutes=2),
         )
 
-        if settings.sentiment_feeds_enabled:
+        if settings.sentiment_feeds_enabled and not settings.binance_only_mode:
             self.scheduler.add_job(
                 self._refresh_sentiment_job,
                 "interval",
@@ -719,14 +732,15 @@ class AppRunner:
             max_instances=1,
             next_run_time=datetime.now(UTC),
         )
-        self.scheduler.add_job(
-            self._crypto_news_job,
-            "interval",
-            seconds=settings.cryptopanic_poll_interval_seconds,
-            id="crypto_news",
-            max_instances=1,
-            next_run_time=datetime.now(UTC),
-        )
+        if not settings.binance_only_mode:
+            self.scheduler.add_job(
+                self._crypto_news_job,
+                "interval",
+                seconds=settings.cryptopanic_poll_interval_seconds,
+                id="crypto_news",
+                max_instances=1,
+                next_run_time=datetime.now(UTC),
+            )
         self.scheduler.add_job(
             self._crypto_snapshot_job,
             "interval",
@@ -770,16 +784,28 @@ class AppRunner:
         await HistoricalDataService.preload_states(self.crypto_store)
 
         crypto_count = await self.crypto_store.count()
+        if settings.binance_only_mode:
+            sources = (f"Data: <b>Binance only</b> — klines every "
+                       f"{settings.binance_klines_seconds}s carry candles, depth and price "
+                       f"for {crypto_count} symbols\n"
+                       "CoinDCX, CoinGecko, Twelve Data and news feeds: off")
+        else:
+            sources = (f"Crypto: CoinDCX + CoinGecko {crypto_count}-symbol watchlist "
+                       f"(poll every {settings.coindcx_poll_interval_seconds}s/"
+                       f"{settings.coingecko_poll_interval_seconds}s)\n"
+                       f"Commodities: Twelve Data "
+                       f"({'active' if settings.twelvedata_api_key else 'no key'})\n"
+                       f"News Sentiment: CryptoPanic "
+                       f"({'active' if settings.cryptopanic_auth_token else 'no token'})")
         await self.notifier.send_text(
             "🪙 Crypto Signal Engine started.\n"
-            f"Crypto: CoinDCX + CoinGecko {crypto_count}-symbol watchlist "
-            f"(poll every {settings.coindcx_poll_interval_seconds}s/{settings.coingecko_poll_interval_seconds}s)\n"
-            f"Commodities: Twelve Data Gold/Silver/Oil ({'active' if settings.twelvedata_api_key else 'no key'})\n"
-            f"News Sentiment: CryptoPanic ({'active' if settings.cryptopanic_auth_token else 'no token'})\n"
-            f"Paper Trading: Active in background\n"
-            f"AI Sentinel: {'Active' if settings.groq_api_key else 'Disabled (no key)'}"
+            f"{sources}\n"
+            "Paper Trading: Active in background\n"
+            f"AI Sentinel: {'Active' if settings.groq_api_key else 'Disabled (no key)'}",
+            parse_mode=ParseMode.HTML,
         )
-        log.info("scheduler_started", crypto_symbols_count=crypto_count)
+        log.info("scheduler_started", crypto_symbols_count=crypto_count,
+                 binance_only_mode=settings.binance_only_mode)
 
     def get_status(self) -> dict:
         return {

@@ -38,16 +38,22 @@ class GroqSentinel:
 
     async def review_signal_candidate(
         self, sig: CryptoSignal, state: CryptoState, model: str | None = None
-    ) -> tuple[float, str]:
+    ) -> tuple[float, str, str]:
         """
         Pre-signal second opinion.
 
         Returns:
-            (confidence_delta: float, review_summary: str)
+            (confidence_delta, review_summary, verdict)
             confidence_delta is strictly clamped to [-0.04, +0.03]
+
+        The verdict is returned rather than folded into the delta because a
+        clamped nudge cannot express "this trade is impossible". It said
+        exactly that about a gold signal with a 43% target — "mathematically
+        impossible and structurally unsound" — and the signal published
+        anyway, because 0.04 of confidence was all it was allowed to move.
         """
         if not self.is_available or not getattr(settings, "groq_signal_review_enabled", True):
-            return 0.0, ""
+            return 0.0, "", ""
 
         api_key = settings.groq_api_key.get_secret_value()  # type: ignore[union-attr]
         active_model = model or getattr(settings, "groq_model", "qwen/qwen3.8-27b")
@@ -113,7 +119,7 @@ class GroqSentinel:
 
                 if resp.status_code != 200:
                     log.warning("groq_review_failed", status=resp.status_code)
-                    return 0.0, ""
+                    return 0.0, "", ""
 
                 res_json = resp.json()
                 content_str = res_json["choices"][0]["message"]["content"]
@@ -123,11 +129,12 @@ class GroqSentinel:
                 # Strictly clamp influence
                 clamped_delta = max(-0.04, min(0.03, delta))
                 summary = str(parsed.get("summary", "")).strip()
+                verdict = str(parsed.get("verdict", "")).strip().upper()
 
-                log.info("groq_signal_reviewed", symbol=sig.symbol, verdict=parsed.get("verdict"),
+                log.info("groq_signal_reviewed", symbol=sig.symbol, verdict=verdict,
                          delta=clamped_delta, summary=summary)
-                return clamped_delta, summary
+                return clamped_delta, summary, verdict
 
         except Exception as exc:
             log.debug("groq_review_exception", symbol=sig.symbol, error=str(exc))
-            return 0.0, ""
+            return 0.0, "", ""

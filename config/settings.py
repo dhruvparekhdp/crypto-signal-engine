@@ -44,6 +44,26 @@ class Settings(BaseSettings):
     binance_klines_enabled: bool = True
     binance_klines_seconds: int = 60
 
+    # One source of truth, for measuring the engine rather than the plumbing.
+    # Binance klines carry candles, depth and — in this mode — the price too,
+    # so price and candles cannot disagree. A gold signal once published a 43%
+    # target because a ticker feed wrote $0.00004 over a $4,341 price and
+    # poisoned the candle the ATR was measured from; one source removes that
+    # whole class of failure. Turns off CoinDCX, CoinGecko, Twelve Data and
+    # the news feeds.
+    binance_only_mode: bool = False
+
+    # A tick further than this from the running price is a feed fault, not a
+    # move. Nothing legitimate gaps 60% between two polls of a liquid pair,
+    # and the cost of believing one bad print is a signal built on it.
+    max_price_jump_pct: float = 0.60
+
+    # Ceiling on a published target. The level policy derives distance from
+    # ATR and has a floor but no roof, so a corrupted ATR produced a 43.5%
+    # scalp target with a 36-minute horizon. Past this the setup is not
+    # improbable, it is evidence something upstream is broken: refuse it.
+    max_target_pct: float = 0.15
+
     # Strategy & Conviction defaults (Managed in DB via /settings)
     min_confidence: float = 0.65
     max_stake_pct: float = 0.03

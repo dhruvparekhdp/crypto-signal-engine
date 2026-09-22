@@ -50,8 +50,10 @@ COINDCX_CANDLES = "https://public.coindcx.com/market_data/candles"
 # internally returns nothing, which is why the board showed gold warming up
 # on two candles forever.
 VENUE_SYMBOL = {
+    # PAX Gold tracks one ounce of gold, so it is a fair stand-in for XAU.
+    # Silver is NOT gold: xagusdt used to map here too, which would have
+    # priced and measured silver off gold's bars.
     "xauusdt": "PAXGUSDT",
-    "xagusdt": "PAXGUSDT",
 }
 
 

@@ -75,9 +75,17 @@ class CoinGeckoCollector:
             )
             if resp.status_code == 200:
                 coins = resp.json().get("coins", [])
-                matches = [c for c in coins if c.get("symbol", "").lower() == base]
+                # Ranked coins only. Sorting unranked ones to the back with
+                # 999_999 still let them win when nothing ranked matched,
+                # which is how XAUUSDT resolved to a dead token quoting gold
+                # at $0.00004049 against a real $4,341 — a price that then
+                # poisoned the candle its ATR was measured from. No match at
+                # all is a safe answer; a wrong one is not.
+                matches = [c for c in coins
+                           if c.get("symbol", "").lower() == base
+                           and c.get("market_cap_rank")]
                 if matches:
-                    matches.sort(key=lambda c: c.get("market_cap_rank") or 999_999)
+                    matches.sort(key=lambda c: c["market_cap_rank"])
                     coin_id = matches[0]["id"]
                     self._id_cache[base] = coin_id
                     log.info("coingecko_symbol_resolved", symbol=base, coin_id=coin_id)

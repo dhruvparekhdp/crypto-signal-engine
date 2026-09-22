@@ -38,7 +38,7 @@ async def test_groq_sentinel_disabled_without_key():
     with patch("collectors.macro_sentinel.settings.groq_api_key", None):
         assert not sentinel.is_available
         state = CryptoState(symbol="btcusdt", base_asset="BTC")
-        delta, review = await sentinel.review_signal_candidate(_make_signal(), state)
+        delta, review, verdict = await sentinel.review_signal_candidate(_make_signal(), state)
         assert delta == 0.0
         assert review == ""
 
@@ -67,9 +67,10 @@ async def test_groq_sentinel_clamping_and_review():
     with patch("collectors.macro_sentinel.settings.groq_api_key", SecretStr("mock-key")), \
          patch("httpx.AsyncClient.post", new_callable=AsyncMock) as mock_post:
         mock_post.return_value = mock_resp_positive
-        delta, review = await sentinel.review_signal_candidate(sig, state)
+        delta, review, verdict = await sentinel.review_signal_candidate(sig, state)
         assert delta == 0.03  # Clamped from 0.15 to +0.03
         assert "Clean breakout" in review
+        assert verdict == "APPROVE"
 
     # Test 2: Groq returns large negative delta -> clamped to -0.04
     mock_resp_negative = MagicMock()
@@ -87,9 +88,36 @@ async def test_groq_sentinel_clamping_and_review():
     with patch("collectors.macro_sentinel.settings.groq_api_key", SecretStr("mock-key")), \
          patch("httpx.AsyncClient.post", new_callable=AsyncMock) as mock_post:
         mock_post.return_value = mock_resp_negative
-        delta, review = await sentinel.review_signal_candidate(sig, state)
+        delta, review, verdict = await sentinel.review_signal_candidate(sig, state)
         assert delta == -0.04  # Clamped from -0.10 to -0.04
         assert "Crowded funding" in review
+        assert verdict == "CAUTION"
+
+
+@pytest.mark.asyncio
+async def test_a_reject_verdict_is_surfaced_so_the_engine_can_veto():
+    """
+    The gold signal that prompted this: the reviewer called a 43% target
+    "mathematically impossible" and the signal published anyway, because a
+    clamped confidence delta cannot express refusal. The verdict now comes
+    back so the caller can drop the signal outright.
+    """
+    sentinel = GroqSentinel()
+    state = CryptoState(symbol="xauusdt", base_asset="XAU")
+    resp = MagicMock()
+    resp.status_code = 200
+    resp.json.return_value = {"choices": [{"message": {"content": (
+        '{"verdict": "REJECT", "confidence_delta": -0.04, "summary": '
+        '"Target is 43% away, making the 3:1 R:R mathematically impossible."}'
+    )}}]}
+
+    with patch("collectors.macro_sentinel.settings.groq_api_key", SecretStr("mock-key")), \
+         patch("httpx.AsyncClient.post", new_callable=AsyncMock) as mock_post:
+        mock_post.return_value = resp
+        delta, review, verdict = await sentinel.review_signal_candidate(_make_signal(), state)
+
+    assert verdict == "REJECT"
+    assert "mathematically impossible" in review
 
 
 @pytest.mark.asyncio
@@ -104,7 +132,7 @@ async def test_groq_sentinel_handles_http_errors_gracefully():
     with patch("collectors.macro_sentinel.settings.groq_api_key", SecretStr("mock-key")), \
          patch("httpx.AsyncClient.post", new_callable=AsyncMock) as mock_post:
         mock_post.return_value = mock_resp_500
-        delta, review = await sentinel.review_signal_candidate(sig, state)
+        delta, review, verdict = await sentinel.review_signal_candidate(sig, state)
         assert delta == 0.0
         assert review == ""
 

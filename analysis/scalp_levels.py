@@ -30,7 +30,12 @@ import math
 from dataclasses import dataclass, replace
 from enum import StrEnum
 
+import structlog
+
 from analysis.instruments import spec_for, tick_for
+from config.settings import settings
+
+log = structlog.get_logger()
 
 
 class NoTrade(StrEnum):
@@ -44,6 +49,7 @@ class NoTrade(StrEnum):
     STOP_INSIDE_NOISE = "stop_noise"   # stop sits inside one bar's ordinary range
     TOO_SLOW = "too_slow"              # the move needs longer than we will hold
     FUNDING_WINDOW = "funding_window"  # settlement too close to open a short hold
+    TARGET_ABSURD = "target_absurd"    # distance implies the ATR feeding it is wrong
 
 
 REASON_TEXT = {
@@ -55,6 +61,8 @@ REASON_TEXT = {
     NoTrade.STOP_INSIDE_NOISE: "stop sits inside one bar's normal range — noise would take it out",
     NoTrade.TOO_SLOW: "this market is too quiet to travel that far in the time we would hold it",
     NoTrade.FUNDING_WINDOW: "funding settles too soon for a short hold",
+    NoTrade.TARGET_ABSURD: "target is implausibly far — the volatility reading behind it "
+                           "looks corrupt, so the setup is refused rather than published",
 }
 
 
@@ -460,6 +468,18 @@ def scalp_levels(
     stop_pct = max(vol_stop, cost_stop)
 
     target_pct = max(stop_pct * rr * atr_target_multiple, cfg.min_target_pct)
+
+    # There is a floor on the target and, until this, no roof. A poisoned
+    # price tick drove one symbol's 1-minute ATR from 1.2 to 311 and this line
+    # dutifully produced a 43.5% target on gold, which the rest of the
+    # pipeline had no reason to question. Past this distance the honest
+    # reading is not "rare setup" but "the input is wrong".
+    if target_pct > settings.max_target_pct:
+        log.error("scalp_target_absurd", symbol=symbol, entry=entry,
+                  atr_pct=round(atr_pct, 6), target_pct=round(target_pct, 6),
+                  cap=settings.max_target_pct,
+                  hint="ATR is implausible for this market — check the price feed")
+        return NoTrade.TARGET_ABSURD
 
     # How long the market should need to travel that far. A target the market
     # cannot reach inside the hold is not a target, it is an expiry.
