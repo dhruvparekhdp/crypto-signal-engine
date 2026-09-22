@@ -182,3 +182,101 @@ class TestRetention(unittest.TestCase):
         source = inspect.getsource(Repository.delete_old_crypto_data)
         self.assertIn("snap_cutoff", source)
         self.assertIn("log_cutoff", source)
+
+
+class TestTheRoutinePassIsBounded(unittest.TestCase):
+    """
+    The job runs every fifteen minutes. At 120 days of retention the table
+    holds around 600,000 rows, and loading every one of them four times an
+    hour to write a few hundred labels is most of a small database's day
+    spent on nothing.
+    """
+
+    def test_the_window_covers_the_longest_horizon_with_slack(self):
+        from analysis.snapshot_labeler import ROUTINE_WINDOW
+
+        self.assertGreater(ROUTINE_WINDOW, max(HORIZONS.values()))
+
+    def test_the_window_is_days_not_months(self):
+        """A row older than a day plus slack has already had its answer decided."""
+        from analysis.snapshot_labeler import ROUTINE_WINDOW
+
+        self.assertLessEqual(ROUTINE_WINDOW, timedelta(days=7))
+
+    def test_the_scheduled_job_does_not_ask_for_the_retention_window(self):
+        """
+        It did, briefly, which would have loaded 120 days of rows every
+        fifteen minutes the moment retention was raised.
+        """
+        from pathlib import Path
+
+        runner = (Path(__file__).resolve().parent.parent / "scheduler/runner.py").read_text()
+        self.assertIn("await backfill_labels(session)", runner)
+        self.assertNotIn("backfill_labels(session, lookback_days", runner)
+
+
+class TestTheFullPassAfterARestore(unittest.TestCase):
+    """
+    Rows restored from a backup are historical by definition — outside the
+    routine window the moment they land — so the scheduled job would never
+    touch them, however long the engine ran.
+    """
+
+    def _history(self, days=20, step_minutes=2):
+        start = T0 - timedelta(days=days)
+        count = int(days * 24 * 60 / step_minutes)
+        return [_Snap("btcusdt", 80000.0 + i,
+                      start + timedelta(minutes=i * step_minutes))
+                for i in range(count)]
+
+    def test_chunks_overlap_by_at_least_the_longest_horizon(self):
+        """
+        Without the overlap every chunk edge produces a day of spuriously
+        unresolved labels, because the row that would label them sits in the
+        next chunk.
+        """
+        import inspect
+
+        from analysis.snapshot_labeler import backfill_all
+
+        source = inspect.getsource(backfill_all)
+        self.assertIn("overlap = max(HORIZONS.values())", source)
+        self.assertIn("end + overlap", source)
+
+    def test_labelling_a_long_history_in_chunks_matches_one_pass(self):
+        """The chunking is an implementation detail; the labels must not be."""
+        rows = self._history()
+        one_pass = label_rows(rows, T0 + timedelta(days=2))
+
+        fresh = self._history()
+        by_time = sorted(fresh, key=lambda r: r.timestamp)
+        chunked = 0
+        overlap = max(HORIZONS.values())
+        start = by_time[0].timestamp
+        while start <= by_time[-1].timestamp:
+            end = start + timedelta(days=7)
+            window = [r for r in by_time if start <= r.timestamp < end + overlap]
+            chunked += label_rows(window, T0 + timedelta(days=2)).labelled
+            start = end
+
+        self.assertEqual(chunked, one_pass.labelled)
+
+    def test_it_commits_per_chunk_rather_than_once_at_the_end(self):
+        """
+        One transaction holding 600,000 dirty ORM objects is a memory problem
+        on the box and a lock problem on the database.
+        """
+        import inspect
+
+        from analysis.snapshot_labeler import backfill_all
+
+        source = inspect.getsource(backfill_all)
+        self.assertIn("while start < now", source)
+        self.assertIn("await session.commit()", source)
+
+    def test_a_script_exists_for_running_it(self):
+        from pathlib import Path
+
+        script = Path(__file__).resolve().parent.parent / "scripts/backfill_labels.py"
+        self.assertTrue(script.exists())
+        self.assertIn("backfill_all", script.read_text())

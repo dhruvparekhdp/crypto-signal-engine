@@ -123,23 +123,38 @@ def label_rows(rows: list[CryptoSnapshot], now: datetime) -> LabelRun:
     return LabelRun(scanned=len(rows), labelled=labelled, unresolved=unresolved)
 
 
-async def backfill_labels(session, lookback_days: int = 30) -> LabelRun:
-    """
-    Label every snapshot in the window that is old enough to have a label.
+# The routine pass only needs to look at rows that could still gain a label.
+# The longest horizon is a day, so anything older than a day plus slack has
+# already had its answer decided — the neighbouring row either exists or it
+# does not, and no amount of re-asking changes that.
+#
+# The slack matters more than it looks. Without it the job would need to run
+# at exactly the right moment to catch the 1d horizon; with two days of it,
+# a row gets roughly 190 chances.
+ROUTINE_WINDOW = timedelta(days=3)
 
-    Bounded by `lookback_days` rather than scanning the table: rows whose
-    forward snapshot never arrived — a restart, an outage — can never be
-    filled, and without a bound the job would re-attempt them for the life of
-    the database. Within the window the retry is cheap and occasionally
-    succeeds, because a gap can be filled later by a backfilled row.
+
+async def backfill_labels(session, window: timedelta | None = None) -> LabelRun:
+    """
+    The routine pass: label what has recently become labellable.
+
+    Deliberately NOT the whole retention window. This runs every fifteen
+    minutes, and at 120 days of retention the table holds around 600,000 rows
+    — loading every one of them as an ORM object four times an hour to write
+    a few hundred labels is most of a database's day spent on nothing. Three
+    days covers every horizon with room to spare, which is all a routine pass
+    can act on.
+
+    After a restore, use `backfill_all` instead: historical rows inserted in
+    bulk are outside this window by construction, and would never be labelled
+    by the routine job however long it ran.
     """
     now = datetime.now(UTC).replace(tzinfo=None)
-    cutoff = now - timedelta(days=lookback_days)
+    cutoff = now - (window or ROUTINE_WINDOW)
 
-    result = await session.execute(
+    rows = list((await session.execute(
         select(CryptoSnapshot).where(CryptoSnapshot.timestamp >= cutoff)
-    )
-    rows = list(result.scalars().all())
+    )).scalars().all())
 
     run = label_rows(rows, now)
     if run.labelled:
@@ -148,3 +163,46 @@ async def backfill_labels(session, lookback_days: int = 30) -> LabelRun:
     log.info("snapshot_labels_written", scanned=run.scanned, labelled=run.labelled,
              unresolved=run.unresolved, coverage=round(run.coverage, 4))
     return run
+
+
+async def backfill_all(session, days: int = 120, chunk_days: int = 7) -> LabelRun:
+    """
+    Label the whole history, a chunk at a time. For after a restore.
+
+    Chunked because the alternative is one transaction holding 600,000 dirty
+    ORM objects, which is a memory problem on the box and a lock problem on
+    the database. Chunks overlap by the longest horizon so a row near a
+    boundary can still see the row that labels it — without the overlap every
+    chunk edge would produce a day of spuriously unresolved labels.
+    """
+    now = datetime.now(UTC).replace(tzinfo=None)
+    overlap = max(HORIZONS.values())
+    total = LabelRun()
+
+    start = now - timedelta(days=days)
+    while start < now:
+        end = start + timedelta(days=chunk_days)
+        rows = list((await session.execute(
+            select(CryptoSnapshot).where(
+                CryptoSnapshot.timestamp >= start,
+                CryptoSnapshot.timestamp < end + overlap,
+            )
+        )).scalars().all())
+
+        if rows:
+            run = label_rows(rows, now)
+            if run.labelled:
+                await session.commit()
+            total = LabelRun(
+                scanned=total.scanned + run.scanned,
+                labelled=total.labelled + run.labelled,
+                unresolved=total.unresolved + run.unresolved,
+            )
+            log.info("snapshot_labels_chunk", start=start.date().isoformat(),
+                     scanned=run.scanned, labelled=run.labelled)
+        start = end
+
+    log.info("snapshot_labels_backfilled", scanned=total.scanned,
+             labelled=total.labelled, unresolved=total.unresolved,
+             coverage=round(total.coverage, 4))
+    return total

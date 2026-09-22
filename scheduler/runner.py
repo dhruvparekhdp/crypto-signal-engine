@@ -528,12 +528,18 @@ class AppRunner:
         10:00 snapshot is sitting in the 10:30 snapshot — it was simply never
         joined up. Without this the table is features with no labels, and
         nothing can be fitted on it.
+
+        Only looks at the last few days. At 120 days of retention the table
+        holds around 600,000 rows, and loading all of them four times an hour
+        to write a few hundred labels would be most of the database's day
+        spent on nothing. History restored in bulk needs scripts/backfill_labels.py,
+        which is a one-off by design.
         """
         from analysis.snapshot_labeler import backfill_labels
 
         try:
             async with AsyncSessionFactory() as session:
-                await backfill_labels(session, lookback_days=settings.snapshot_retention_days)
+                await backfill_labels(session)
         except Exception:
             log.exception("snapshot_labelling_failed")
 

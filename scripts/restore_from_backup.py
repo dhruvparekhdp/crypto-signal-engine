@@ -19,6 +19,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from dotenv import load_dotenv
 from sqlalchemy import func, select, text
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from storage.database import Base, _make_url, _migrate_columns
@@ -54,7 +55,8 @@ async def sync_sequence(session, table_name: str, pk_col: str = "id") -> None:
         await session.rollback()
 
 
-async def restore_database(backup_file: str, target_url: str) -> None:
+async def restore_database(backup_file: str, target_url: str,
+                           only: set[str] | None = None) -> None:
     print("\n" + "=" * 60)
     print("🚀 STARTING DATABASE RESTORE TO TARGET POSTGRESQL")
     print("=" * 60)
@@ -97,6 +99,8 @@ async def restore_database(backup_file: str, target_url: str) -> None:
     print(f"\n[3/3] Restoring records...")
     for model in ALL_MODELS:
         tbl = model.__tablename__
+        if only and tbl not in only:
+            continue
         rows = data.get(tbl, [])
         if not rows:
             continue
@@ -115,10 +119,29 @@ async def restore_database(backup_file: str, target_url: str) -> None:
                                 except Exception:
                                     pass
 
+                # Skip rows whose primary key is already present rather than
+                # failing the table.
+                #
+                # A restore is not a one-time event here. The first one was
+                # eaten within hours by a cleanup job that deleted anything
+                # older than three days, so the same file gets restored again
+                # — and the config tables (strategy_config, the watchlist,
+                # paper_trading_config) still hold their rows, which used to
+                # abort those tables with a duplicate-key error and leave the
+                # operator guessing which of the eleven had actually landed.
+                #
+                # DO NOTHING rather than DO UPDATE: a row that is already
+                # there is the live one, and the backup's copy is older by
+                # definition. Overwriting it would quietly roll back settings
+                # changed since the backup was taken.
+                statement = (pg_insert(model.__table__).on_conflict_do_nothing()
+                             if engine.dialect.name == "postgresql"
+                             else model.__table__.insert())
+
                 chunk_size = 500
                 for i in range(0, len(rows), chunk_size):
                     chunk = rows[i : i + chunk_size]
-                    await session.execute(model.__table__.insert(), chunk)
+                    await session.execute(statement, chunk)
                 await session.commit()
                 await sync_sequence(session, tbl)
                 print(f"  ✓ {tbl:<24} Restored {len(rows):<6} rows")
@@ -136,13 +159,17 @@ def main():
                         help="Path to backup file (.json or .json.gz)")
     parser.add_argument("--target", default=os.getenv("AIVEN_DATABASE_URL", os.getenv("DATABASE_URL")),
                         help="Target PostgreSQL database URL")
+    parser.add_argument("--only", default="",
+                        help="Comma-separated table names to restore, e.g. "
+                             "'crypto_snapshots,commodity_snapshots'. Default: all.")
     args = parser.parse_args()
 
     if not args.target:
         print("❌ Error: --target database URL is required!")
         sys.exit(1)
 
-    asyncio.run(restore_database(args.backup, args.target))
+    only = {t.strip() for t in args.only.split(",") if t.strip()}
+    asyncio.run(restore_database(args.backup, args.target, only or None))
 
 
 if __name__ == "__main__":
