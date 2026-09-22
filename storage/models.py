@@ -1,6 +1,16 @@
 from datetime import UTC, datetime
 
-from sqlalchemy import Boolean, DateTime, Float, Index, Integer, String, Text
+from sqlalchemy import (
+    BigInteger,
+    Boolean,
+    DateTime,
+    Float,
+    Index,
+    Integer,
+    String,
+    Text,
+    UniqueConstraint,
+)
 from sqlalchemy.orm import Mapped, mapped_column
 
 from storage.database import Base
@@ -9,6 +19,78 @@ from storage.database import Base
 def _now_utc() -> datetime:
     """Return current UTC time as naive datetime for TIMESTAMP WITHOUT TIME ZONE compatibility."""
     return datetime.now(UTC).replace(tzinfo=None)
+
+
+class MarketCandle(Base):
+    """
+    An OHLCV bar as the exchange published it. The historical record.
+
+    Why this is not crypto_snapshots
+    --------------------------------
+    A snapshot is a wall-clock sample of live state — one price, taken every
+    two minutes, with indicators already computed into it. A candle is the
+    exchange's own bar: open, high, low, close and volume over a fixed
+    interval, on a grid, identical for everyone who asks.
+
+    Three things follow from the difference, and each of them is a reason the
+    snapshots could not have been backfilled into shape.
+
+    A snapshot has one price, so it cannot say what the high was. Every
+    question about range — ATR, true range, where the wick went, whether the
+    stop would have been touched before the target — is unanswerable from a
+    sample and trivial from a bar. That is most of what a scalping system
+    needs to know about its own history.
+
+    A snapshot's indicators were computed when it was written, which freezes
+    their parameters forever. RSI-14 stored in a column means nobody can ever
+    ask what RSI-21 would have done. Candles keep every parameter open,
+    because the indicator is computed at read time from the bar.
+
+    And a bar is reproducible. Ask Binance for the same minute a year from
+    now and the same numbers come back, so a gap can be refilled and a
+    suspect row can be checked against the venue. A sample taken at 10:03:47
+    exists once and cannot be verified by anyone, including us.
+
+    Duplicates are impossible rather than filtered
+    ----------------------------------------------
+    The unique constraint is the whole dedup strategy. A backfill that is
+    interrupted, re-run, overlapped with a different date range, or run twice
+    by two people cannot produce a second copy of a bar, because the database
+    will not hold one. Filtering in application code would mean every future
+    writer has to remember to; a constraint means none of them can forget.
+    """
+
+    __tablename__ = "market_candles"
+    __table_args__ = (
+        # The dedup key. Named, so an ON CONFLICT can target it explicitly.
+        UniqueConstraint("symbol", "interval", "open_time", name="uq_candle_bar"),
+        # Every read is "this symbol, this interval, this range", in order.
+        Index("ix_candle_lookup", "symbol", "interval", "open_time"),
+    )
+
+    # BigInteger on Postgres because this table is measured in millions of
+    # rows, but plain Integer on SQLite: only INTEGER PRIMARY KEY becomes an
+    # alias for the rowid there, so a BIGINT key is simply a NOT NULL column
+    # with no default and every insert fails. The tests run on SQLite.
+    id: Mapped[int] = mapped_column(
+        BigInteger().with_variant(Integer, "sqlite"),
+        primary_key=True, autoincrement=True)
+    symbol: Mapped[str] = mapped_column(String(24), index=True)
+    interval: Mapped[str] = mapped_column(String(8))
+    open_time: Mapped[datetime] = mapped_column(DateTime)
+
+    open: Mapped[float] = mapped_column(Float)
+    high: Mapped[float] = mapped_column(Float)
+    low: Mapped[float] = mapped_column(Float)
+    close: Mapped[float] = mapped_column(Float)
+    volume: Mapped[float] = mapped_column(Float, default=0.0)
+    quote_volume: Mapped[float] = mapped_column(Float, default=0.0)
+    trades: Mapped[int] = mapped_column(Integer, default=0)
+    taker_buy_volume: Mapped[float] = mapped_column(Float, default=0.0)
+
+    # Which venue said so. Two sources disagreeing about the same minute is a
+    # thing worth being able to see rather than a thing to silently resolve.
+    source: Mapped[str] = mapped_column(String(16), default="binance")
 
 
 class CryptoSnapshot(Base):

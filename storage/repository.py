@@ -14,6 +14,7 @@ from storage.models import (
     CryptoSignalLog,
     CryptoSnapshot,
     CryptoWatchlistEntry,
+    MarketCandle,
     NewsSentiment,
     PaperCycle,
     PaperPosition,
@@ -63,6 +64,91 @@ class Repository:
         await self.session.execute(
             delete(CryptoSignalLog).where(CryptoSignalLog.timestamp < log_cutoff))
         await self.session.commit()
+
+    # ── Historical candles ──────────────────────────────────────
+
+    async def save_candles(self, candles: list[dict]) -> int:
+        """
+        Insert bars, skipping any already held. Returns how many were new.
+
+        The duplicate check is the unique constraint, not a SELECT first.
+        Reading before writing would be both slower and wrong: two backfills
+        running at once would each see the row absent and each insert it, and
+        the window between the read and the write is exactly where a retry
+        after a timeout lands. ON CONFLICT DO NOTHING makes the second write
+        a no-op inside the database, where the race cannot happen.
+
+        DO NOTHING rather than DO UPDATE because a bar that is already stored
+        is finished. Binance does not revise closed candles, so a second copy
+        carries the same numbers, and treating it as an update would rewrite
+        half a million rows on every re-run to change nothing.
+
+        SQLite is handled separately only because its dialect spells the same
+        clause differently; the semantics are identical, which matters since
+        the tests run there and production runs on Postgres.
+        """
+        if not candles:
+            return 0
+
+        dialect = self.session.bind.dialect.name if self.session.bind else ""
+        if dialect == "postgresql":
+            from sqlalchemy.dialects.postgresql import insert as _insert
+        elif dialect == "sqlite":
+            from sqlalchemy.dialects.sqlite import insert as _insert
+        else:
+            from sqlalchemy import insert as _insert
+
+        statement = _insert(MarketCandle.__table__)
+        if dialect in ("postgresql", "sqlite"):
+            # index_elements rather than the constraint name: Postgres accepts
+            # either, SQLite only this one, and the tests run on SQLite while
+            # production runs on Postgres. Naming the columns works on both.
+            statement = statement.on_conflict_do_nothing(
+                index_elements=["symbol", "interval", "open_time"])
+
+        before = await self.count_candles(candles[0]["symbol"], candles[0]["interval"])
+        # Chunked: a single statement with half a million rows exceeds the
+        # parameter limit on both backends and holds one long lock on neither's
+        # behalf.
+        for i in range(0, len(candles), 1000):
+            await self.session.execute(statement, candles[i:i + 1000])
+        await self.session.commit()
+        after = await self.count_candles(candles[0]["symbol"], candles[0]["interval"])
+        return after - before
+
+    async def count_candles(self, symbol: str, interval: str) -> int:
+        return int(await self.session.scalar(
+            select(func.count()).select_from(MarketCandle).where(
+                MarketCandle.symbol == symbol.lower(),
+                MarketCandle.interval == interval,
+            )) or 0)
+
+    async def candle_coverage(self, symbol: str, interval: str) -> dict:
+        """
+        What is actually stored for this series, and how much of it is missing.
+
+        `gaps` is the honest number: bars the exchange should have between the
+        first and last stored, that are not there. A backfill that reports
+        success while silently holding two thirds of a range is the failure
+        this exists to make visible.
+        """
+        row = (await self.session.execute(
+            select(func.min(MarketCandle.open_time), func.max(MarketCandle.open_time),
+                   func.count()).where(
+                MarketCandle.symbol == symbol.lower(),
+                MarketCandle.interval == interval,
+            ))).first()
+        first, last, held = (row or (None, None, 0))
+        if not held or first is None:
+            return {"symbol": symbol.lower(), "interval": interval, "held": 0,
+                    "first": None, "last": None, "expected": 0, "gaps": 0}
+
+        from collectors.binance_history import interval_delta
+
+        expected = int((last - first) / interval_delta(interval)) + 1
+        return {"symbol": symbol.lower(), "interval": interval, "held": held,
+                "first": first.isoformat(), "last": last.isoformat(),
+                "expected": expected, "gaps": max(0, expected - held)}
 
     # ── Crypto & Commodities ────────────────────────────────────
 
