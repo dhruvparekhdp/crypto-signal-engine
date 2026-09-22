@@ -530,6 +530,56 @@ class Repository:
         }
 
 
+    # ── Signal reviews ────────────────────────────────────────────────────
+
+    async def save_review(self, phase: str, symbol: str, **kw) -> None:
+        """Record one review. Never raises into the caller: a lost post-mortem
+        is not worth failing a trade close over."""
+        from storage.models import SignalReview
+        try:
+            self.session.add(SignalReview(
+                phase=phase, symbol=symbol, created_at=_now_utc(),
+                signal_type=kw.get("signal_type", ""),
+                signal_log_id=kw.get("signal_log_id", 0) or 0,
+                trade_id=kw.get("trade_id", 0) or 0,
+                verdict=kw.get("verdict", "") or "",
+                factors=kw.get("factors", "") or "",
+                summary=kw.get("summary", "") or "",
+                confidence_delta=kw.get("confidence_delta", 0.0) or 0.0,
+                outcome=kw.get("outcome", "") or "",
+                pnl_pct=kw.get("pnl_pct", 0.0) or 0.0,
+                model=kw.get("model", "") or "",
+                latency_ms=kw.get("latency_ms", 0) or 0,
+            ))
+            await self.session.commit()
+        except Exception:
+            await self.session.rollback()
+
+    async def review_factor_counts(self, phase: str = "post", days: int = 30) -> dict:
+        """
+        How often each label appears, split by whether the trade made money.
+
+        This is the whole point of a closed vocabulary: the answer to "what
+        keeps killing my trades" is a count, not a pile of prose.
+        """
+        from storage.models import SignalReview
+        since = _now_utc() - timedelta(days=days)
+        res = await self.session.execute(
+            select(SignalReview).where(SignalReview.phase == phase,
+                                       SignalReview.created_at >= since))
+        out: dict[str, dict] = {}
+        for row in res.scalars():
+            won = row.pnl_pct > 0
+            for f in (row.factors or "").split(","):
+                f = f.strip()
+                if not f:
+                    continue
+                slot = out.setdefault(f, {"total": 0, "wins": 0, "losses": 0})
+                slot["total"] += 1
+                slot["wins" if won else "losses"] += 1
+        return dict(sorted(out.items(), key=lambda kv: -kv[1]["total"]))
+
+
 def _parse_dt(value) -> datetime:
     """Accept an ISO string or a datetime; fall back to now rather than fail."""
     if isinstance(value, datetime):

@@ -312,3 +312,35 @@ __all__ = [
     "should_open",
     "summarise",
 ]
+
+
+class ClosedTradeView:
+    """
+    One flat object with everything a post-mortem needs.
+
+    A ClosedTrade knows the exit and the money; the stored row knows the plan
+    it was opened against. The reviewer needs both in one place, and neither
+    class should grow a dependency on the other to provide it.
+    """
+
+    __slots__ = ("symbol", "side", "entry_price", "exit_price", "target_price",
+                 "stop_price", "exit_reason", "signal_type", "confidence",
+                 "hours_held", "gross_pnl", "trading_fees", "funding_paid",
+                 "net_pnl", "return_on_margin")
+
+    def __init__(self, trade, row):
+        self.symbol = row.symbol
+        self.side = row.side
+        self.entry_price = row.entry_price
+        self.exit_price = trade.exit_price
+        self.target_price = row.target_price
+        self.stop_price = row.initial_stop_price or row.stop_price
+        self.exit_reason = trade.reason.value
+        self.signal_type = row.signal_type or ""
+        self.confidence = row.confidence or 0.0
+        self.hours_held = trade.hours_held
+        self.gross_pnl = trade.gross_pnl
+        self.trading_fees = trade.fees_paid - trade.funding_paid
+        self.funding_paid = trade.funding_paid
+        self.net_pnl = trade.net_pnl
+        self.return_on_margin = trade.return_on_margin

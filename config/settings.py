@@ -31,6 +31,12 @@ class Settings(BaseSettings):
     # the confidence threshold stays the single place a signal is refused.
     groq_reject_penalty: float = 0.15
 
+    # Two jobs, two models. The pre-trade check holds a signal up while it
+    # runs, so it buys speed. The post-mortem runs after the money is already
+    # decided and nothing waits on it, so it buys judgement instead.
+    groq_postmortem_model: str = "openai/gpt-oss-120b"
+    groq_postmortem_enabled: bool = True
+
     # Market Data & External APIs
     twelvedata_api_key: str | None = None
     twelvedata_symbols: str = "XAU/USD,XAG/USD,WTI/USD"

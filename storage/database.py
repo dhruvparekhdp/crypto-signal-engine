@@ -144,6 +144,18 @@ async def _migrate_columns(conn) -> None:
             alert_telegram BOOLEAN DEFAULT TRUE
         )""",
         "ALTER TABLE paper_trades ADD COLUMN IF NOT EXISTS usdt_inr FLOAT DEFAULT 102.0",
+        """CREATE TABLE IF NOT EXISTS signal_reviews (
+            id SERIAL PRIMARY KEY,
+            phase VARCHAR, symbol VARCHAR, signal_type VARCHAR DEFAULT '',
+            signal_log_id INTEGER DEFAULT 0, trade_id INTEGER DEFAULT 0,
+            verdict VARCHAR DEFAULT '', factors VARCHAR DEFAULT '',
+            summary TEXT DEFAULT '', confidence_delta FLOAT DEFAULT 0.0,
+            outcome VARCHAR DEFAULT '', pnl_pct FLOAT DEFAULT 0.0,
+            model VARCHAR DEFAULT '', latency_ms INTEGER DEFAULT 0,
+            created_at TIMESTAMP
+        )""",
+        "CREATE INDEX IF NOT EXISTS ix_review_symbol_phase ON signal_reviews (symbol, phase)",
+        "CREATE INDEX IF NOT EXISTS ix_review_created ON signal_reviews (created_at)",
         "INSERT INTO paper_trading_config (id) VALUES (1) ON CONFLICT (id) DO NOTHING",
         "ALTER TABLE paper_trading_config ADD COLUMN IF NOT EXISTS enabled BOOLEAN DEFAULT TRUE",
         # admin_auth table — password hash + salt + active session

@@ -33,6 +33,7 @@ from analysis.crypto_signal import CryptoSignal
 from analysis.crypto_state_store import CommodityStateStore, CryptoStateStore
 from analysis.multi_horizon_predictor import MultiHorizonPredictor
 from analysis.paper_cycle import (
+    ClosedTradeView,
     CycleState,
     config_for_cycle,
     cycle_outcome,
@@ -248,6 +249,12 @@ class AppRunner:
                     wallet = trade.wallet_after
                     await repo.record_trade(cycle.id, trade)
                     await repo.delete_position(row.id)
+                    # Post-mortem runs detached: the trade is already closed and
+                    # recorded, so a slow or failing reviewer must not hold up
+                    # the rest of the tick or the positions still to resolve.
+                    if (settings.groq_postmortem_enabled
+                            and self.groq_sentinel.is_available):
+                        asyncio.create_task(self._review_closed_trade(trade, row))
                     log.info("paper_trade_closed", symbol=pos.symbol,
                              reason=trade.reason.value, net=round(trade.net_pnl, 2),
                              wallet=round(wallet, 2))
@@ -312,6 +319,36 @@ class AppRunner:
                             parse_mode=ParseMode.HTML)
         except Exception:
             log.exception("paper_trading_job_failed")
+
+    async def _review_closed_trade(self, trade, row) -> None:
+        """
+        Ask what the trade taught, once the answer is in.
+
+        Runs as its own task. Nothing downstream waits on it, and a review
+        that fails should cost nothing but the review — the trade is already
+        closed and booked by the time this starts.
+        """
+        try:
+            pre = ""
+            async with AsyncSessionFactory() as session:
+                repo = Repository(session)
+                review = await self.groq_sentinel.review_closed_trade(
+                    ClosedTradeView(trade, row), pre_review=pre)
+                if not review:
+                    return
+                await repo.save_review(
+                    "post", row.symbol,
+                    signal_type=row.signal_type,
+                    verdict=review.get("verdict", ""),
+                    factors=review.get("factors", ""),
+                    summary=review.get("summary", ""),
+                    outcome=trade.reason.value,
+                    pnl_pct=round(trade.return_on_margin * 100, 4),
+                    model=review.get("model", ""),
+                    latency_ms=review.get("latency_ms", 0),
+                )
+        except Exception:
+            log.debug("post_review_failed", symbol=getattr(row, "symbol", "?"))
 
     def _apply_sentiment(self, sig, funding: float | None = None):
         """Let sentiment nudge confidence — it never creates or blocks a signal."""
@@ -506,6 +543,15 @@ class AppRunner:
                             delta = -abs(settings.groq_reject_penalty)
                         if ai_summary:
                             sig.ai_review = ai_summary
+                        try:
+                            async with AsyncSessionFactory() as s2:
+                                await Repository(s2).save_review(
+                                    "pre", sig.symbol, signal_type=sig.signal_type,
+                                    verdict=verdict, summary=ai_summary,
+                                    factors=self.groq_sentinel.last_factors,
+                                    confidence_delta=delta, model=scfg.groq_model)
+                        except Exception:
+                            log.debug("pre_review_not_saved", symbol=sig.symbol)
                         before = sig.confidence
                         sig.confidence = max(0.50, min(0.95, round(before + delta, 4)))
                         if (scfg.crypto_min_confidence > 0

@@ -192,6 +192,48 @@ class StrategyConfig(Base):
     min_confidence: Mapped[float] = mapped_column(Float, default=0.65)
 
 
+class SignalReview(Base):
+    """
+    What the reviewer thought, before the trade and after it closed.
+
+    Free text cannot be counted. A hundred post-mortems that each say
+    something sensible in their own words tell you nothing in aggregate,
+    so every review also carries `factors` — a comma-separated list drawn
+    from a fixed vocabulary. That is the column that answers "how many of
+    my losses were stopped by ordinary noise", which is the question worth
+    asking after two days of trading.
+
+    Kept in its own table rather than bolted onto the signal or the trade
+    because one signal gets reviewed twice, at two different moments, and
+    the pair is the interesting unit.
+    """
+
+    __tablename__ = "signal_reviews"
+    __table_args__ = (Index("ix_review_symbol_phase", "symbol", "phase"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    phase: Mapped[str] = mapped_column(String, index=True)        # "pre" | "post"
+    symbol: Mapped[str] = mapped_column(String, index=True)
+    signal_type: Mapped[str] = mapped_column(String, default="")
+
+    signal_log_id: Mapped[int] = mapped_column(Integer, default=0, index=True)
+    trade_id: Mapped[int] = mapped_column(Integer, default=0, index=True)
+
+    verdict: Mapped[str] = mapped_column(String, default="")
+    factors: Mapped[str] = mapped_column(String, default="")      # fixed vocabulary
+    summary: Mapped[str] = mapped_column(Text, default="")
+    confidence_delta: Mapped[float] = mapped_column(Float, default=0.0)
+
+    # Filled on the post-trade pass, so a review can be scored against what
+    # actually happened rather than taken on faith.
+    outcome: Mapped[str] = mapped_column(String, default="")
+    pnl_pct: Mapped[float] = mapped_column(Float, default=0.0)
+
+    model: Mapped[str] = mapped_column(String, default="")
+    latency_ms: Mapped[int] = mapped_column(Integer, default=0)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=_now_utc, index=True)
+
+
 class PaperPosition(Base):
     """
     An open paper position. Deleted on close — the record lives on as a
