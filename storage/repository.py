@@ -34,17 +34,34 @@ class Repository:
 
     # ── Maintenance ────────────────────────────────────────────
 
-    async def delete_old_crypto_data(self, days: int = 3) -> None:
-        """Bound the growth of crypto/commodity snapshots + old signal log rows.
-
-        These are written every crypto_snapshot_interval_seconds (default 2 min)
-        for every watchlist symbol — left unbounded they would eventually fill
-        the Postgres instance on their own.
+    async def delete_old_crypto_data(
+        self,
+        snapshot_days: int | None = None,
+        signal_log_days: int | None = None,
+    ) -> None:
         """
-        cutoff = _now_utc() - timedelta(days=days)
-        await self.session.execute(delete(CryptoSnapshot).where(CryptoSnapshot.timestamp < cutoff))
-        await self.session.execute(delete(CommoditySnapshot).where(CommoditySnapshot.timestamp < cutoff))
-        await self.session.execute(delete(CryptoSignalLog).where(CryptoSignalLog.timestamp < cutoff))
+        Bound the growth of snapshots and the signal log.
+
+        Two retentions, not one. They had shared a single `days=3`, which read
+        as a sensible cap on a log and was in fact deleting the training set:
+        crypto_snapshots is the only table carrying features together with
+        forward-looking labels, and nothing could ever be fitted on more than
+        three days of it. The signal log is a record you read when something
+        breaks and can stay short; the snapshots are the dataset and cannot.
+        """
+        from config.settings import settings
+
+        snap = snapshot_days if snapshot_days is not None else settings.snapshot_retention_days
+        logs = signal_log_days if signal_log_days is not None else settings.signal_log_retention_days
+
+        snap_cutoff = _now_utc() - timedelta(days=snap)
+        log_cutoff = _now_utc() - timedelta(days=logs)
+        await self.session.execute(
+            delete(CryptoSnapshot).where(CryptoSnapshot.timestamp < snap_cutoff))
+        await self.session.execute(
+            delete(CommoditySnapshot).where(CommoditySnapshot.timestamp < snap_cutoff))
+        await self.session.execute(
+            delete(CryptoSignalLog).where(CryptoSignalLog.timestamp < log_cutoff))
         await self.session.commit()
 
     # ── Crypto & Commodities ────────────────────────────────────

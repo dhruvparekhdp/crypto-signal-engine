@@ -21,6 +21,22 @@ class Settings(BaseSettings):
     # check who is on the other end. Download the project CA from the Aiven
     # console, put it on the box, set this, and change the URL to verify-full.
     database_ssl_ca: str = ""
+
+    # How long each kind of row is kept.
+    #
+    # These were one hardcoded `days=3` covering snapshots, commodity snapshots
+    # and the signal log alike. Three days is right for a log you read when
+    # something breaks. It is fatal for a training set: crypto_snapshots is the
+    # only table with features AND forward-looking labels, and a cleanup job
+    # every six hours meant no model could ever be fitted on more than three
+    # days of it. Nothing about the plan to learn from history works until
+    # history survives.
+    #
+    # The cost of keeping it is small. Seven symbols at one snapshot every two
+    # minutes is ~5,000 rows a day; at roughly 150 bytes a row, 120 days is
+    # about 90 MB — well inside a free managed-Postgres tier.
+    snapshot_retention_days: int = 120
+    signal_log_retention_days: int = 30
     port: int = 8080
 
     # Telegram Notifications (optional in dev, required in prod)

@@ -481,8 +481,27 @@ class AppRunner:
     async def _cleanup_job(self) -> None:
         async with AsyncSessionFactory() as session:
             repo = Repository(session)
-            await repo.delete_old_crypto_data(days=3)
+            await repo.delete_old_crypto_data()
         log.info("db_cleanup_done")
+
+    async def _label_snapshots_job(self) -> None:
+        """
+        Write each snapshot's forward prices, once enough time has passed.
+
+        The columns have existed since the schema was written and nothing has
+        ever filled them, so every row in the table has 0.0 for all four. The
+        data to fill them was always there — the price half an hour after a
+        10:00 snapshot is sitting in the 10:30 snapshot — it was simply never
+        joined up. Without this the table is features with no labels, and
+        nothing can be fitted on it.
+        """
+        from analysis.snapshot_labeler import backfill_labels
+
+        try:
+            async with AsyncSessionFactory() as session:
+                await backfill_labels(session, lookback_days=settings.snapshot_retention_days)
+        except Exception:
+            log.exception("snapshot_labelling_failed")
 
     async def _heartbeat_job(self) -> None:
         # Symbols carrying a live price, not symbols merely on the watchlist:
@@ -693,6 +712,16 @@ class AppRunner:
             "interval",
             hours=6,
             id="db_cleanup",
+        )
+        # Every 15 minutes rather than hourly: the 30-minute horizon is the
+        # shortest, and a label written an hour late is a row that spends an
+        # hour looking unlabelled to anything reading the table.
+        self.scheduler.add_job(
+            self._label_snapshots_job,
+            "interval",
+            minutes=15,
+            id="snapshot_labels",
+            max_instances=1,
         )
         self.scheduler.add_job(
             self._heartbeat_job,
