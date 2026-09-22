@@ -81,6 +81,11 @@ class AppRunner:
         self.sentiment = SentimentAnalyzer()
         self.crypto_engine = CryptoEngine()
         self.groq_sentinel = GroqSentinel()
+        # The last research pass, kept in memory so /api/research can serve it
+        # without recomputing. It survives until restart, which is the right
+        # lifetime for something regenerated weekly.
+        self.last_research: dict = {}
+        self.last_research_text: str = ""
         self.oi_collector = BinanceFuturesOICollector(self.crypto_store)
         self._pending_paper_signals: list[tuple[CryptoSignal, object]] = []
         self.fear_greed = None
@@ -484,6 +489,35 @@ class AppRunner:
             await repo.delete_old_crypto_data()
         log.info("db_cleanup_done")
 
+    async def _research_pass_job(self) -> None:
+        """
+        Measure the history, then ask the strongest model what to test next.
+
+        The measuring is the valuable half and happens in code, because no
+        model computes a rank correlation over tens of thousands of rows —
+        asked to, it produces a number shaped like an answer. What the model
+        gets is the two-kilobyte result, which is the part it is good at:
+        reading a table of weak effects against a cost hurdle and saying
+        which one is worth a week.
+        """
+        from analysis.research_report import (
+            ask_for_hypotheses,
+            load_and_analyse,
+            render,
+        )
+
+        try:
+            async with AsyncSessionFactory() as session:
+                found = await load_and_analyse(
+                    session, days=settings.snapshot_retention_days)
+            if not found.rows:
+                log.info("research_pass_skipped", reason="no labelled snapshots yet")
+                return
+            self.last_research_text = render(found)
+            self.last_research = await ask_for_hypotheses(found)
+        except Exception:
+            log.exception("research_pass_failed")
+
     async def _label_snapshots_job(self) -> None:
         """
         Write each snapshot's forward prices, once enough time has passed.
@@ -721,6 +755,16 @@ class AppRunner:
             "interval",
             minutes=15,
             id="snapshot_labels",
+            max_instances=1,
+        )
+        # Weekly, because the thing it measures moves on the scale of weeks.
+        # Running it nightly would mostly re-measure the same fortnight and
+        # invite reading noise as a change.
+        self.scheduler.add_job(
+            self._research_pass_job,
+            "interval",
+            days=7,
+            id="research_pass",
             max_instances=1,
         )
         self.scheduler.add_job(

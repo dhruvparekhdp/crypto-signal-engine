@@ -519,6 +519,36 @@ async def _api_audit_methods(runner, request: web.Request) -> web.Response:
     return web.json_response({"stages": method_catalogue()})
 
 
+async def _api_research(runner, request: web.Request) -> web.Response:
+    """
+    The measured state of the edge, and what the model made of it.
+
+    Served from the last weekly pass rather than recomputed: the measurement
+    walks every labelled snapshot in the retention window, which is not work
+    to do on a page load. `?fresh=1` forces it, for when you have just
+    changed something and do not want to wait a week to see it.
+    """
+    from analysis.research_report import load_and_analyse, render
+    from storage.database import AsyncSessionFactory
+
+    if request.query.get("fresh") == "1":
+        async with AsyncSessionFactory() as session:
+            found = await load_and_analyse(session, days=_SETTINGS.snapshot_retention_days)
+        return web.json_response({
+            "report": render(found), "rows": found.rows, "rejected": found.rejected,
+            "span_days": found.span_days, "cost_pct": found.cost_pct,
+            "hypotheses": {}, "generated": "just now",
+        })
+
+    return web.json_response({
+        "report": getattr(runner, "last_research_text", "")
+                  or "No research pass has run yet. It runs weekly, and needs "
+                     "labelled snapshots — labels are written 30 minutes to a "
+                     "day after each snapshot. Add ?fresh=1 to measure now.",
+        "hypotheses": getattr(runner, "last_research", {}) or {},
+    })
+
+
 async def _api_sentiment_ingest(runner, request: web.Request) -> web.Response:
     """
     Accept scored headlines from an external analyser (Hermes on a laptop).
@@ -4592,6 +4622,7 @@ async def make_app(runner) -> web.Application:
     app.router.add_get("/api/crypto/forecasts", _bind(_api_crypto_forecasts))
     app.router.add_get("/api/paper", _bind(_api_paper))
     app.router.add_get("/api/debug/coindcx", _bind(_api_debug_coindcx))
+    app.router.add_get("/api/research", _bind(_api_research))
     app.router.add_post("/api/sentiment/ingest", _bind(_api_sentiment_ingest))
     app.router.add_get("/api/sentiment/recent", _bind(_api_sentiment_recent))
     app.router.add_get("/api/signals/history", _bind(_api_signal_history))
