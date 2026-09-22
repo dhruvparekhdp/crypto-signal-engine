@@ -25,6 +25,12 @@ class Settings(BaseSettings):
     groq_model: str = "qwen/qwen3.8-27b"
     groq_signal_review_enabled: bool = True
 
+    # What a REJECT verdict costs the signal's confidence. Sized to sink a
+    # typical 0.70-0.75 setup below the threshold while leaving a strong one
+    # standing: the reviewer gets a real say without a unilateral veto, and
+    # the confidence threshold stays the single place a signal is refused.
+    groq_reject_penalty: float = 0.15
+
     # Market Data & External APIs
     twelvedata_api_key: str | None = None
     twelvedata_symbols: str = "XAU/USD,XAG/USD,WTI/USD"

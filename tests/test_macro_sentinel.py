@@ -1,9 +1,10 @@
 """
 Unit tests for GroqSentinel AI sanity reviewer and pre-signal second opinion.
 """
-from datetime import datetime, timezone
+from datetime import UTC, datetime
+from unittest.mock import AsyncMock, MagicMock, patch
+
 import pytest
-from unittest.mock import AsyncMock, patch, MagicMock
 from pydantic import SecretStr
 
 from analysis.crypto_signal import CryptoSignal
@@ -27,7 +28,7 @@ def _make_signal(ai_review: str = "") -> CryptoSignal:
         timeframe="15m",
         sentiment_score=0.1,
         indicators_summary="RSI 48, MACD positive, HTF EMA above",
-        timestamp=datetime.now(timezone.utc),
+        timestamp=datetime.now(UTC),
         ai_review=ai_review,
     )
 
@@ -95,12 +96,13 @@ async def test_groq_sentinel_clamping_and_review():
 
 
 @pytest.mark.asyncio
-async def test_a_reject_verdict_is_surfaced_so_the_engine_can_veto():
+async def test_a_reject_verdict_is_surfaced_so_it_can_carry_weight():
     """
     The gold signal that prompted this: the reviewer called a 43% target
     "mathematically impossible" and the signal published anyway, because a
-    clamped confidence delta cannot express refusal. The verdict now comes
-    back so the caller can drop the signal outright.
+    clamped +/-0.04 delta was too quiet to matter. The verdict now comes back
+    so the caller can charge a REJECT real confidence — enough to sink a
+    typical setup under the threshold, not enough to overrule a strong one.
     """
     sentinel = GroqSentinel()
     state = CryptoState(symbol="xauusdt", base_asset="XAU")
@@ -142,3 +144,22 @@ def test_telegram_message_includes_ai_review():
     msg = format_crypto_signal(sig)
     assert "🤖 <b>AI Review (Groq Sentinel):</b>" in msg
     assert "CVD confirms buyer aggression" in msg
+
+
+def test_a_reject_is_a_strong_opinion_not_a_veto():
+    """
+    Sized so the reviewer is heard without being obeyed. A ±0.04 nudge let a
+    43%-target gold signal through; a hard veto would let one bad model call
+    silently kill good setups. The penalty sinks an ordinary setup below the
+    threshold and leaves a strong one standing, so the confidence threshold
+    stays the single place a signal is refused.
+    """
+    from config.settings import settings
+    penalty = settings.groq_reject_penalty
+    threshold = 0.70
+
+    def after(conf):
+        return max(0.50, min(0.95, round(conf - penalty, 4)))
+
+    assert after(0.74) < threshold, "a typical setup should not survive a REJECT"
+    assert after(0.92) >= threshold, "a strong setup should outvote the reviewer"

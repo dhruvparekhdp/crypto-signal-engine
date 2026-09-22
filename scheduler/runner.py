@@ -487,24 +487,36 @@ class AppRunner:
                     if scfg.crypto_min_confidence > 0 and sig.confidence < scfg.crypto_min_confidence:
                         continue
 
-                    # Groq AI Pre-Signal Sanity Review (advisory sanity check)
+                    # Groq AI Pre-Signal Sanity Review.
+                    #
+                    # A voice with weight, not a veto. A ±0.04 nudge was too
+                    # quiet to matter — it called a 43% gold target
+                    # "mathematically impossible" and the signal published
+                    # anyway. A hard veto is the other extreme: one model's
+                    # bad call would silently kill good setups with no trace
+                    # in the numbers. So a REJECT costs real confidence and
+                    # the ordinary threshold decides, which keeps every
+                    # decision in one place and visible in the logs.
                     if self.groq_sentinel.is_available and scfg.groq_signal_review_enabled:
                         delta, ai_summary, verdict = (
                             await self.groq_sentinel.review_signal_candidate(
                                 sig, state, model=scfg.groq_model)
                         )
-                        # A clamped confidence nudge cannot say "impossible".
-                        # When the reviewer rejects outright, drop the signal:
-                        # it called a 43% gold target structurally unsound and
-                        # was overruled by arithmetic that could only move
-                        # confidence by 0.04.
                         if verdict == "REJECT":
-                            log.info("crypto_signal_vetoed_by_ai", symbol=sig.symbol,
-                                     type=sig.signal_type, reason=ai_summary)
-                            continue
+                            delta = -abs(settings.groq_reject_penalty)
                         if ai_summary:
                             sig.ai_review = ai_summary
-                            sig.confidence = max(0.50, min(0.95, round(sig.confidence + delta, 4)))
+                        before = sig.confidence
+                        sig.confidence = max(0.50, min(0.95, round(before + delta, 4)))
+                        if (scfg.crypto_min_confidence > 0
+                                and sig.confidence < scfg.crypto_min_confidence):
+                            log.info("crypto_signal_dropped_after_ai_review",
+                                     symbol=sig.symbol, type=sig.signal_type,
+                                     verdict=verdict, confidence_before=before,
+                                     confidence_after=sig.confidence,
+                                     threshold=scfg.crypto_min_confidence,
+                                     reason=ai_summary)
+                            continue
 
                     msg = format_crypto_signal(sig)
                     if settings.crypto_alert_telegram:
