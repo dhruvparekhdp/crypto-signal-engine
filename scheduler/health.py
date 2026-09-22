@@ -680,6 +680,8 @@ async def _api_paper(runner, request: web.Request) -> web.Response:
             "unrealised": round(net, 2),
             "roe_pct": round(net / r.margin * 100, 2) if r.margin else 0.0,
             "opened_at": _iso(r.opened_at),
+            "usdt_inr": r.usdt_inr,
+            "notional": round(r.coin_qty * mark * r.usdt_inr, 2),
         })
 
     return web.Response(text=json.dumps({
@@ -692,6 +694,8 @@ async def _api_paper(runner, request: web.Request) -> web.Response:
         "positions": positions,
         "summary": summarise(trades, cycle.wallet, cfg),
         "trades": [_trade_row(t) for t in trades[:60]],
+        # Current rate, for figures that are not tied to one trade.
+        "usdt_inr": _SETTINGS.paper_usdt_inr,
     }), content_type="application/json")
 
 
@@ -732,6 +736,10 @@ def _trade_row(t) -> dict:
         "signal_type": t.signal_type,
         "hours_held": round(t.hours_held, 2),
         "closed_at": _iso(t.closed_at),
+        "qty": t.coin_qty,
+        # Money on this row is INR at the rate the trade was booked at, not
+        # today's. Sent so the page converts instead of assuming.
+        "usdt_inr": getattr(t, "usdt_inr", 0.0) or 102.0,
     }
 
 
@@ -1128,6 +1136,97 @@ section h2{color:var(--accent-soft)}
 .tbl td.sub{color:var(--muted2);font-size:11px}
 .tbl tbody tr:hover{background:var(--line2)}
 
+/* ── Paper trading desk ────────────────────────────────────────────────── */
+.ccy-pick{display:flex;align-items:center;gap:7px;margin-right:14px}
+.ccy-pick label{font-size:10px;letter-spacing:.06em;text-transform:uppercase;color:var(--muted)}
+.ccy-pick select{font:inherit;font-size:12px;color:var(--text);background:var(--panel);
+  border:1px solid var(--line);border-radius:7px;padding:5px 8px;min-width:88px}
+
+.pt-num{font-variant-numeric:tabular-nums;white-space:nowrap;
+  font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
+.pt-strip{display:grid;grid-template-columns:repeat(auto-fit,minmax(128px,1fr));
+  gap:1px;background:var(--line);border:1px solid var(--line);border-radius:10px;
+  overflow:hidden;margin-bottom:22px}
+.pt-cell{background:var(--panel);padding:11px 13px}
+.pt-k{font-size:10px;letter-spacing:.06em;text-transform:uppercase;color:var(--muted);
+  margin-bottom:5px}
+.pt-v{font-size:16px;font-weight:600;color:var(--text-strong);
+  font-variant-numeric:tabular-nums;font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
+.pt-v small{font-size:11px;font-weight:500;color:var(--muted);margin-left:4px}
+.pt-up{color:var(--pos)!important}.pt-down{color:var(--neg)!important}
+.pt-rail{height:5px;border-radius:99px;background:var(--sunk);border:1px solid var(--line2);
+  overflow:hidden;margin-top:9px}
+.pt-rail i{display:block;height:100%;background:var(--accent)}
+.pt-railcap{display:flex;justify-content:space-between;font-size:10px;color:var(--muted);
+  margin-top:5px}
+
+.pt-shead{display:flex;flex-wrap:wrap;gap:8px 14px;align-items:baseline;
+  justify-content:space-between;margin-bottom:10px}
+.pt-shead h2{font-size:12px;font-weight:600;margin:0;letter-spacing:.04em;
+  text-transform:uppercase;color:var(--muted)}
+.pt-count{font-size:11px;color:var(--muted2)}
+
+.pt-scroll{overflow-x:auto;border:1px solid var(--line);border-radius:10px;
+  background:var(--panel)}
+.pt-scroll table{border-collapse:collapse;width:100%;min-width:820px;font-size:12px}
+.pt-scroll thead th{background:var(--panel2);text-align:left;font-size:10px;
+  letter-spacing:.06em;text-transform:uppercase;color:var(--muted);font-weight:600;
+  padding:9px 11px;border-bottom:1px solid var(--line);white-space:nowrap}
+.pt-scroll thead th.sortable{cursor:pointer;user-select:none}
+.pt-scroll thead th.sortable:hover{color:var(--text)}
+.pt-scroll thead th .arw{opacity:.45;font-size:9px;margin-left:3px}
+.pt-scroll td{padding:10px 11px;border-bottom:1px solid var(--line2);color:var(--text)}
+.pt-scroll tbody tr:last-child td{border-bottom:0}
+.pt-scroll tbody tr:hover{background:var(--panel2)}
+.pt-scroll th.r,.pt-scroll td.r{text-align:right}
+.pt-sym{font-weight:600;color:var(--text-strong)}
+.pt-side{display:inline-block;font-size:9.5px;font-weight:700;padding:2px 6px;
+  border-radius:4px;letter-spacing:.05em;margin-left:7px}
+.pt-side.l{background:rgba(74,222,128,.14);color:var(--pos)}
+.pt-side.s{background:rgba(248,113,113,.14);color:var(--neg)}
+.pt-setup{font-size:10.5px;color:var(--muted);display:block;margin-top:3px}
+.pt-unit{font-size:9.5px;color:var(--muted2);letter-spacing:.03em}
+.pt-notional{display:block;font-size:10px;color:var(--muted2);margin-top:2px}
+.pt-trail{font-size:9px;color:var(--accent);letter-spacing:.05em;
+  text-transform:uppercase;margin-left:6px}
+.pt-muted{color:var(--muted2)}
+
+.pt-prail{position:relative;height:22px;min-width:130px}
+.pt-ptrack{position:absolute;top:10px;left:0;right:0;height:3px;background:var(--sunk);
+  border-radius:99px;border:1px solid var(--line2)}
+.pt-pfill{position:absolute;top:10px;height:3px;border-radius:99px}
+.pt-ptick{position:absolute;top:5px;width:1px;height:13px;background:var(--muted2)}
+.pt-pmark{position:absolute;top:4px;width:2px;height:15px;border-radius:1px}
+.pt-plab{position:absolute;top:0;font-size:9px;color:var(--muted2)}
+
+.pt-tag{display:inline-block;font-size:9.5px;font-weight:700;padding:2px 7px;
+  border-radius:99px;letter-spacing:.03em;white-space:nowrap;text-transform:lowercase}
+.pt-tag.target,.pt-tag.trail{background:rgba(74,222,128,.14);color:var(--pos)}
+.pt-tag.stop,.pt-tag.liquidated{background:rgba(248,113,113,.14);color:var(--neg)}
+.pt-tag.expired{background:var(--sunk);color:var(--muted);border:1px solid var(--line)}
+
+.pt-filters{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:11px;align-items:center}
+.pt-filters label{font-size:10px;letter-spacing:.06em;text-transform:uppercase;
+  color:var(--muted);margin-right:-3px}
+.pt-filters select,.pt-filters input[type=search]{font:inherit;font-size:12px;
+  color:var(--text);background:var(--panel);border:1px solid var(--line);
+  border-radius:7px;padding:6px 9px;min-width:100px}
+.pt-filters input[type=search]{min-width:128px}
+.pt-chip{font:inherit;font-size:11px;color:var(--muted);background:var(--panel);
+  border:1px solid var(--line);border-radius:99px;padding:5px 11px;cursor:pointer}
+.pt-chip[aria-pressed="true"]{background:var(--accent);color:var(--sunk);
+  border-color:var(--accent);font-weight:700}
+.pt-clear{margin-left:auto;font:inherit;font-size:11px;color:var(--muted);
+  background:none;border:0;cursor:pointer;text-decoration:underline}
+
+.pt-sum{display:grid;grid-template-columns:repeat(auto-fit,minmax(108px,1fr));
+  gap:1px;background:var(--line);border:1px solid var(--line);border-top:0;
+  border-radius:0 0 10px 10px;overflow:hidden}
+.pt-sum .pt-cell{padding:9px 12px}
+.pt-sum .pt-v{font-size:14px}
+.pt-note{font-size:11px;color:var(--muted2);margin-top:9px;line-height:1.6}
+@media (max-width:640px){.pt-clear{margin-left:0}.ccy-pick label{display:none}}
+
 /* ── Sidebar shell ─────────────────────────────────────────────────────── */
 .app{display:flex;min-height:100vh}
 .sidebar{width:212px;flex:none;background:var(--bg);border-right:1px solid var(--line);
@@ -1288,6 +1387,13 @@ section h2{color:var(--accent-soft)}
       <div class="sub" id="page-sub">Last 7 days</div>
     </div>
     <div style="flex-grow:1"></div>
+    <div class="ccy-pick">
+      <label for="ccy-select">Display</label>
+      <select id="ccy-select" aria-label="Display currency">
+        <option value="USDT">USDT</option>
+        <option value="INR">&#8377; INR</option>
+      </select>
+    </div>
     <span class="refresh" id="refresh-label">Loading&hellip;</span>
   </div>
   <div class="main-body">
@@ -1370,22 +1476,47 @@ section h2{color:var(--accent-soft)}
 </div>
 
 <div id="tab-paper" class="tab-content">
-  <section>
-    <h2>📒 Paper Trading Cycle</h2>
-    <div class="cr-note">
-      Simulated only — this never places a real order. A cycle ends when the wallet
-      reaches its target or runs out, then a fresh one starts. Every cost is charged:
-      brokerage, GST, funding and slippage.
-    </div>
-    <div id="paper-banner"></div>
-    <div class="cards" id="paper-cards"></div>
-    <h3 style="margin-top:22px">Open positions</h3>
-    <div id="paper-positions"><div class="empty">Loading…</div></div>
-    <h3 style="margin-top:22px">Scorecard</h3>
-    <div id="paper-scorecard"><div class="empty">Loading…</div></div>
-    <h3 style="margin-top:22px">Trade history</h3>
-    <div id="paper-trades"><div class="empty">Loading…</div></div>
-  </section>
+  <div class="cr-note" style="margin-bottom:12px">
+    Simulated only — this never places a real order. A cycle ends when the wallet
+    reaches its target or runs out, then a fresh one starts. Every cost is charged:
+    brokerage, GST, funding and slippage.
+  </div>
+  <div id="paper-banner"></div>
+
+  <div class="pt-strip" id="paper-strip"></div>
+
+  <div class="pt-shead">
+    <h2>Open positions</h2>
+    <span class="pt-count" id="pt-open-count"></span>
+  </div>
+  <div class="pt-scroll" id="paper-positions"><div class="empty">Loading&hellip;</div></div>
+
+  <div class="pt-shead" style="margin-top:26px">
+    <h2>History</h2>
+    <span class="pt-count" id="pt-hist-count"></span>
+  </div>
+  <div class="pt-filters" id="pt-filters">
+    <label for="pf-sym">Market</label>
+    <select id="pf-sym"><option value="">All</option></select>
+    <label for="pf-side">Side</label>
+    <select id="pf-side"><option value="">Both</option>
+      <option value="long">long</option><option value="short">short</option></select>
+    <label for="pf-setup">Setup</label>
+    <select id="pf-setup"><option value="">All</option></select>
+    <label for="pf-exit">Exit</label>
+    <select id="pf-exit"><option value="">All</option></select>
+    <button class="pt-chip" id="pf-win" aria-pressed="false" type="button">Wins</button>
+    <button class="pt-chip" id="pf-loss" aria-pressed="false" type="button">Losses</button>
+    <input type="search" id="pf-q" placeholder="Search&hellip;" aria-label="Search history">
+    <button class="pt-clear" id="pf-reset" type="button">Reset</button>
+  </div>
+  <div class="pt-scroll" id="paper-trades"><div class="empty">Loading&hellip;</div></div>
+  <div class="pt-sum" id="paper-scorecard"></div>
+  <div class="pt-note">
+    Costs stay broken out rather than netted into P&amp;L — fees and funding are the
+    reason a winning hit rate can still lose money, so they keep their own columns.
+    Summary figures follow the filters above.
+  </div>
 </div>
 
 <div id="tab-crypto" class="tab-content">
@@ -1468,98 +1599,298 @@ function money(v){
 function signed(v){ return (v>=0?'+':'') + money(v).replace('-',''); }
 function pnlClass(v){ return v>0?'pos':(v<0?'neg':''); }
 
+// ── Paper trading desk ──────────────────────────────────────────────────
+// One fetch feeds three views: the cycle strip, open positions and a
+// filtered history whose summary recomputes against whatever is showing —
+// so "how does volume_spike actually do" is a two-click question rather
+// than a database query.
+let _pt = null;                       // last payload, kept so filtering and a
+                                      // currency change re-render without refetching
+const _ptF = {sym:'', side:'', setup:'', exit:'', win:false, loss:false, q:''};
+let _ptSort = {key:'closed_at', dir:-1};
+
+function _ptMoney(v, rate, signed){ return window.Money.fmt(v, rate, signed); }
+function _ptCls(n){ return n > 0 ? 'pt-up' : n < 0 ? 'pt-down' : ''; }
+function _ptQty(q){
+  if(!q) return '0';
+  const dp = q >= 1000 ? 2 : q >= 1 ? 4 : 6;
+  return q.toFixed(dp);
+}
+
 async function loadPaper(){
   let d;
   try { d = await (await fetch('/api/paper')).json(); }
-  catch(e){ document.getElementById('paper-banner').innerHTML =
-    '<div class="cr-sig-warn">Could not reach /api/paper.</div>'; return; }
+  catch(e){
+    document.getElementById('paper-banner').innerHTML =
+      '<div class="cr-sig-warn">Could not reach /api/paper.</div>';
+    return;
+  }
+  _pt = d;
+  renderPaper();
+}
 
+function renderPaper(){
+  const d = _pt;
+  if(!d) return;
   const banner = document.getElementById('paper-banner');
+
   if(!d.enabled){
-    banner.innerHTML = '<div class="cr-sig-warn">Paper trading is switched off. '
-      + 'Set <code>PAPER_TRADING_ENABLED=true</code> to start a cycle.</div>';
+    banner.innerHTML = '<div class="cr-sig-warn">Paper trading is switched off — '
+      + 'turn it on in <a href="/settings">Settings</a>.</div>';
   } else if(!d.running){
     banner.innerHTML = '<div class="cr-note">No cycle running — one starts on the next tick.</div>';
   } else { banner.innerHTML = ''; }
 
   if(!d.running){
-    document.getElementById('paper-cards').innerHTML = '';
+    document.getElementById('paper-strip').innerHTML = '';
     document.getElementById('paper-positions').innerHTML = '<div class="empty">No open positions</div>';
-    document.getElementById('paper-scorecard').innerHTML = '<div class="empty">No cycle yet</div>';
     document.getElementById('paper-trades').innerHTML = '<div class="empty">No trades yet</div>';
+    document.getElementById('paper-scorecard').innerHTML = '';
+    document.getElementById('pt-open-count').textContent = '';
+    document.getElementById('pt-hist-count').textContent = '';
     return;
   }
 
-  const c = d.cycle, s = d.summary;
-  const progress = (d.equity - c.starting_wallet) / (c.target_wallet - c.starting_wallet) * 100;
-  document.getElementById('paper-cards').innerHTML = `
-    <div class="card"><div class="card-title">Equity</div>
-      <div class="card-value ${pnlClass(d.equity-c.starting_wallet)}">${money(d.equity)}</div>
-      <div class="card-sub">from ${money(c.starting_wallet)} · ${progress.toFixed(1)}% to target</div></div>
-    <div class="card"><div class="card-title">Free wallet</div>
-      <div class="card-value">${money(c.wallet)}</div>
-      <div class="card-sub">unrealised ${signed(d.unrealised)}</div></div>
-    <div class="card"><div class="card-title">Trades</div>
-      <div class="card-value">${s.trades}</div>
-      <div class="card-sub">${s.win_rate_pct}% won · streak ${s.longest_losing_streak}</div></div>
-    <div class="card"><div class="card-title">Net P&amp;L</div>
-      <div class="card-value ${pnlClass(s.net_pnl)}">${signed(s.net_pnl)}</div>
-      <div class="card-sub">costs ${money(s.trading_fees + s.funding_paid)}${
-        s.costs_as_pct_of_gross!=null ? ' · '+s.costs_as_pct_of_gross+'% of gross' : ''}</div></div>`;
+  const c = d.cycle, rate = d.usdt_inr || 102;
+  const margin = (d.positions || []).reduce((a, p) => a + p.margin, 0);
+  const realised = c.wallet - c.starting_wallet;
+  const span = Math.max(1, c.target_wallet - c.starting_wallet);
+  const pct = Math.max(0, Math.min(100, (c.wallet - c.starting_wallet) / span * 100));
 
-  document.getElementById('paper-positions').innerHTML = d.positions.length ? `
-    <div class="scroll"><table class="tbl"><thead><tr>
-      <th>Symbol</th><th>Side</th><th>Qty</th><th>Entry</th><th>Mark</th>
-      <th>Stop</th><th>Target</th><th>Liq</th><th>Margin</th><th>Unrealised</th>
-    </tr></thead><tbody>` + d.positions.map(p=>`<tr>
-      <td><b>${esc(p.symbol)}</b><div class="sub">${esc(p.signal_type)} · ${p.confidence}%</div></td>
-      <td class="${p.side==='long'?'pos':'neg'}">${p.side.toUpperCase()}</td>
-      <td>${p.qty}</td><td>${fmtPrice(p.entry)}</td><td>${fmtPrice(p.mark)}</td>
-      <td>${fmtPrice(p.stop)}${p.trailing?' ↑':''}</td>
-      <td>${fmtPrice(p.target)}</td><td>${fmtPrice(p.liq)}</td>
-      <td>${money(p.margin)}</td>
-      <td class="${pnlClass(p.unrealised)}">${signed(p.unrealised)}<div class="sub">${p.roe_pct}%</div></td>
-    </tr>`).join('') + '</tbody></table></div>'
-    : '<div class="empty">No open positions</div>';
+  document.getElementById('paper-strip').innerHTML = `
+    <div class="pt-cell"><div class="pt-k">Equity</div>
+      <div class="pt-v">${_ptMoney(d.equity, rate)}</div></div>
+    <div class="pt-cell"><div class="pt-k">Wallet</div>
+      <div class="pt-v">${_ptMoney(c.wallet, rate)}</div></div>
+    <div class="pt-cell"><div class="pt-k">Unrealised</div>
+      <div class="pt-v ${_ptCls(d.unrealised)}">${_ptMoney(d.unrealised, rate, true)}</div></div>
+    <div class="pt-cell"><div class="pt-k">Realised P&amp;L</div>
+      <div class="pt-v ${_ptCls(realised)}">${_ptMoney(realised, rate, true)}</div></div>
+    <div class="pt-cell"><div class="pt-k">Margin in use</div>
+      <div class="pt-v">${_ptMoney(margin, rate)}<small> · ${(d.positions||[]).length} open</small></div></div>
+    <div class="pt-cell"><div class="pt-k">Cycle ${c.id} · ${c.leverage}&times;</div>
+      <div class="pt-v" style="font-size:13px">${_ptMoney(c.starting_wallet, rate)} &rarr; ${_ptMoney(c.target_wallet, rate)}</div>
+      <div class="pt-rail"><i style="width:${pct.toFixed(1)}%"></i></div>
+      <div class="pt-railcap"><span>${pct.toFixed(0)}% there</span>
+        <span>${window.Money.get() === 'INR' ? 'figures in &#8377;' : '1 USDT = &#8377;' + rate}</span></div></div>`;
 
-  // Costs are shown beside gross on purpose: a run of small "wins" that are net
-  // losses is exactly what this page exists to make visible.
-  document.getElementById('paper-scorecard').innerHTML = `
-    <div class="scroll"><table class="tbl"><tbody>
-      <tr><td>Gross P&amp;L</td><td class="${pnlClass(s.gross_pnl)}">${signed(s.gross_pnl)}</td></tr>
-      <tr><td>Trading fees</td><td class="neg">-${money(s.trading_fees)}</td></tr>
-      <tr><td>Funding</td><td class="neg">-${money(s.funding_paid)}</td></tr>
-      <tr><td><b>Net P&amp;L</b></td><td class="${pnlClass(s.net_pnl)}"><b>${signed(s.net_pnl)}</b></td></tr>
-      <tr><td>Average win / loss</td><td>${signed(s.avg_win)} / ${signed(s.avg_loss)}</td></tr>
-      <tr><td>Realised reward:risk</td><td>${s.realised_reward_risk ?? '—'}</td></tr>
-      <tr><td>Expectancy per trade</td><td class="${pnlClass(s.expectancy_per_trade)}">${signed(s.expectancy_per_trade)}</td></tr>
-      <tr><td>Break-even move</td><td>${s.break_even_move_pct}%</td></tr>
-      <tr><td>Exits</td><td>${Object.entries(s.exits_by_reason||{}).map(
-        ([k,v])=>`${PAPER_REASON[k]||k} ×${v}`).join(', ') || '—'}</td></tr>
-    </tbody></table></div>
-    <div class="cr-note" style="margin-top:8px">Running at ${c.leverage}×,
-      risking ${(c.stop_pct_of_margin*100).toFixed(0)}% of margin per trade,
-      target ${(c.stop_pct_of_margin*c.reward_risk*100).toFixed(0)}%,
-      minimum confidence ${(c.min_confidence*100).toFixed(0)}%${
-      c.trailing_enabled?', trailing on':''}${c.scaled_sizing?', size scaled by confidence':''}.</div>`;
-
-  document.getElementById('paper-trades').innerHTML = d.trades.length ? `
-    <div class="scroll"><table class="tbl"><thead><tr>
-      <th>Closed</th><th>Symbol</th><th>Side</th><th>Entry</th><th>Exit</th>
-      <th>Why</th><th>Gross</th><th>Fees</th><th>Net</th><th>Wallet</th>
-    </tr></thead><tbody>` + d.trades.map(t=>`<tr>
-      <td class="sub">${new Date(t.closed_at).toLocaleString('en-IN',{day:'2-digit',month:'short',hour:'2-digit',minute:'2-digit'})}</td>
-      <td><b>${esc(t.symbol)}</b></td>
-      <td class="${t.side==='long'?'pos':'neg'}">${t.side.toUpperCase()}</td>
-      <td>${fmtPrice(t.entry)}</td><td>${fmtPrice(t.exit)}</td>
-      <td>${esc(PAPER_REASON[t.reason]||t.reason)}</td>
-      <td class="${pnlClass(t.gross)}">${signed(t.gross)}</td>
-      <td class="neg">-${money(t.fees + t.funding)}</td>
-      <td class="${pnlClass(t.net)}"><b>${signed(t.net)}</b><div class="sub">${t.roe_pct}%</div></td>
-      <td>${money(t.wallet_after)}</td>
-    </tr>`).join('') + '</tbody></table></div>'
-    : '<div class="empty">No trades closed yet</div>';
+  renderPaperPositions(d.positions || [], rate);
+  renderPaperHistory();
 }
+
+function renderPaperPositions(rows, rate){
+  const el = document.getElementById('paper-positions');
+  document.getElementById('pt-open-count').textContent =
+    rows.length ? rows.length + ' open' : '';
+  if(!rows.length){ el.innerHTML = '<div class="empty">No open positions</div>'; return; }
+
+  el.innerHTML = '<table><thead><tr>'
+    + '<th>Market</th><th class="r">Quantity</th><th class="r">Entry</th><th class="r">Mark</th>'
+    + '<th>Stop &middot; Target</th><th class="r">Margin</th><th class="r">Liq.</th>'
+    + '<th class="r">Unrealised</th><th class="r">ROE</th><th class="r">Opened</th>'
+    + '</tr></thead><tbody>'
+    + rows.map(p => {
+        const long = p.side === 'long';
+        const lo = Math.min(p.stop, p.target), hi = Math.max(p.stop, p.target);
+        const span = Math.max(1e-9, hi - lo);
+        const at = x => Math.max(0, Math.min(100, (x - lo) / span * 100));
+        const eAt = at(p.entry), mAt = at(p.mark);
+        const good = long ? p.mark >= p.entry : p.mark <= p.entry;
+        const col = good ? 'var(--pos)' : 'var(--neg)';
+        const fillL = Math.min(eAt, mAt), fillW = Math.abs(mAt - eAt);
+        const unit = p.symbol.replace(/USDT$/, '');
+        return `<tr>
+          <td><span class="pt-sym">${p.symbol}</span>`
+          + `<span class="pt-side ${long ? 'l' : 's'}">${p.side.toUpperCase()}</span>`
+          + (p.trailing ? '<span class="pt-trail">trailing</span>' : '')
+          + `<span class="pt-setup">${(p.signal_type||'').replace(/_/g,' ')} &middot; ${p.confidence}%</span></td>
+          <td class="r pt-num">${_ptQty(p.qty)} <span class="pt-unit">${unit}</span>
+            <span class="pt-notional">${_ptMoney(p.notional, rate)}</span></td>
+          <td class="r pt-num">${p.entry}</td>
+          <td class="r pt-num ${good ? 'pt-up' : 'pt-down'}">${p.mark}</td>
+          <td><div class="pt-prail">
+              <span class="pt-ptrack"></span>
+              <span class="pt-pfill" style="left:${fillL}%;width:${fillW}%;background:${col}"></span>
+              <span class="pt-ptick" style="left:${eAt}%"></span>
+              <span class="pt-pmark" style="left:${mAt}%;background:${col}"></span>
+              <span class="pt-plab" style="left:0">${long ? p.stop : p.target}</span>
+              <span class="pt-plab" style="right:0">${long ? p.target : p.stop}</span>
+            </div></td>
+          <td class="r pt-num">${_ptMoney(p.margin, rate)}</td>
+          <td class="r pt-num pt-muted">${p.liq}</td>
+          <td class="r pt-num ${_ptCls(p.unrealised)}">${_ptMoney(p.unrealised, rate, true)}</td>
+          <td class="r pt-num ${_ptCls(p.roe_pct)}">${p.roe_pct > 0 ? '+' : ''}${p.roe_pct}%</td>
+          <td class="r pt-num pt-muted">${fmtTime(p.opened_at)}</td>
+        </tr>`;
+      }).join('')
+    + '</tbody></table>';
+}
+
+function _ptFill(id, values){
+  const sel = document.getElementById(id);
+  if(!sel) return;
+  const keep = sel.value;
+  const first = sel.options[0];
+  sel.innerHTML = '';
+  sel.appendChild(first);
+  values.forEach(v => {
+    const o = document.createElement('option');
+    o.value = v; o.textContent = String(v).replace(/_/g, ' ');
+    sel.appendChild(o);
+  });
+  if(values.includes(keep)) sel.value = keep;
+}
+
+function renderPaperHistory(){
+  const d = _pt;
+  if(!d || !d.running) return;
+  const all = d.trades || [], rate = d.usdt_inr || 102;
+
+  _ptFill('pf-sym',   [...new Set(all.map(t => t.symbol))].sort());
+  _ptFill('pf-setup', [...new Set(all.map(t => t.signal_type).filter(Boolean))].sort());
+  _ptFill('pf-exit',  [...new Set(all.map(t => t.reason).filter(Boolean))].sort());
+
+  const q = _ptF.q.toLowerCase();
+  let rows = all.filter(t =>
+    (!_ptF.sym   || t.symbol === _ptF.sym) &&
+    (!_ptF.side  || t.side === _ptF.side) &&
+    (!_ptF.setup || t.signal_type === _ptF.setup) &&
+    (!_ptF.exit  || t.reason === _ptF.exit) &&
+    (!_ptF.win   || t.net > 0) &&
+    (!_ptF.loss  || t.net <= 0) &&
+    (!q || ((t.symbol + ' ' + (t.signal_type||'') + ' ' + (t.reason||'')).toLowerCase().includes(q)))
+  );
+
+  const k = _ptSort.key, dir = _ptSort.dir;
+  rows = rows.slice().sort((a, b) => {
+    const x = a[k], y = b[k];
+    if(x === y) return 0;
+    return (x > y ? 1 : -1) * dir;
+  });
+
+  document.getElementById('pt-hist-count').textContent =
+    `showing ${rows.length} of ${all.length} closed`;
+
+  const th = (key, label, right) =>
+    `<th class="sortable${right ? ' r' : ''}" data-sort="${key}">${label}`
+    + (k === key ? `<span class="arw">${dir > 0 ? '&uarr;' : '&darr;'}</span>` : '') + '</th>';
+
+  const el = document.getElementById('paper-trades');
+  el.innerHTML = rows.length
+    ? '<table><thead><tr>'
+      + th('closed_at','Closed') + '<th>Market</th>'
+      + '<th class="r">Quantity</th><th class="r">Entry &rarr; Exit</th>'
+      + th('reason','Exit') + th('gross','Gross',1) + '<th class="r">Fees</th>'
+      + '<th class="r">Funding</th>' + th('net','Net',1) + th('roe_pct','ROE',1)
+      + th('hours_held','Held',1) + '<th class="r">Wallet</th>'
+      + '</tr></thead><tbody>'
+      + rows.map(t => {
+          const r = t.usdt_inr || rate;
+          const unit = t.symbol.replace(/USDT$/, '');
+          return `<tr>
+            <td class="pt-num pt-muted">${fmtTime(t.closed_at)}</td>
+            <td><span class="pt-sym">${t.symbol}</span>`
+            + `<span class="pt-side ${t.side === 'long' ? 'l' : 's'}">${t.side.toUpperCase()}</span>`
+            + `<span class="pt-setup">${(t.signal_type||'').replace(/_/g,' ')} &middot; ${t.confidence}%</span></td>
+            <td class="r pt-num">${_ptQty(t.qty)} <span class="pt-unit">${unit}</span></td>
+            <td class="r pt-num">${t.entry} <span class="pt-muted">&rarr;</span> ${t.exit}</td>
+            <td><span class="pt-tag ${t.reason}">${t.reason}</span></td>
+            <td class="r pt-num ${_ptCls(t.gross)}">${_ptMoney(t.gross, r, true)}</td>
+            <td class="r pt-num pt-muted">${_ptMoney(-t.fees, r)}</td>
+            <td class="r pt-num pt-muted">${_ptMoney(-t.funding, r)}</td>
+            <td class="r pt-num ${_ptCls(t.net)}" style="font-weight:600">${_ptMoney(t.net, r, true)}</td>
+            <td class="r pt-num ${_ptCls(t.roe_pct)}">${t.roe_pct > 0 ? '+' : ''}${t.roe_pct}%</td>
+            <td class="r pt-num">${t.hours_held < 1 ? Math.round(t.hours_held*60) + 'm' : t.hours_held + 'h'}</td>
+            <td class="r pt-num pt-muted">${_ptMoney(t.wallet_after, r)}</td>
+          </tr>`;
+        }).join('')
+      + '</tbody></table>'
+    : '<div class="empty">No trades match these filters</div>';
+
+  el.querySelectorAll('th.sortable').forEach(h => h.addEventListener('click', () => {
+    const key = h.dataset.sort;
+    _ptSort = {key: key, dir: _ptSort.key === key ? -_ptSort.dir : -1};
+    renderPaperHistory();
+  }));
+
+  const filtered = !!(_ptF.sym || _ptF.side || _ptF.setup || _ptF.exit
+                      || _ptF.win || _ptF.loss || _ptF.q);
+  renderPaperSummary(rows, rate, filtered);
+}
+
+function renderPaperSummary(rows, rate, filtered){
+  const el = document.getElementById('paper-scorecard');
+  if(!rows.length){ el.innerHTML = ''; return; }
+  const n = rows.length;
+  const wins = rows.filter(t => t.net > 0), losses = rows.filter(t => t.net <= 0);
+  const net = rows.reduce((a,t) => a + t.net, 0);
+  const gross = rows.reduce((a,t) => a + t.gross, 0);
+  const grossWon = rows.reduce((a,t) => a + Math.max(0, t.gross), 0);
+  const fees = rows.reduce((a,t) => a + t.fees, 0);
+  const funding = rows.reduce((a,t) => a + t.funding, 0);
+  const avgW = wins.length ? wins.reduce((a,t)=>a+t.net,0)/wins.length : 0;
+  const avgL = losses.length ? losses.reduce((a,t)=>a+t.net,0)/losses.length : 0;
+  let streak = 0, worst = 0;
+  rows.slice().sort((a,b) => (a.closed_at > b.closed_at ? 1 : -1))
+      .forEach(t => { streak = t.net <= 0 ? streak+1 : 0; worst = Math.max(worst, streak); });
+
+  // Unfiltered, the server's figure wins: /api/paper returns only the most
+  // recent trades, so a ratio computed here would quietly describe a window
+  // rather than the cycle. Filtered, the window IS the question being asked.
+  const srv = (_pt && _pt.summary) ? _pt.summary.costs_as_pct_of_gross : null;
+  const costRatio = (!filtered && srv !== null && srv !== undefined)
+    ? srv.toFixed(1) + '%'
+    : (grossWon > 0 ? ((fees + funding) / grossWon * 100).toFixed(1) + '%' : '—');
+
+  const cell = (k, v, cls) =>
+    `<div class="pt-cell"><div class="pt-k">${k}</div><div class="pt-v ${cls||''}">${v}</div></div>`;
+  el.innerHTML =
+      cell('Win rate', (wins.length / n * 100).toFixed(1) + '%')
+    + cell('Gross P&amp;L', _ptMoney(gross, rate, true), _ptCls(gross))
+    + cell('Trading fees', _ptMoney(-fees, rate), 'pt-down')
+    + cell('Funding', _ptMoney(-funding, rate), 'pt-down')
+    + cell('Net P&amp;L', _ptMoney(net, rate, true), _ptCls(net))
+    + cell('Expectancy', _ptMoney(net / n, rate, true), _ptCls(net))
+    + cell('Realised R:R', avgL ? Math.abs(avgW/avgL).toFixed(2) : '—')
+    + cell('Costs / gross', costRatio)
+    + cell('Worst streak', worst);
+}
+
+(function wirePaperFilters(){
+  const bind = (id, key) => {
+    const el = document.getElementById(id);
+    if(el) el.addEventListener('input', () => { _ptF[key] = el.value; renderPaperHistory(); });
+  };
+  bind('pf-sym','sym'); bind('pf-side','side'); bind('pf-setup','setup');
+  bind('pf-exit','exit'); bind('pf-q','q');
+  [['pf-win','win','pf-loss','loss'], ['pf-loss','loss','pf-win','win']]
+    .forEach(([id, key, otherId, otherKey]) => {
+      const b = document.getElementById(id);
+      if(!b) return;
+      b.addEventListener('click', () => {
+        _ptF[key] = !_ptF[key];
+        b.setAttribute('aria-pressed', String(_ptF[key]));
+        if(_ptF[key]){
+          _ptF[otherKey] = false;
+          document.getElementById(otherId).setAttribute('aria-pressed','false');
+        }
+        renderPaperHistory();
+      });
+    });
+  const reset = document.getElementById('pf-reset');
+  if(reset) reset.addEventListener('click', () => {
+    Object.assign(_ptF, {sym:'',side:'',setup:'',exit:'',win:false,loss:false,q:''});
+    ['pf-sym','pf-side','pf-setup','pf-exit','pf-q'].forEach(i => {
+      const e = document.getElementById(i); if(e) e.value = '';
+    });
+    ['pf-win','pf-loss'].forEach(i => {
+      const e = document.getElementById(i); if(e) e.setAttribute('aria-pressed','false');
+    });
+    renderPaperHistory();
+  });
+  // A currency change is a repaint, never a refetch.
+  document.addEventListener('ccychange', () => { if(_pt) renderPaper(); });
+})();
 
 
 // Copy each table's column names onto its cells so the phone layout can show
@@ -1838,6 +2169,9 @@ function switchTab(tab){
   if(tab==='historic')  loadHistoric();
   if(tab==='watchlist') loadWatchlist();
   if(tab==='dashboard') loadDashboard();
+  // Panels are no longer rebuilt while hidden, so arriving at one means its
+  // data may be a refresh cycle old. Fetch what this tab actually needs.
+  if(tab==='crypto') refresh();
 }
 
 function toggleMore(){
@@ -2123,30 +2457,45 @@ function setHTML(id, value){
   return !!el;
 }
 
+// Which tabs need which payload. Rebuilding a panel nobody is looking at
+// still costs a full style recalc, layout and paint — every thirty seconds,
+// for markup that is display:none. The crypto cards alone were being torn
+// down and rebuilt while the Dashboard was on screen, which is most of the
+// jank this page had.
+const TAB_NEEDS = {
+  dashboard: ['coins','signals'],
+  crypto:    ['coins','signals','commodities'],
+  watchlist: ['coins'],
+  paper:     ['paper'],
+};
+function _activeTab(){
+  const el = document.querySelector('.tab-content.active');
+  return el ? el.id.replace(/^tab-/, '') : 'dashboard';
+}
+
 async function refresh(){
+  // Nothing on a backgrounded tab is worth a request. The browser throttles
+  // the timer anyway; this stops the work the timer would still queue up.
+  if(document.hidden){ setText('refresh-label', 'Paused'); return; }
   try{
+    const need = TAB_NEEDS[_activeTab()] || [];
     const status = await jget('/api/status',{});
     // The sidebar footer is where uptime lives.
     setText('side-uptime', 'up ' + fmtUptime(status.uptime_seconds));
     setText('side-status', 'Running');
 
-    const [crCoins,crSignals,crCommodities]=await Promise.all([
-      jget('/api/crypto/coins',[]),
-      jget('/api/crypto/signals',[]),
-      jget('/api/commodities',[]),
-    ]);
-    setText('stat-crypto-coins', crCoins.length);
-    setText('stat-crypto-signals', crSignals.length);
-    renderCryptoCoins(crCoins);
-    renderCryptoSignals(crSignals);
-    renderCommodities(crCommodities);
-
-    // Only when the tab is actually visible — polling a hidden panel is
-    // wasted work on a small instance with one shared CPU tenth.
-    if(document.getElementById('tab-paper')
-       && document.getElementById('tab-paper').classList.contains('active')){
-      await loadPaper();
+    if(need.includes('coins') || need.includes('signals') || need.includes('commodities')){
+      const [crCoins,crSignals,crCommodities]=await Promise.all([
+        need.includes('coins')       ? jget('/api/crypto/coins',[])   : Promise.resolve(null),
+        need.includes('signals')     ? jget('/api/crypto/signals',[]) : Promise.resolve(null),
+        need.includes('commodities') ? jget('/api/commodities',[])    : Promise.resolve(null),
+      ]);
+      if(crCoins){ setText('stat-crypto-coins', crCoins.length); renderCryptoCoins(crCoins); }
+      if(crSignals){ setText('stat-crypto-signals', crSignals.length); renderCryptoSignals(crSignals); }
+      if(crCommodities) renderCommodities(crCommodities);
     }
+
+    if(need.includes('paper')) await loadPaper();
 
     setText('last-updated', 'Updated: '+new Date().toLocaleTimeString('en-IN',_IST)+' IST');
     setText('refresh-label', 'Next in 30s');
@@ -2155,6 +2504,11 @@ async function refresh(){
     setText('refresh-label', 'Error — retrying…');
   }
 }
+
+// Coming back to a tab that was paused should show current data at once,
+// not whatever was on screen when it was hidden.
+document.addEventListener('visibilitychange', () => { if(!document.hidden) refresh(); });
+
 switchTab((location.hash||'#dashboard').slice(1));
 refresh();
 setInterval(refresh,30000);
@@ -3905,6 +4259,53 @@ async function apiFetch(url, opts){
   }
   return res;
 }
+
+// ── Display currency ────────────────────────────────────────────────────
+// Every money figure the server sends is INR — margin, P&L, fees, wallet —
+// because position size is computed as qty x price x usdt_inr. Prices are
+// already USDT and must never be converted; putting a rupee sign on an
+// entry price would simply be wrong.
+//
+// The rate travels with the data rather than being assumed here: a closed
+// trade keeps the rate it was booked at, so reading history back through
+// today's rate cannot silently restate it.
+//
+// The choice is per-browser on purpose. It is a display preference, not
+// account state, so it belongs in localStorage rather than a round trip.
+window.Money = (function(){
+  var KEY = 'display_ccy', ccy = 'USDT';
+  try { ccy = localStorage.getItem(KEY) || 'USDT'; } catch(e){}
+
+  function get(){ return ccy; }
+  function set(next){
+    ccy = (next === 'INR') ? 'INR' : 'USDT';
+    try { localStorage.setItem(KEY, ccy); } catch(e){}
+    document.dispatchEvent(new CustomEvent('ccychange', {detail: ccy}));
+  }
+  // rate: what one USDT was worth in INR for THIS figure.
+  function fmt(inrValue, rate, signed){
+    if(inrValue === null || inrValue === undefined || isNaN(inrValue)) return '—';
+    rate = rate || 102;
+    var v = (ccy === 'INR') ? inrValue : inrValue / rate;
+    var sign = signed ? (v > 0 ? '+' : v < 0 ? '−' : '') : (v < 0 ? '−' : '');
+    var body = Math.abs(v).toLocaleString('en-IN',
+      {minimumFractionDigits: 2, maximumFractionDigits: 2});
+    return sign + (ccy === 'INR' ? '₹' : '') + body + (ccy === 'INR' ? '' : ' USDT');
+  }
+  function label(){ return ccy === 'INR' ? '₹' : 'USDT'; }
+
+  function mount(){
+    var sel = document.getElementById('ccy-select');
+    if(!sel) return;
+    sel.value = ccy;
+    sel.addEventListener('change', function(){ set(sel.value); });
+  }
+  if(document.readyState === 'loading')
+    document.addEventListener('DOMContentLoaded', mount);
+  else mount();
+
+  return {get: get, set: set, fmt: fmt, label: label};
+})();
 </script>
 """
 

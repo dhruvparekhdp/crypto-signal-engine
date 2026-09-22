@@ -251,6 +251,10 @@ class PaperTrade(Base):
     coin_qty: Mapped[float] = mapped_column(Float, default=0.0)
     margin: Mapped[float] = mapped_column(Float)
     leverage: Mapped[float] = mapped_column(Float)
+    # The rate this trade was actually booked at. Money on the row is INR;
+    # reading it back through today's rate would silently restate history
+    # every time the rate moves.
+    usdt_inr: Mapped[float] = mapped_column(Float, default=102.0)
 
     stop_price: Mapped[float] = mapped_column(Float, default=0.0)
     target_price: Mapped[float] = mapped_column(Float, default=0.0)

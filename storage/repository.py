@@ -308,6 +308,7 @@ class Repository:
             coin_qty=pos.coin_qty,
             margin=pos.margin,
             leverage=pos.leverage,
+            usdt_inr=pos.usdt_inr,
             stop_price=pos.stop_price,
             target_price=pos.target_price,
             exit_reason=trade.reason.value,

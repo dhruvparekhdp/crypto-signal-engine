@@ -143,6 +143,7 @@ async def _migrate_columns(conn) -> None:
             usdt_inr FLOAT DEFAULT 102.0,
             alert_telegram BOOLEAN DEFAULT TRUE
         )""",
+        "ALTER TABLE paper_trades ADD COLUMN IF NOT EXISTS usdt_inr FLOAT DEFAULT 102.0",
         "INSERT INTO paper_trading_config (id) VALUES (1) ON CONFLICT (id) DO NOTHING",
         "ALTER TABLE paper_trading_config ADD COLUMN IF NOT EXISTS enabled BOOLEAN DEFAULT TRUE",
         # admin_auth table — password hash + salt + active session
