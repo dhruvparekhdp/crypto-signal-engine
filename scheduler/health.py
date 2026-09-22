@@ -1963,22 +1963,9 @@ function renderPaperSummary(rows, rate, filtered){
 // Copy each table's column names onto its cells so the phone layout can show
 // them beside the values. Cheap, idempotent, and keeps every table builder
 // free of presentation concerns.
-function labelTables(root){
-  (root||document).querySelectorAll('table.tbl').forEach(t=>{
-    const heads=[...t.querySelectorAll('thead th')].map(th=>th.textContent.trim());
-    if(!heads.length) return;
-    t.querySelectorAll('tbody tr').forEach(tr=>{
-      [...tr.children].forEach((td,i)=>{
-        if(heads[i] && !td.hasAttribute('data-label')) td.setAttribute('data-label',heads[i]);
-      });
-    });
-  });
-}
-// One observer instead of a call at the end of every render function — the
-// tables are built in a dozen places and one missed call is an unlabelled
-// table on a phone with no other symptom.
-new MutationObserver(()=>labelTables()).observe(document.documentElement,
-  {childList:true,subtree:true});
+// labelTables and its observer now live in the shared theme snippet, so the
+// four other pages get them too. A second copy here meant two observers
+// walking the same DOM on every mutation.
 
 // ── SIDEBAR VIEWS ─────────────────────────────────────────────────────────
 // Everything below computes from endpoints that already exist. Where a number
@@ -3741,7 +3728,7 @@ th.num{text-align:right}
   </div>
 
   <h2>Predictions <span class="hint" id="tbl-count"></span></h2>
-  <div class="scroll"><table id="tbl">
+  <div class="scroll"><table id="tbl" class="tbl">
     <thead><tr>
       <th data-k="timestamp">Fired</th>
       <th data-k="symbol">Symbol</th>
@@ -4219,6 +4206,27 @@ load(); setInterval(load, 20000);
 _THEME_SNIPPET = """
 <style>
 /* Theme palettes */
+/* Wide tables become cards on a phone. A fifteen-column audit row in a
+   horizontal scroller is readable in the sense that the pixels are present:
+   you cannot see a symbol and its result at the same time, which is the only
+   reason to look. Rows stack, each value carries its column name.
+   Opt in with class="tbl"; labelTables fills the labels. */
+@media(max-width:640px){
+  .tbl,.tbl tbody,.tbl tr,.tbl td{display:block;width:100%}
+  .tbl thead{display:none}
+  .tbl tr{background:var(--panel,#171f2e);border:1px solid var(--line,#28324a);
+    border-radius:9px;padding:10px 12px;margin-bottom:9px}
+  .tbl td{border:none;padding:3px 0;white-space:normal;font-size:12px;
+    display:flex;justify-content:space-between;align-items:baseline;gap:12px}
+  .tbl td::before{content:attr(data-label);color:var(--muted2,#6d7b93);
+    font-size:10px;text-transform:uppercase;letter-spacing:.05em;flex:none}
+  .tbl td:first-child{padding-bottom:7px;margin-bottom:5px;
+    border-bottom:1px solid var(--line2,#1a2333);font-weight:600}
+  /* A cell holding a panel is a message, not a value — no label, no columns. */
+  .tbl td:has(.pnl){display:block;padding:0}
+  .tbl td:has(.pnl)::before{content:none}
+}
+
 /* Panel states — one look for loading, empty and failed, on every page. */
 .pnl{padding:20px 16px;text-align:center;border-radius:10px;
   background:var(--panel2,#111827);border:1px solid var(--line,#28324a)}
@@ -4366,6 +4374,28 @@ async function apiFetch(url, opts){
     if(res.status === 401) localStorage.removeItem('api_token');
   }
   return res;
+}
+
+// Carry each table's column names onto its cells so the phone layout can
+// print them beside the values. One observer rather than a call at the end
+// of every render: tables are built in a dozen places across five pages and
+// one missed call is an unlabelled table with no other symptom.
+if(!window.labelTables){
+  window.labelTables = function(root){
+    (root||document).querySelectorAll('table.tbl').forEach(function(t){
+      var heads = [].slice.call(t.querySelectorAll('thead th'))
+                    .map(function(th){ return th.textContent.trim(); });
+      if(!heads.length) return;
+      t.querySelectorAll('tbody tr').forEach(function(tr){
+        [].slice.call(tr.children).forEach(function(td, i){
+          if(heads[i] && !td.hasAttribute('data-label'))
+            td.setAttribute('data-label', heads[i]);
+        });
+      });
+    });
+  };
+  new MutationObserver(function(){ window.labelTables(); })
+    .observe(document.documentElement, {childList:true, subtree:true});
 }
 
 // ── Panel states ────────────────────────────────────────────────────────

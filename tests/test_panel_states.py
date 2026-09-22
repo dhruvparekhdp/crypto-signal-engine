@@ -89,3 +89,33 @@ class TestEmptyStatesSayWhy(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestWideTablesBecomeCards(unittest.TestCase):
+    """
+    /audit's signal table carries fifteen columns. In a horizontal scroller
+    that is readable only in the sense that the pixels are present — you
+    cannot see a symbol and its result at the same time, which is the only
+    reason to open it. The treatment the dashboard already had now lives in
+    the shared snippet, so audit, data and predict inherit it.
+    """
+
+    def test_every_page_has_the_card_rules(self):
+        for name, page in PAGES.items():
+            with self.subTest(page=name):
+                self.assertIn(".tbl thead{display:none}", page)
+
+    def test_every_page_has_the_labeller(self):
+        for name, page in PAGES.items():
+            with self.subTest(page=name):
+                self.assertIn("labelTables", page)
+
+    def test_the_audit_table_opts_in(self):
+        self.assertIn('<table id="tbl" class="tbl">', PAGES["audit"])
+
+    def test_a_panel_inside_a_cell_is_not_given_a_column_label(self):
+        """
+        The empty and error states render inside a full-width cell. Treated as
+        a value it would print "Fired" beside "Could not load the audit".
+        """
+        self.assertIn(".tbl td:has(.pnl)::before{content:none}", PAGES["audit"])

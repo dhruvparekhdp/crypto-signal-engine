@@ -88,8 +88,16 @@ class TestPhoneTables(unittest.TestCase):
         A dozen places build tables; one missed call is an unlabelled table on
         a phone with no other symptom, so an observer does it centrally.
         """
-        self.assertIn("function labelTables(", self.html)
+        self.assertIn("labelTables", self.html)
         self.assertIn("MutationObserver", self.html)
+
+    def test_only_one_observer_walks_the_dom(self):
+        """
+        The helper moved into the shared snippet so the other four pages get
+        it. The dashboard's own copy then became a second observer doing
+        identical work on every mutation.
+        """
+        self.assertEqual(self.html.count("new MutationObserver"), 1)
 
     def test_the_table_class_is_actually_styled(self):
         """It was used by every new view and defined nowhere."""
