@@ -304,3 +304,29 @@ class TestEveryDestinationIsReachableOnAPhone(unittest.TestCase):
         """A label reading 'Paused' outlived the pause and looked like a fault."""
         self.assertNotIn("setText('refresh-label', 'Paused')", self.html)
         self.assertIn("pageshow", self.html)
+
+
+class TestTheMoreSheetIsASheet(unittest.TestCase):
+    """
+    Opening More wrapped the bar into extra rows, which pushed the five
+    primary tabs up the screen and reflowed the page behind them — the nav
+    moving out from under the thumb at the moment it is being used. It now
+    renders as a three-across grid of cards over the page.
+    """
+
+    def setUp(self):
+        self.css = health._HTML[:health._HTML.index("</style>")]
+
+    def test_the_secondary_items_lay_out_three_across(self):
+        self.assertIn("flex:0 0 calc(33.333% - 3px)", self.css)
+
+    def test_the_basis_accounts_for_its_own_margin(self):
+        """Three at a flat 33.333% plus margins overflows and the third wraps."""
+        self.assertNotIn("flex:0 0 33.333%;max-width:33.333%", self.css)
+
+    def test_the_sheet_clears_the_home_indicator(self):
+        self.assertIn("padding-bottom:calc(4px + env(safe-area-inset-bottom,0px))",
+                      self.css)
+
+    def test_it_reads_as_a_surface_in_front_of_the_page(self):
+        self.assertIn(".sidebar.more-open{box-shadow:", self.css)

@@ -1360,8 +1360,21 @@ section h2{color:var(--accent-soft)}
   .sidebar{overflow-x:visible;justify-content:space-around}
   .side-secondary{display:none}
   .side-more{display:flex}
-  .sidebar.more-open .side-secondary{display:flex}
-  .sidebar.more-open{flex-wrap:wrap;padding-bottom:4px}
+  /* Opening it wrapped the bar into a second and third row, which pushed
+     the five primary tabs up the screen and reflowed the page behind. A
+     sheet leaves the bar where the thumb last saw it. */
+  .sidebar.more-open{flex-wrap:wrap;padding-bottom:calc(4px + env(safe-area-inset-bottom,0px))}
+  .sidebar.more-open .side-secondary{
+    display:flex;flex-direction:column;justify-content:center;
+    /* Three across, less the horizontal margin, or the third wraps. */
+    flex:0 0 calc(33.333% - 3px);max-width:calc(33.333% - 3px);
+    padding:13px 4px;gap:3px;border-radius:10px;
+    background:var(--panel2);border:1px solid var(--line2);
+    margin:3px 1.5px}
+  .sidebar.more-open .side-secondary svg{width:19px;height:19px}
+  .sidebar.more-open .side-secondary span{font-size:10px;line-height:1.3}
+  /* The sheet is the surface in front; lift it off the page behind. */
+  .sidebar.more-open{box-shadow:0 -10px 28px rgba(0,0,0,.34)}
   .more-scrim{position:fixed;inset:0;background:rgba(0,0,0,.62);z-index:40;display:none}
   .more-scrim.on{display:block}
 }
