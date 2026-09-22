@@ -55,6 +55,35 @@ def _clean_factors(raw, allowed: list[str]) -> str:
     return ",".join([f for f in keep if f in allowed][:4])
 
 
+def market_context(states, current: str, limit: int = 8) -> str:
+    """
+    The rest of the book, so the reviewer sees more than one chart.
+
+    Deliberately only what is actually collected. Crude, the dollar index and
+    the yield curve are not in this system — TwelveData refuses WTI on the
+    current plan and nothing has ever fetched a bond. Naming them in the
+    prompt would not make them appear; it would make the model supply them
+    from memory, months stale, and that invented number would then move a
+    confidence score. What is here is real and current.
+
+    For a twenty-minute scalp this is also the more useful comparison: whether
+    the book is moving together or the symbol is alone matters at that
+    horizon, where the ten-year does not.
+    """
+    if not states:
+        return "no other markets available"
+    rows = []
+    for st in states:
+        if st.current_price <= 0:
+            continue
+        chg = ((st.current_price - st.price_24h_ago) / st.price_24h_ago * 100.0
+               if getattr(st, "price_24h_ago", 0) else 0.0)
+        tag = " <- this one" if st.symbol == current else ""
+        rows.append(f"  {st.symbol.upper():<10} {chg:+6.2f}% 24h  "
+                    f"RSI {st.rsi_14:>4.0f}  flow {st.cvd_trend or 'n/a'}{tag}")
+    return "\n".join(rows[:limit]) if rows else "no other markets available"
+
+
 class GroqSentinel:
     """Async client for Groq-powered sanity review and macro regime assessment."""
 
@@ -67,7 +96,8 @@ class GroqSentinel:
         return bool(settings.groq_api_key and settings.groq_api_key.get_secret_value())
 
     async def review_signal_candidate(
-        self, sig: CryptoSignal, state: CryptoState, model: str | None = None
+        self, sig: CryptoSignal, state: CryptoState, model: str | None = None,
+        book: list | None = None,
     ) -> tuple[float, str, str]:
         """
         Pre-signal second opinion.
@@ -108,38 +138,27 @@ class GroqSentinel:
             f"Order Flow / CVD: {cvd_str}\n"
             f"Derivatives: Funding {funding_str}, Open Interest {oi_str}\n"
             f"Sentiment: {state.sentiment_score:+.2f}\n"
+            f"\nRest of the book right now:\n{market_context(book, sig.symbol)}\n"
         )
 
         system_prompt = (
-            "You have traded crypto perpetuals for fifteen years, and for most of "
-            "them you were the person who said no.\n\n"
-            "Someone on your desk is about to take the trade below. They want your "
-            "read before they click. You are not forecasting where price goes — "
-            "you are answering one question: is there something here that makes "
-            "this a worse trade than it looks on the card?\n\n"
-            "What actually catches people:\n"
-            "- Funding crowded against the position. Everyone is already on this "
-            "side and paying rent to stay there.\n"
-            "- Open interest that piled in on the way to this level, so the move "
-            "has already been paid for.\n"
-            "- Aggressive flow leaning the other way while price holds up. Someone "
-            "is being filled into strength.\n"
-            "- A stop parked inside the market's ordinary noise, or a target that "
-            "needs a move this market does not make in the time allowed.\n\n"
-            "Most trades are fine. Say so plainly and move on — a reviewer who "
-            "flags everything is worth nothing to anybody. Save REJECT for when "
-            "the trade is structurally broken, not merely unexciting.\n\n"
-            "Write the summary the way you would say it across the desk: one "
-            "sentence, plain words, no hedging and no throat-clearing.\n\n"
-            "Tag what you saw using only these labels:\n"
-            f"{_FACTOR_HELP}\n\n"
-            "Reply with JSON only:\n"
-            "{\n"
-            '  "verdict": "APPROVE" | "CAUTION" | "REJECT",\n'
-            '  "confidence_delta": float between -0.04 and +0.03,\n'
-            '  "factors": ["label", ...],\n'
-            '  "summary": "one sentence, under 120 characters"\n'
-            "}"
+            "You have traded crypto perpetuals for fifteen years and you were "
+            "usually the one saying no.\n\n"
+            "Work it out before you answer. Check the levels against the "
+            "market's own volatility, check the flow and funding against the "
+            "direction, check whether the rest of the book agrees. Then decide.\n\n"
+            "Judge only what is below. You have no news, no crude, no dollar "
+            "index and no yields — if it is not in the data, you do not know "
+            "it, and guessing is worse than saying nothing.\n\n"
+            "Most trades are fine; say so and move on. REJECT is for "
+            "structurally broken, not merely dull.\n\n"
+            f"Tags, use only these: {_FACTOR_HELP}\n\n"
+            "JSON only:\n"
+            '{"reasoning": "the one thing that decided it, under 100 chars", '
+            '"verdict": "APPROVE|CAUTION|REJECT", '
+            '"confidence_delta": -0.04 to 0.03, '
+            '"factors": ["tag"], '
+            '"summary": "one sentence as you would say it, under 120 chars"}'
         )
 
         headers = {
@@ -154,7 +173,7 @@ class GroqSentinel:
             ],
             "response_format": {"type": "json_object"},
             "temperature": 0.2,
-            "max_tokens": 150,
+            "max_tokens": 320,
         }
 
         try:
@@ -229,34 +248,20 @@ class GroqSentinel:
         )
 
         system_prompt = (
-            "A trade you looked at earlier has closed. You are doing the thing "
-            "good desks do at the end of the day — working out whether a loss "
-            "was bad luck or a bad decision, and whether a win was skill or a "
-            "coin flip that happened to land your way.\n\n"
-            "Be honest about the winners too. A trade that made money because "
-            "the market gapped in your favour is not an edge you can repeat, "
-            "and saying so now is worth more than the profit was.\n\n"
-            "Things worth naming:\n"
-            "- Was the stop somewhere the market was always going to reach on "
-            "ordinary noise?\n"
-            "- Did it simply never move, and the clock closed it? Then the "
-            "horizon was wrong, not the direction.\n"
-            "- Did fees and funding take more than the idea was ever going to "
-            "make?\n"
-            "- Was the direction right but the entry level careless?\n\n"
-            "If the trade was fine and the market just went the other way, say "
-            "that. Not every loss has a lesson, and inventing one teaches the "
-            "wrong thing.\n\n"
-            "Write like you are talking, not filing a report. One or two "
-            "sentences.\n\n"
-            "Tag it using only these labels:\n"
-            f"{_POST_FACTOR_HELP}\n\n"
-            "Reply with JSON only:\n"
-            "{\n"
-            '  "verdict": "GOOD_TRADE" | "BAD_LUCK" | "FLAWED_SETUP" | "LUCKY",\n'
-            '  "factors": ["label", ...],\n'
-            '  "lesson": "one or two sentences, under 200 characters"\n'
-            "}"
+            "A trade you looked at earlier has closed. Work out whether the "
+            "loss was bad luck or a bad decision — and whether the win was "
+            "skill or a coin flip that landed your way.\n\n"
+            "Think it through first: compare what was planned against what "
+            "price did, then against what it cost. A winner that needed a gap "
+            "is not an edge. A loss with no lesson is allowed — inventing one "
+            "teaches the wrong thing.\n\n"
+            "Judge only the numbers below. You have no news and no macro.\n\n"
+            f"Tags, use only these: {_POST_FACTOR_HELP}\n\n"
+            "JSON only:\n"
+            '{"reasoning": "what actually decided it, under 150 chars", '
+            '"verdict": "GOOD_TRADE|BAD_LUCK|FLAWED_SETUP|LUCKY", '
+            '"factors": ["tag"], '
+            '"lesson": "one or two sentences as you would say them, under 200 chars"}'
         )
 
         payload: dict[str, Any] = {
@@ -267,8 +272,10 @@ class GroqSentinel:
             ],
             "response_format": {"type": "json_object"},
             "temperature": 0.3,
-            "max_tokens": 250,
+            "max_tokens": 700,
         }
+        if settings.groq_reasoning_effort:
+            payload["reasoning_effort"] = settings.groq_reasoning_effort
         headers = {"Authorization": f"Bearer {api_key}",
                    "Content-Type": "application/json"}
 
@@ -278,6 +285,12 @@ class GroqSentinel:
             # that gives up early is worth less than one that waits.
             async with httpx.AsyncClient(timeout=20.0) as client:
                 resp = await client.post(GROQ_ENDPOINT, json=payload, headers=headers)
+                # A 400 is more often the extra parameter than the model, so
+                # drop that first; downgrading the model on a parameter fault
+                # would quietly cost judgement for no reason.
+                if resp.status_code == 400 and "reasoning_effort" in payload:
+                    payload.pop("reasoning_effort")
+                    resp = await client.post(GROQ_ENDPOINT, json=payload, headers=headers)
                 if resp.status_code in (400, 404) and active_model != FALLBACK_MODEL:
                     payload["model"] = FALLBACK_MODEL
                     active_model = FALLBACK_MODEL
@@ -294,7 +307,9 @@ class GroqSentinel:
         out = {
             "verdict": str(parsed.get("verdict", "")).strip().upper(),
             "factors": _clean_factors(parsed.get("factors"), POST_FACTORS),
-            "summary": str(parsed.get("lesson", "")).strip()[:400],
+            "summary": (str(parsed.get("lesson", "")).strip()
+                        + (" | why: " + str(parsed.get("reasoning", "")).strip()
+                           if parsed.get("reasoning") else ""))[:400],
             "model": active_model,
             "latency_ms": int((time.monotonic() - started) * 1000),
         }

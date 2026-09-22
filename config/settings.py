@@ -37,6 +37,11 @@ class Settings(BaseSettings):
     groq_postmortem_model: str = "openai/gpt-oss-120b"
     groq_postmortem_enabled: bool = True
 
+    # Only the gpt-oss models take this. Anything else 400s on it, so the
+    # client retries once without it rather than treating an unsupported
+    # parameter as an unsupported model and silently downgrading.
+    groq_reasoning_effort: str = "high"
+
     # Market Data & External APIs
     twelvedata_api_key: str | None = None
     twelvedata_symbols: str = "XAU/USD,XAG/USD,WTI/USD"

@@ -568,7 +568,7 @@ class AppRunner:
                     if self.groq_sentinel.is_available and scfg.groq_signal_review_enabled:
                         delta, ai_summary, verdict = (
                             await self.groq_sentinel.review_signal_candidate(
-                                sig, state, model=scfg.groq_model)
+                                sig, state, model=scfg.groq_model, book=states)
                         )
                         if verdict == "REJECT":
                             delta = -abs(settings.groq_reject_penalty)

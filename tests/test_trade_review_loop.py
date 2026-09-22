@@ -69,11 +69,24 @@ class TestPromptVoice(unittest.TestCase):
 
     def test_the_post_mortem_asks_about_winners_too(self):
         """A win that needed a gap is not an edge, and should be named as one."""
-        self.assertIn("gapped in your favour", self._prompt())
+        self.assertIn("needed a gap", self._prompt())
 
     def test_it_permits_a_loss_with_no_lesson(self):
         """Inventing a lesson for a clean loss teaches the wrong thing."""
-        self.assertIn("Not every loss has a lesson", self._prompt())
+        self.assertIn("loss with no lesson is allowed", self._prompt())
+
+    def test_it_is_told_to_reason_before_answering(self):
+        """A verdict with no working behind it is a guess with a label on."""
+        self.assertIn("Think it through first", self._prompt())
+        self.assertIn('"reasoning"', self._prompt())
+
+    def test_it_is_forbidden_from_inventing_data_it_was_not_given(self):
+        """
+        Asked to weigh crude and yields it does not have, a model supplies
+        them from training data months stale — and that invented number then
+        moves a real confidence score.
+        """
+        self.assertIn("no news and no macro", self._prompt())
 
 
 @pytest.mark.asyncio
@@ -112,3 +125,42 @@ async def test_a_failing_reviewer_costs_only_the_review():
          patch("httpx.AsyncClient.post", new_callable=AsyncMock) as post:
         post.side_effect = RuntimeError("groq is down")
         assert await sentinel.review_closed_trade(_Trade()) == {}
+
+
+class TestMarketContext(unittest.TestCase):
+    """
+    The reviewer sees the whole book, not one chart.
+
+    Asked to compare against crude, gold and the debt market, the honest
+    answer is that two of the three are not collected: TwelveData refuses WTI
+    on the current plan and nothing has ever fetched a yield. Naming them in
+    the prompt would not conjure them — it would make the model supply them
+    from memory. So it gets what is real: every watchlist symbol, now.
+    """
+
+    class S:
+        def __init__(self, sym, price, prev, rsi, cvd):
+            self.symbol, self.current_price = sym, price
+            self.price_24h_ago, self.rsi_14, self.cvd_trend = prev, rsi, cvd
+
+    def test_the_book_is_rendered_with_the_subject_marked(self):
+        from collectors.macro_sentinel import market_context
+        book = [self.S("btcusdt", 86500, 85000, 58, "bullish_delta"),
+                self.S("ethusdt", 2740, 2800, 41, "bearish_delta")]
+        out = market_context(book, "btcusdt")
+        self.assertIn("BTCUSDT", out)
+        self.assertIn("ETHUSDT", out)
+        self.assertIn("<- this one", out)
+        self.assertIn("+1.76%", out)
+
+    def test_unpriced_symbols_are_left_out(self):
+        """A symbol with no price tells the reviewer nothing except noise."""
+        from collectors.macro_sentinel import market_context
+        book = [self.S("btcusdt", 86500, 85000, 58, "bullish_delta"),
+                self.S("xauusdt", 0.0, 0.0, 50, "neutral")]
+        out = market_context(book, "btcusdt")
+        self.assertNotIn("XAUUSDT", out)
+
+    def test_an_empty_book_says_so_rather_than_rendering_nothing(self):
+        from collectors.macro_sentinel import market_context
+        self.assertIn("no other markets", market_context([], "btcusdt"))
