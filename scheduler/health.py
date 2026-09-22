@@ -1289,7 +1289,40 @@ section h2{color:var(--accent-soft)}
 .pt-sum .pt-cell{padding:9px 12px}
 .pt-sum .pt-v{font-size:14px}
 .pt-note{font-size:11px;color:var(--muted2);margin-top:9px;line-height:1.6}
-@media (max-width:640px){.pt-clear{margin-left:0}.ccy-pick label{display:none}}
+@media (max-width:640px){
+  .pt-clear{margin-left:0}
+  .ccy-pick label{display:none}
+
+  /* These two tables are eleven and twelve columns wide. .pt-scroll existed
+     to drag them sideways past an 820px floor, which on a 390px phone means
+     you can see a position's market or its P&L but never both — and this is
+     the page that gets opened on a phone more than all the others together.
+     Rows become cards like everywhere else; the scroller and the width floor
+     both have to go with them, or the card is 820px wide and still scrolls. */
+  .pt-scroll{overflow-x:visible;border:0;background:none;border-radius:0}
+  .pt-scroll table{min-width:0}
+  .pt-scroll .tbl tr{background:var(--panel);border:1px solid var(--line);
+    border-radius:10px;padding:11px 13px;margin-bottom:9px}
+
+  /* The first cell is the card's heading — symbol, side, setup — not a value.
+     Labelling it "Market" and right-aligning it against nothing reads as a
+     missing value rather than a title. */
+  .pt-scroll .tbl td:first-child{display:block;text-align:left;
+    padding:0 0 8px;margin-bottom:6px;border-bottom:1px solid var(--line2)}
+  .pt-scroll .tbl td:first-child::before{content:none}
+
+  /* The stop-to-target rail is a drawing, not a number. In a two-column row
+     it gets whatever is left over — which at this width is nothing — so it
+     takes the full width under its own label instead. */
+  .pt-scroll .tbl td:has(.pt-prail){display:block;text-align:left}
+  .pt-scroll .tbl td:has(.pt-prail)::before{display:block;margin-bottom:7px}
+  .pt-scroll .pt-prail{min-width:0;width:100%}
+
+  /* The secondary line under a value — the ₹ equivalent of a quantity —
+     belongs under it, not beside it, once the row is a label/value pair. */
+  .pt-scroll .tbl td{align-items:flex-start}
+  .pt-scroll .tbl td .pt-notional{text-align:right}
+}
 
 /* ── Sidebar shell ─────────────────────────────────────────────────────── */
 .app{display:flex;min-height:100vh}
@@ -1783,7 +1816,7 @@ function renderPaperPositions(rows, rate){
     rows.length ? rows.length + ' open' : '';
   if(!rows.length){ el.innerHTML = '<div class="empty">No open positions</div>'; return; }
 
-  el.innerHTML = '<table><thead><tr>'
+  el.innerHTML = '<table class="tbl"><thead><tr>'
     + '<th>Market</th><th class="r">Quantity</th><th class="r">Entry</th><th class="r">Mark</th>'
     + '<th>Stop &middot; Target</th><th class="r">Margin</th><th class="r">Liq.</th>'
     + '<th class="r">Unrealised</th><th class="r">ROE</th><th class="r">Opened</th>'
@@ -1878,7 +1911,7 @@ function renderPaperHistory(){
 
   const el = document.getElementById('paper-trades');
   el.innerHTML = rows.length
-    ? '<table><thead><tr>'
+    ? '<table class="tbl"><thead><tr>'
       + th('closed_at','Closed') + '<th>Market</th>'
       + '<th class="r">Quantity</th><th class="r">Entry &rarr; Exit</th>'
       + th('reason','Exit') + th('gross','Gross',1) + '<th class="r">Fees</th>'
@@ -4450,7 +4483,16 @@ if(!window.labelTables){
   window.labelTables = function(root){
     (root||document).querySelectorAll('table.tbl').forEach(function(t){
       var heads = [].slice.call(t.querySelectorAll('thead th'))
-                    .map(function(th){ return th.textContent.trim(); });
+                    .map(function(th){
+        // Own text only. A sortable header carries its arrow in a child
+        // span, and textContent would fold that in — every card on the
+        // paper-trading history would be labelled "Closed↓".
+        var own = '';
+        [].slice.call(th.childNodes).forEach(function(n){
+          if(n.nodeType === 3) own += n.textContent;
+        });
+        return (own || th.textContent).trim();
+      });
       if(!heads.length) return;
       t.querySelectorAll('tbody tr').forEach(function(tr){
         [].slice.call(tr.children).forEach(function(td, i){

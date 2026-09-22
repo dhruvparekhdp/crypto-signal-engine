@@ -132,6 +132,78 @@ class TestOtherPagesAreAlsoResponsive(unittest.TestCase):
                 self.assertIn("viewport", page)
 
 
+class TestPaperTradingOnAPhone(unittest.TestCase):
+    """
+    The page that gets opened on a phone more than all the others together,
+    and the last one still dragging an 820px table sideways.
+
+    Its two tables are eleven and twelve columns. .pt-scroll existed to scroll
+    them, which means you could see a position's market or its P&L but never
+    both. The card treatment had been applied to /data, /predict and /audit
+    and skipped here — exactly backwards, given which page is actually read
+    on a phone.
+    """
+
+    def setUp(self):
+        self.html = health._HTML
+        self.phone = self.html[self.html.index("@media (max-width:640px){"):]
+
+    def test_both_paper_tables_opt_into_cards(self):
+        """Open positions and closed history, not just one of them."""
+        self.assertIn("""el.innerHTML = '<table class="tbl">""", self.html)
+        self.assertIn("""? '<table class="tbl">""", self.html)
+
+    def test_no_paper_table_is_left_as_a_bare_table(self):
+        """A bare <table> inside .pt-scroll is one that still scrolls."""
+        import re
+
+        window = self.html[self.html.index("function renderPaperPositions"):
+                           self.html.index("function renderPaperSummary")]
+        self.assertEqual(re.findall(r"<table>(?!.*tbl)", window), [])
+
+    def test_the_eight_hundred_pixel_floor_is_lifted_on_a_phone(self):
+        """
+        Without this the card is 820px wide and scrolls exactly as before —
+        the class alone does nothing while the width floor stands.
+        """
+        self.assertIn(".pt-scroll table{min-width:0}", self.phone)
+
+    def test_the_scroller_itself_is_switched_off(self):
+        self.assertIn(".pt-scroll{overflow-x:visible", self.phone)
+
+    def test_the_market_cell_becomes_the_card_heading(self):
+        """
+        Labelling it "Market" and right-aligning it against nothing reads as
+        a missing value rather than a title.
+        """
+        self.assertIn(".pt-scroll .tbl td:first-child{display:block", self.phone)
+        self.assertIn(".pt-scroll .tbl td:first-child::before{content:none}", self.phone)
+
+    def test_the_stop_target_rail_gets_the_full_width(self):
+        """
+        It is a drawing, not a number. In a label/value row it gets whatever
+        is left over, which at this width is nothing.
+        """
+        self.assertIn(".pt-scroll .tbl td:has(.pt-prail){display:block", self.phone)
+        self.assertIn(".pt-scroll .pt-prail{min-width:0", self.phone)
+
+
+class TestColumnLabelsAreTheColumnName(unittest.TestCase):
+    def test_a_sort_arrow_does_not_become_part_of_the_label(self):
+        """
+        Sortable headers carry their arrow in a child span. Reading
+        textContent folds it in, and every card in the paper-trading history
+        would be labelled "Closed↓" — with the arrow flipping as you sort.
+        """
+        snippet = health._THEME_SNIPPET
+        self.assertIn("nodeType === 3", snippet)
+        self.assertIn("own || th.textContent", snippet)
+
+    def test_a_header_with_no_text_node_still_gets_a_label(self):
+        """The fallback matters: an icon-only header would otherwise be blank."""
+        self.assertIn("(own || th.textContent).trim()", health._THEME_SNIPPET)
+
+
 class TestSettingsOnAPhone(unittest.TestCase):
     """
     /settings had a breakpoint that only collapsed two grids to one column.
