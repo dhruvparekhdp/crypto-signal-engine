@@ -28,6 +28,7 @@ from dotenv import load_dotenv
 from sqlalchemy import func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
+from config.settings import settings
 from storage.database import Base, _make_url, _migrate_columns
 from storage.models import (
     AdminAuth, CommoditySnapshot, CryptoSignalLog, CryptoSnapshot,
@@ -171,16 +172,28 @@ async def migrate(source_url: str | None, target_url: str, snapshot_days: int = 
             from storage.repository import Repository
             repo = Repository(t_session)
 
-            # Auto-seed essential tables
-            pcfg = await repo.get_paper_config()
-            scfg = await repo.get_strategy_config()
-            admin_pwd = os.getenv("ADMIN_PASSWORD", "7208450706")
-            ok, tok = await repo.verify_admin_password(admin_pwd)
-            if not ok:
-                await repo.set_admin_password(admin_pwd)
-            await repo.init_crypto_watchlist()
+            # Auto-seed essential tables. The getters create their singleton
+            # row on first call, so calling them is the seeding.
+            await repo.get_paper_config()
+            await repo.get_strategy_config()
 
-            print("  ✓ Initialized default PaperTradingConfig, StrategyConfig, AdminAuth, and Watchlist.")
+            # No fallback password. A default here would silently become the
+            # real credential for /settings on any box that forgot to set one,
+            # and it would be the same value in every checkout of this repo.
+            admin_pwd = (os.getenv("ADMIN_PASSWORD") or "").strip()
+            if admin_pwd:
+                ok, _token = await repo.verify_admin_password(admin_pwd)
+                if not ok:
+                    await repo.set_admin_password(admin_pwd)
+                print("  ✓ AdminAuth seeded from ADMIN_PASSWORD.")
+            else:
+                print("  ! ADMIN_PASSWORD not set — admin seed skipped. "
+                      "/settings stays locked until you set one and restart.")
+
+            await repo.seed_crypto_watchlist_if_empty(
+                settings.crypto_watchlist_seed.split(","))
+
+            print("  ✓ Initialized default PaperTradingConfig, StrategyConfig, and Watchlist.")
 
     # 4. Summary Report
     print("\n[4/4] Verification Summary:")
