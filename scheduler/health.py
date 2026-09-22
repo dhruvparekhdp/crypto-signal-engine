@@ -528,6 +528,11 @@ async def _api_sentiment_ingest(runner, request: web.Request) -> web.Response:
     constant time — a plain == leaks the secret one character at a time to
     anyone willing to measure.
 
+    Header only. There used to be a ?token= fallback for curl convenience,
+    which put the secret into the access log, the shell history and any
+    Referer the browser felt like sending — three places it then sits in
+    plaintext forever. A header costs one more flag and leaks none of that.
+
     Body: {"items": [{external_id, symbol, headline, score, confidence,
                       event_type, source, url, published_at, model}, ...]}
     """
@@ -541,8 +546,7 @@ async def _api_sentiment_ingest(runner, request: web.Request) -> web.Response:
         return web.json_response(
             {"error": "ingest disabled", "hint": "set SENTIMENT_INGEST_TOKEN"}, status=503)
 
-    supplied = (request.headers.get("X-Ingest-Token")
-                or request.query.get("token") or "")
+    supplied = request.headers.get("X-Ingest-Token") or ""
     if not hmac.compare_digest(supplied, secret):
         return web.json_response({"error": "unauthorised"}, status=401)
 
@@ -2651,7 +2655,7 @@ function renderTable(t){
     +'<span class="count">showing <b>'+t.shown+'</b> of '+t.total.toLocaleString()+' rows</span></div>';
   if(t.error) return head+'<div class="err">error: '+esc(t.error)+'</div>';
   if(!t.rows.length) return head+'<div class="pnl pnl-empty"><div class="pnl-t">No rows</div><div class="pnl-d">This table exists but nothing has written to it yet.</div></div>';
-  let h='<div class="scroll"><table><thead><tr>';
+  let h='<div class="scroll"><table class="tbl"><thead><tr>';
   for(const c of t.columns) h+='<th>'+esc(c)+'</th>';
   h+='</tr></thead><tbody>';
   for(const row of t.rows){
@@ -2779,14 +2783,19 @@ async def _api_auth_verify(runner, request: web.Request) -> web.Response:
 
 
 async def _verify_admin_session(request: web.Request) -> bool:
-    """Check X-Settings-Token header, Bearer token, or query param against DB."""
+    """
+    Check X-Settings-Token or a Bearer header against the stored session.
+
+    Headers only. The ?token= fallback that used to sit here was never used
+    by the dashboard or the iOS app, and a session token in a URL is a
+    session token in the access log, the browser history and whatever
+    Referer gets sent to the next site the tab visits.
+    """
     token = request.headers.get("X-Settings-Token") or ""
     if not token:
         auth_hdr = request.headers.get("Authorization") or ""
         if auth_hdr.startswith("Bearer "):
             token = auth_hdr[7:].strip()
-    if not token:
-        token = request.query.get("token") or ""
     if not token:
         return False
     from storage.database import AsyncSessionFactory
@@ -3754,7 +3763,7 @@ th.num{text-align:right}
   <h2>Where it works and where it does not
     <span class="hint">same signals, sliced by the thing you suspect</span></h2>
   <div class="tabs" id="slice-tabs"></div>
-  <div class="scroll"><table>
+  <div class="scroll"><table class="tbl">
     <thead><tr>
       <th id="slice-hd">Group</th>
       <th class="num">Fired</th><th class="num">Won</th><th class="num">Lost</th>
@@ -4110,7 +4119,7 @@ td.num,th.num{text-align:right;font-variant-numeric:tabular-nums}
 <main>
   <div class="surges" id="surges"></div>
   <div class="note" id="note"></div>
-  <div class="scroll"><table>
+  <div class="scroll"><table class="tbl">
     <thead><tr>
       <th>Market</th>
       <th class="num">Price</th>

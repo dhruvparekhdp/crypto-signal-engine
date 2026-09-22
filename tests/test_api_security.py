@@ -310,6 +310,31 @@ class TestRateLimitIntegration(AioHTTPTestCase):
             resp = await self.client.get("/api/crypto/coins")
             self.assertEqual(resp.status, 200)
 
+    async def test_the_dashboard_login_shares_the_tight_bucket(self):
+        """
+        The password login belongs with the token check, not with the
+        dashboard's polling traffic.
+
+        It sat in the general bucket for a while, which meant the endpoint
+        guarding the admin password allowed 120 attempts a minute while the
+        endpoint guarding the API token allowed 10 per five minutes — exactly
+        backwards, since the password is the shorter secret of the two.
+        """
+        for _ in range(2):
+            await self.client.post("/api/settings/auth/login", json={"password": "x"})
+        resp = await self.client.post("/api/settings/auth/login", json={"password": "x"})
+        self.assertEqual(resp.status, 429)
+
+    async def test_the_token_check_and_the_login_share_one_counter(self):
+        """
+        Two tight endpoints with two separate budgets would double the
+        guesses available per window, which defeats tightening either.
+        """
+        await self.client.post("/api/auth/verify")
+        await self.client.post("/api/settings/auth/login", json={"password": "x"})
+        resp = await self.client.post("/api/auth/verify")
+        self.assertEqual(resp.status, 429)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -28,8 +28,21 @@ def _make_url(raw: str) -> tuple[str, dict]:
         params = parse_qs(parsed.query, keep_blank_values=True)
         ssl_val = (params.pop("sslmode", None) or params.pop("ssl", ["require"]))[0].lower()
         if ssl_val in ("verify-ca", "verify-full"):
-            connect_args["ssl"] = True
+            # Verify properly. A managed provider that issues its own CA —
+            # Aiven does — needs that CA named, or every connection fails
+            # with an unknown-issuer error rather than falling back quietly.
+            ca = (settings.database_ssl_ca or "").strip()
+            ctx = ssl.create_default_context(cafile=ca or None)
+            ctx.check_hostname = ssl_val == "verify-full"
+            connect_args["ssl"] = ctx
         elif ssl_val in ("require", "prefer", "allow", "no-verify", "true", "1"):
+            # libpq's `require` means encrypted, NOT authenticated, so this is
+            # faithful to the URL rather than a bug — but it does mean anyone
+            # who can answer for the database's address gets the credentials.
+            # Say so loudly once at startup instead of leaving it implicit.
+            print("WARNING: database TLS is encrypted but unverified "
+                  f"(sslmode={ssl_val}). Set DATABASE_SSL_CA to the provider's "
+                  "CA file and change the URL to sslmode=verify-full.")
             ctx = ssl.create_default_context()
             ctx.check_hostname = False
             ctx.verify_mode = ssl.CERT_NONE
@@ -184,13 +197,13 @@ async def _migrate_columns(conn) -> None:
             min_confidence FLOAT DEFAULT 0.65
         )""",
         "INSERT INTO strategy_config (id) VALUES (1) ON CONFLICT (id) DO NOTHING",
-        # Purge any legacy corrupted signals with invalid entry prices or astronomical moves
-        """DELETE FROM crypto_signal_log 
-           WHERE current_price <= 0.001 
-              OR target_price <= 0 
-              OR stop_loss <= 0 
-              OR ABS(pnl_pct) > 500 
-              OR ABS(target_price - current_price) / NULLIF(current_price, 0) > 2.0""",
+        # There used to be a DELETE here, purging "corrupted" signals — any row
+        # with a target more than 2x away from entry — on every single boot. It
+        # was written to clean up after the gold 43%-target bug. That bug is
+        # fixed at the source now, and what the DELETE actually did in the
+        # meantime was destroy the evidence: the exact rows worth studying were
+        # gone before anyone could read them, on a schedule nobody remembered.
+        # Bad rows are a diagnosis problem, not a startup chore.
     ]
     for sql in migrations:
         try:

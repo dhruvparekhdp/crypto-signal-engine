@@ -26,9 +26,9 @@ immediately, the first gets forgotten.
 
 Rate limiting is a separate concern from auth and applies whether or not a
 request is authenticated: a leaked or guessed token should not buy unlimited
-requests, and the auth-verify endpoint itself — which exists specifically to
-test a token — gets a much tighter bucket than everything else, because it
-is the one endpoint whose whole job is accepting attempts at a secret.
+requests, and the endpoints that exist to accept a secret — the token check
+and the dashboard login — get a much tighter bucket than everything else,
+because those are the ones worth grinding against.
 """
 from __future__ import annotations
 
@@ -139,6 +139,17 @@ class RateLimiter:
         return len(stale)
 
 
+# Endpoints whose whole job is accepting an attempt at a secret. Every one of
+# these belongs in the tight bucket; /api/auth/verify was the only member for
+# a while, which left the dashboard's own login — the endpoint that actually
+# guards the admin password — sharing the roomy bucket the dashboard uses for
+# polling, so several hundred guesses an hour passed unremarked.
+_SECRET_GUESSING_PATHS = frozenset({
+    "/api/auth/verify",
+    "/api/settings/auth/login",
+})
+
+
 def rate_limit_middleware(get_settings):
     """
     Factory so the limits are read from settings at request time, not
@@ -151,8 +162,8 @@ def rate_limit_middleware(get_settings):
     with whatever else happened to run earlier in the same process. Two
     buckets, not one: the general limiter covers ordinary API traffic (the
     dashboard polling every 20s, the iOS app checking in), and the auth
-    limiter covers ONLY the endpoint whose job is accepting attempts at the
-    shared secret — it must be far tighter, and mixing the two would let a
+    limiter covers ONLY the endpoints whose job is accepting attempts at a
+    secret — it must be far tighter, and mixing the two would let a
     burst of legitimate reads use up the headroom meant to slow down someone
     guessing the token.
 
@@ -172,7 +183,7 @@ def rate_limit_middleware(get_settings):
         settings = get_settings()
         ip = client_ip(request)
 
-        if path == "/api/auth/verify":
+        if path in _SECRET_GUESSING_PATHS:
             limiter, limit, window, bucket = (
                 auth_limiter, settings.api_auth_rate_limit_requests,
                 settings.api_auth_rate_limit_window_seconds, "auth")

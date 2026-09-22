@@ -14,6 +14,13 @@ class Settings(BaseSettings):
 
     # Core Server & Storage
     database_url: str = "sqlite+aiosqlite:///./crypto_engine.db"
+    # Path to the CA certificate the database server's certificate is signed
+    # by. Aiven issues each project its own CA rather than using a public one,
+    # so `sslmode=verify-full` cannot work without pointing at that file —
+    # which is why the URL has always said `require`, i.e. encrypt but do not
+    # check who is on the other end. Download the project CA from the Aiven
+    # console, put it on the box, set this, and change the URL to verify-full.
+    database_ssl_ca: str = ""
     port: int = 8080
 
     # Telegram Notifications (optional in dev, required in prod)
@@ -122,7 +129,6 @@ class Settings(BaseSettings):
     api_rate_limit_window_seconds: int = 60
     api_auth_rate_limit_requests: int = 10
     api_auth_rate_limit_window_seconds: int = 300
-    self_ping_url: str = ""
     sentiment_ingest_token: str = ""
     sentiment_feeds_enabled: bool = True
     fear_greed_refresh_minutes: int = 60

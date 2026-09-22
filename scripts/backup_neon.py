@@ -33,6 +33,21 @@ ALL_MODELS = [
 ]
 
 
+# Columns that must never reach a backup file.
+#
+# This repository is public, and `backups/*.json.gz` is deliberately NOT
+# gitignored — the point of the backup is that it is committed. A dump of
+# admin_auth therefore publishes the password hash, its salt and a live
+# session token to anyone who clones. The token alone is enough to act as the
+# operator until someone changes the password.
+#
+# Redacted at the dump, not at commit time: a rule you have to remember to
+# apply is a rule that gets forgotten exactly once, and once is enough.
+REDACTED_COLUMNS = {
+    "admin_auth": {"password_hash", "salt", "session_token"},
+}
+
+
 def default_json_serializer(obj):
     if isinstance(obj, datetime):
         return obj.isoformat()
@@ -74,9 +89,13 @@ async def backup_database(url: str, output_dir: str = "backups") -> None:
                 res = await session.execute(select(model))
                 rows = res.scalars().all()
                 serialized = []
+                redact = REDACTED_COLUMNS.get(tbl, frozenset())
                 for r in rows:
-                    d = {c.name: getattr(r, c.name) for c in model.__table__.columns}
+                    d = {c.name: (None if c.name in redact else getattr(r, c.name))
+                         for c in model.__table__.columns}
                     serialized.append(d)
+                if redact and rows:
+                    print(f"  · {tbl}: redacted {sorted(redact)}")
                 backup_data[tbl] = serialized
                 total_rows += len(serialized)
                 print(f"  ✓ {tbl:<24} {len(serialized):<6} rows")
