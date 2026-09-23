@@ -94,10 +94,22 @@ class TestPessimisticTieBreak(unittest.TestCase):
     """
 
     def setUp(self):
-        import inspect
+        # Read the file rather than import the module. scheduler.runner pulls
+        # in python-telegram-bot, which cannot load everywhere this suite
+        # runs, and these three have been failing on that import — not on
+        # anything they assert — for long enough that "3 failed" became the
+        # expected output. A permanently red test hides the next real one.
+        from pathlib import Path
 
-        import scheduler.runner as runner
-        self.src = inspect.getsource(runner.AppRunner._resolve_signal_outcomes_job)
+        source = (Path(__file__).resolve().parent.parent
+                  / "scheduler/runner.py").read_text()
+        start = source.index("async def _resolve_signal_outcomes_job")
+        rest = source[start:]
+        # To the next method at the same indentation.
+        end = rest.find("\n    async def ", 1)
+        if end == -1:
+            end = rest.find("\n    def ", 1)
+        self.src = rest[:end] if end != -1 else rest
 
     def test_the_stop_is_checked_before_the_target(self):
         self.assertLess(self.src.index("hit_stop:"), self.src.index("hit_tgt:"))
