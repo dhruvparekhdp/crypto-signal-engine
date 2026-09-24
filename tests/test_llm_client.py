@@ -69,8 +69,8 @@ class TestRolesAreConfiguredSeparately(unittest.TestCase):
         from config.settings import settings
 
         chains = {r: getattr(settings, f"llm_chain_{r}")
-                  for r in ("pre_trade", "post_trade", "research")}
-        self.assertEqual(len(set(chains.values())), 3)
+                  for r in ("pre_trade", "position_review", "post_trade", "research")}
+        self.assertEqual(len(set(chains.values())), 4)
 
     def test_the_latency_critical_role_leads_with_the_fast_provider(self):
         from config.settings import settings
@@ -81,7 +81,7 @@ class TestRolesAreConfiguredSeparately(unittest.TestCase):
     def test_every_role_has_a_fallback(self):
         from config.settings import settings
 
-        for role in ("pre_trade", "post_trade", "research"):
+        for role in ("pre_trade", "position_review", "post_trade", "research"):
             with self.subTest(role=role):
                 self.assertGreater(
                     len(_parse_chain(getattr(settings, f"llm_chain_{role}"))), 1)
@@ -89,7 +89,7 @@ class TestRolesAreConfiguredSeparately(unittest.TestCase):
     def test_every_named_provider_is_one_the_router_knows(self):
         from config.settings import settings
 
-        for role in ("pre_trade", "post_trade", "research"):
+        for role in ("pre_trade", "position_review", "post_trade", "research"):
             raw = getattr(settings, f"llm_chain_{role}")
             named = [e.strip().partition(":")[0] for e in raw.split(",") if e.strip()]
             for provider in named:

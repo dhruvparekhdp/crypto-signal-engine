@@ -110,6 +110,25 @@ class Settings(BaseSettings):
     position_review_enabled: bool = True
     position_review_interval_seconds: int = 300
 
+    # A winning position is reviewed less often than a losing one. It is not
+    # deciding whether to exist — the trail already bounds what it can give
+    # back — it is only choosing how much rope that trail gets, and a trail
+    # distance that is roughly right is worth very little less than one that
+    # is exactly right. Fifteen minutes keeps the model in the loop on every
+    # trade, as instructed, without paying loser rates for it.
+    position_review_interval_seconds_winning: int = 900
+
+    # Reviewing a position that is still open is its own job, and a cheaper
+    # one than it looks. The score is already 75% settled by the local read of
+    # price, time and distance to the stop; the model supplies a bounded
+    # +0.10/-0.15 nudge on top. That is a quick market read, not deep
+    # reasoning, and putting it on the post-mortem chain would cost about
+    # Rs 2,000 a month on its own — the whole budget, before the post-mortems
+    # and the research pass it would be sharing with. Flash does the same job
+    # for about Rs 400, with the free tier behind it.
+    llm_chain_position_review: str = (
+        "gemini:gemini-2.5-flash, groq:openai/gpt-oss-120b, anthropic:claude-sonnet-5")
+
     llm_chain_research: str = (
         "anthropic:claude-opus-5, gemini:gemini-2.5-pro")
 

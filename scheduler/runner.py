@@ -385,11 +385,7 @@ class AppRunner:
         seconds and no market changes its mind that often; without this, one
         position open for two hours would be 240 reviews.
         """
-        from analysis.position_review import (
-            review_losing_position,
-            trail_r_for_confidence,
-            trend_confidence,
-        )
+        from analysis.position_review import review_position, trail_r_for_confidence
 
         if not settings.position_review_enabled:
             return None
@@ -398,22 +394,29 @@ class AppRunner:
         # freshly opened position look like a loser for its first few minutes,
         # which is exactly when there is least to judge.
         losing = pos.gross_pnl(state.current_price) < 0
-        if not losing:
-            # Winning: no model call, just a confidence-scaled trail. The
-            # trade is already working and the trail bounds what it can give
-            # back, so an opinion is worth less here than the price action.
-            if cfg.trailing is not None and cfg.trailing.enabled:
-                conviction = trend_confidence(pos, state, now)
-                pos.trail_r_override = trail_r_for_confidence(conviction)
-            return None
 
+        # Both sides are reviewed, and both scores include the model's read.
+        # They are reviewed at different rates because they are asking for
+        # different things: a losing position is deciding whether to exist,
+        # which is worth checking often, while a winning one is only choosing
+        # how much rope to give its trail — and the trail already bounds what
+        # that decision can cost.
+        gap = (settings.position_review_interval_seconds if losing
+               else settings.position_review_interval_seconds_winning)
         last = self._last_position_review.get(pos.symbol)
-        if last is not None and (now - last).total_seconds() < (
-                settings.position_review_interval_seconds):
+        if last is not None and (now - last).total_seconds() < gap:
             return None
         self._last_position_review[pos.symbol] = now
 
-        review = await review_losing_position(pos, state, now)
+        review = await review_position(pos, state, now, losing=losing)
+
+        if not losing:
+            # A winner is never closed on a score — the trail does that, and
+            # the score only decides how far behind price it rides.
+            if cfg.trailing is not None and cfg.trailing.enabled:
+                pos.trail_r_override = trail_r_for_confidence(review.confidence)
+            return None
+
         if review.hold:
             return None
 

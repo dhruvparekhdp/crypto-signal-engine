@@ -214,15 +214,22 @@ HOLD_FACTORS = [
 ]
 
 REVIEW_SYSTEM = (
-    "An open position is losing money. Decide whether the reason for opening "
-    "it is still true, or whether it has simply not failed yet.\n\n"
+    "An open position is under review. Decide one thing: is the reason it was "
+    "opened still true?\n\n"
+    "That is the same question whether it is up or down, and your answer is "
+    "used differently depending on which. A position in the red is closed "
+    "unless the score clears the bar; a position in the green is not closed "
+    "at all, its trailing stop is simply given more or less room. So do not "
+    "reason about whether to take profit — reason about whether the move has "
+    "further to go.\n\n"
     "You are adjusting a number, not making the call. A local reading of the "
     "market has already scored this; you can move that score by at most "
     f"+{AI_MAX_HELP:.2f} or -{AI_MAX_HARM:.2f}. Use the full range when you "
     "are sure and stay near zero when you are not.\n\n"
-    "The bias is toward closing. Cutting a loss early costs a spread; holding "
-    "one that keeps going costs the trade. 'It might bounce' is true of every "
-    "losing position ever opened and is not a reason.\n\n"
+    "On a losing position the bias is toward closing. Cutting a loss early "
+    "costs a spread; holding one that keeps going costs the trade. 'It might "
+    "bounce' is true of every losing position ever opened and is not a "
+    "reason.\n\n"
     "Judge only the numbers given. You have no news and no order book.\n\n"
     f"Tags, use only these: {', '.join(HOLD_FACTORS)}\n\n"
     "JSON only:\n"
@@ -246,7 +253,8 @@ def _describe(pos, state, trend: float, now: datetime) -> str:
     return (
         f"{pos.symbol.upper()} {'LONG' if is_long else 'SHORT'} — "
         f"{pos.signal_type or 'setup'} at {round((pos.confidence or 0) * 100)}%\n"
-        f"Down {abs(move):.3f}% since entry\n"
+        f"{'Up' if move >= 0 else 'Down'} {abs(move):.3f}% since entry "
+        f"({'in profit — trail only, will not be closed on this' if move >= 0 else 'in the red'})\n"
         f"Stop is {to_stop:.3f}% away\n"
         f"Held {held_min:.0f} min"
         + (f", {left_min:.0f} min left before it expires\n" if left_min is not None else "\n")
@@ -256,7 +264,7 @@ def _describe(pos, state, trend: float, now: datetime) -> str:
     )
 
 
-async def review_losing_position(pos, state, now: datetime) -> Review:
+async def review_position(pos, state, now: datetime, losing: bool = True) -> Review:
     """
     The full decision for a position at a loss: local read, then the model
     only if its answer could change the outcome.
@@ -274,13 +282,19 @@ async def review_losing_position(pos, state, now: datetime) -> Review:
     measurement.
     """
     trend = trend_confidence(pos, state, now)
-    if not _needs_model(trend):
+
+    # On a losing position the model is only worth asking inside the band
+    # where its adjustment could cross the threshold. On a winning one there
+    # is no threshold to cross — the score maps continuously onto how much
+    # room the trail is given — so every point of it counts and the question
+    # is always worth asking.
+    if losing and not _needs_model(trend):
         return decide(trend)
 
     try:
         from collectors.llm_client import ask_json
 
-        reply = await ask_json("post_trade", REVIEW_SYSTEM,
+        reply = await ask_json("position_review", REVIEW_SYSTEM,
                                _describe(pos, state, trend, now),
                                max_tokens=400, temperature=0.2, timeout=12.0)
     except Exception as exc:

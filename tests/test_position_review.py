@@ -167,6 +167,98 @@ class TestTheTrailForWinners(unittest.TestCase):
         self.assertLessEqual(trail_r_for_confidence(1.0), 1.25)
 
 
+class TestEveryTradeGetsTheModelsRead(unittest.TestCase):
+    """
+    The instruction was that the model's read feeds the confidence on every
+    trade, up or down — not only on the losing ones.
+
+    The two sides still differ in one respect, and it is not whether the model
+    is consulted. On a loser the score has a threshold to cross, so the model
+    is only worth asking inside the band where its adjustment could cross it.
+    On a winner the score maps continuously onto how much rope the trail gets,
+    so there is no band and every point of it counts.
+    """
+
+    def test_a_winner_asks_the_model_even_at_a_score_that_would_skip_it(self):
+        import inspect
+
+        from analysis.position_review import review_position
+
+        source = inspect.getsource(review_position)
+        self.assertIn("if losing and not _needs_model(trend)", source)
+
+    def test_the_runner_reviews_both_sides(self):
+        from pathlib import Path
+
+        runner = (Path(__file__).resolve().parent.parent / "scheduler/runner.py").read_text()
+        self.assertIn("review_position(pos, state, now, losing=losing)", runner)
+        # And not by returning early for winners before the review runs.
+        block = runner[runner.index("async def _review_open_position"):
+                       runner.index("async def _review_closed_trade")]
+        self.assertLess(block.index("review = await review_position"),
+                        block.index("if not losing:"))
+
+    def test_a_winner_is_trailed_on_the_composite_not_the_local_read(self):
+        from pathlib import Path
+
+        runner = (Path(__file__).resolve().parent.parent / "scheduler/runner.py").read_text()
+        self.assertIn("trail_r_for_confidence(review.confidence)", runner)
+
+    def test_a_winner_is_never_closed_on_a_score(self):
+        """
+        Profitable trades are managed by the trail, as instructed. A low score
+        tightens the trail; it does not book the trade.
+        """
+        from pathlib import Path
+
+        runner = (Path(__file__).resolve().parent.parent / "scheduler/runner.py").read_text()
+        block = runner[runner.index("if not losing:"):
+                       runner.index("if review.hold:")]
+        self.assertNotIn("close_position", block)
+        self.assertIn("return None", block)
+
+    def test_winners_are_reviewed_less_often_than_losers(self):
+        from config.settings import settings
+
+        self.assertGreater(settings.position_review_interval_seconds_winning,
+                           settings.position_review_interval_seconds)
+
+    def test_the_prompt_tells_the_model_which_question_it_is_answering(self):
+        """
+        Asked to judge a winner with a prompt written for losers, a model
+        reasons about taking profit — which is the trail's job, not its own.
+        """
+        from analysis.position_review import REVIEW_SYSTEM
+
+        self.assertIn("is the reason it was opened still true", REVIEW_SYSTEM)
+        self.assertIn("do not", REVIEW_SYSTEM.lower())
+        self.assertIn("further to go", REVIEW_SYSTEM)
+
+
+class TestTheReviewPaysItsOwnWay(unittest.TestCase):
+    """
+    Reviewing every open position on the post-mortem chain would cost about
+    Rs 2,000 a month on its own — the whole budget, before the post-mortems
+    and the research pass it would be sharing with.
+    """
+
+    def test_it_does_not_run_on_the_post_mortem_chain(self):
+        import inspect
+
+        from analysis.position_review import review_position
+
+        self.assertIn('ask_json("position_review"', inspect.getsource(review_position))
+
+    def test_its_chain_leads_with_something_cheaper_than_the_post_mortems(self):
+        from collectors.llm_client import _parse_chain
+        from config.settings import settings
+
+        review = _parse_chain(settings.llm_chain_position_review)[0]
+        post = _parse_chain(settings.llm_chain_post_trade)[0]
+        self.assertNotEqual(review, post)
+        self.assertEqual(review[0], "gemini")
+
+
 class TestItCanOnlyTightenRisk(unittest.TestCase):
     """The safety argument, asserted rather than assumed."""
 
