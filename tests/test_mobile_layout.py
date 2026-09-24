@@ -443,3 +443,42 @@ class TestTheMoreSheetIsASheet(unittest.TestCase):
 
     def test_it_reads_as_a_surface_in_front_of_the_page(self):
         self.assertIn(".sidebar.more-open{box-shadow:", self.css)
+
+
+class TestPricesAreFormatted(unittest.TestCase):
+    """
+    Exit prices rendered as raw floats — 86807.23385676013, 1.5262954668640325
+    — while entries beside them looked clean, which only meant the entry
+    happened to divide evenly. fmtPrice already existed and already handled
+    the three magnitudes; the paper tables simply never called it.
+    """
+
+    def setUp(self):
+        self.html = health._HTML
+
+    def test_every_price_cell_in_the_paper_tables_goes_through_the_formatter(self):
+        window = self.html[self.html.index("function renderPaperPositions"):
+                           self.html.index("function renderPaperSummary")]
+        import re
+
+        # Any ${...} holding a bare price field, not wrapped in a formatter.
+        raw = re.findall(r"\$\{(?:t|p)\.(entry|exit|mark|liq|stop|target)\}", window)
+        self.assertEqual(raw, [], f"unformatted price cells: {raw}")
+
+    def test_the_formatter_keeps_small_and_large_prices_distinguishable(self):
+        """A 1.526 XRP price and an 86,807 BTC price need different precision."""
+        self.assertIn("if(p>=1000)", self.html)
+        self.assertIn("return p.toFixed(6)", self.html)
+
+
+class TestTheClosedTradeColumnsSayWhatTheyHold(unittest.TestCase):
+    def test_the_running_balance_column_is_not_called_wallet(self):
+        """
+        wallet_after is `wallet_before + margin + net`: the margin returns on
+        close while other open positions still hold theirs, so the figure is
+        free cash at that moment, not a running balance. Two trades netting
+        -0.30 and -0.50 showed 26.67 then 17.03, which reads as a bug until
+        you know the column is measuring something else.
+        """
+        self.assertNotIn('<th class="r">Wallet</th>', health._HTML)
+        self.assertIn('<th class="r">Free cash</th>', health._HTML)

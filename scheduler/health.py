@@ -1839,18 +1839,18 @@ function renderPaperPositions(rows, rate){
           + `<span class="pt-setup">${(p.signal_type||'').replace(/_/g,' ')} &middot; ${p.confidence}%</span></td>
           <td class="r pt-num">${_ptQty(p.qty)} <span class="pt-unit">${unit}</span>
             <span class="pt-notional">${_ptMoney(p.notional, rate)}</span></td>
-          <td class="r pt-num">${p.entry}</td>
-          <td class="r pt-num ${good ? 'pt-up' : 'pt-down'}">${p.mark}</td>
+          <td class="r pt-num">${fmtPrice(p.entry)}</td>
+          <td class="r pt-num ${good ? 'pt-up' : 'pt-down'}">${fmtPrice(p.mark)}</td>
           <td><div class="pt-prail">
               <span class="pt-ptrack"></span>
               <span class="pt-pfill" style="left:${fillL}%;width:${fillW}%;background:${col}"></span>
               <span class="pt-ptick" style="left:${eAt}%"></span>
               <span class="pt-pmark" style="left:${mAt}%;background:${col}"></span>
-              <span class="pt-plab" style="left:0">${long ? p.stop : p.target}</span>
-              <span class="pt-plab" style="right:0">${long ? p.target : p.stop}</span>
+              <span class="pt-plab" style="left:0">${fmtPrice(long ? p.stop : p.target)}</span>
+              <span class="pt-plab" style="right:0">${fmtPrice(long ? p.target : p.stop)}</span>
             </div></td>
           <td class="r pt-num">${_ptMoney(p.margin, rate)}</td>
-          <td class="r pt-num pt-muted">${p.liq}</td>
+          <td class="r pt-num pt-muted">${fmtPrice(p.liq)}</td>
           <td class="r pt-num ${_ptCls(p.unrealised)}">${_ptMoney(p.unrealised, rate, true)}</td>
           <td class="r pt-num ${_ptCls(p.roe_pct)}">${p.roe_pct > 0 ? '+' : ''}${p.roe_pct}%</td>
           <td class="r pt-num pt-muted">${fmtTime(p.opened_at)}</td>
@@ -1916,7 +1916,7 @@ function renderPaperHistory(){
       + '<th class="r">Quantity</th><th class="r">Entry &rarr; Exit</th>'
       + th('reason','Exit') + th('gross','Gross',1) + '<th class="r">Fees</th>'
       + '<th class="r">Funding</th>' + th('net','Net',1) + th('roe_pct','ROE',1)
-      + th('hours_held','Held',1) + '<th class="r">Wallet</th>'
+      + th('hours_held','Held',1) + '<th class="r">Free cash</th>'
       + '</tr></thead><tbody>'
       + rows.map(t => {
           const r = t.usdt_inr || rate;
@@ -1927,7 +1927,7 @@ function renderPaperHistory(){
             + `<span class="pt-side ${t.side === 'long' ? 'l' : 's'}">${t.side.toUpperCase()}</span>`
             + `<span class="pt-setup">${(t.signal_type||'').replace(/_/g,' ')} &middot; ${t.confidence}%</span></td>
             <td class="r pt-num">${_ptQty(t.qty)} <span class="pt-unit">${unit}</span></td>
-            <td class="r pt-num">${t.entry} <span class="pt-muted">&rarr;</span> ${t.exit}</td>
+            <td class="r pt-num">${fmtPrice(t.entry)} <span class="pt-muted">&rarr;</span> ${fmtPrice(t.exit)}</td>
             <td><span class="pt-tag ${t.reason}">${t.reason}</span></td>
             <td class="r pt-num ${_ptCls(t.gross)}">${_ptMoney(t.gross, r, true)}</td>
             <td class="r pt-num pt-muted">${_ptMoney(-t.fees, r)}</td>
