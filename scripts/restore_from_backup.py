@@ -20,6 +20,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from dotenv import load_dotenv
 from sqlalchemy import func, select, text
 from sqlalchemy.dialects.postgresql import insert as pg_insert
+from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from storage.database import Base, _make_url, _migrate_columns
@@ -134,9 +135,17 @@ async def restore_database(backup_file: str, target_url: str,
                 # there is the live one, and the backup's copy is older by
                 # definition. Overwriting it would quietly roll back settings
                 # changed since the backup was taken.
-                statement = (pg_insert(model.__table__).on_conflict_do_nothing()
-                             if engine.dialect.name == "postgresql"
-                             else model.__table__.insert())
+                # SQLite spells it the same way, and using it there too means
+                # a restore rehearsed against a local file behaves exactly as
+                # it will against Aiven. Without this the rehearsal raises an
+                # IntegrityError the real run would never see, which is a
+                # worse outcome than either behaviour on its own.
+                if engine.dialect.name == "postgresql":
+                    statement = pg_insert(model.__table__).on_conflict_do_nothing()
+                elif engine.dialect.name == "sqlite":
+                    statement = sqlite_insert(model.__table__).on_conflict_do_nothing()
+                else:
+                    statement = model.__table__.insert()
 
                 chunk_size = 500
                 for i in range(0, len(rows), chunk_size):
