@@ -1440,14 +1440,24 @@ section h2{color:var(--accent-soft)}
      rather than truncating, because "Price Outl…" and "Paper Tradi…" are
      not navigation. */
   .side-item{flex:1 1 0;min-width:0;padding:7px 3px;white-space:normal;
-    font-size:8.5px;line-height:1.12;text-align:center;overflow:hidden}
+    font-size:9px;line-height:1.14;text-align:center;overflow:hidden}
   .side-item svg{flex:none}
-  .side-item span{display:block;width:100%;word-break:break-word}
+  /* Wrapping at spaces only. Allowing breaks inside words turned the bar
+     into "Da shb oar d" — every label here is one or two words, so a space
+     is always the right place to break. */
+  .side-item span{display:block;width:100%}
   /* Opening it wrapped the bar into a second and third row, which pushed
      the five primary tabs up the screen and reflowed the page behind. A
      sheet leaves the bar where the thumb last saw it. */
   .sidebar.more-open{flex-wrap:wrap;padding-bottom:calc(4px + env(safe-area-inset-bottom,0px))}
-  .sidebar.more-open .side-secondary{
+  /* The cards lay out ABOVE the bar, not alongside it.
+     Both were in one flex-wrap container: the cards claim a third of the
+     width each and the bar items shrink to nothing, so the browser packed
+     cards and tabs onto the same first row and squeezed the five tabs into
+     50px each. order:-1 puts the whole card block ahead of the bar in the
+     flow, which with flex-wrap means its own rows above — and leaves the bar
+     at the bottom edge where the thumb last saw it. */
+  .sidebar.more-open .side-secondary{order:-1;
     display:flex;flex-direction:column;justify-content:center;
     /* Three across, less the horizontal margin, or the third wraps. */
     flex:0 0 calc(33.333% - 3px);max-width:calc(33.333% - 3px);
@@ -1478,7 +1488,7 @@ section h2{color:var(--accent-soft)}
   </div>
   <div class="side-group">Live</div>
   <div class="side-item" data-tab="dashboard" onclick="switchTab('dashboard')"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12h7V3H3zM14 21h7v-9h-7zM14 9h7V3h-7zM3 21h7v-6H3z"/></svg><span>Dashboard</span></div>
-  <a class="side-item" data-tab="predict" href="/predict"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12h4l3-8 4 16 3-8h4"/></svg><span>Price Outlook</span></a>
+  <a class="side-item side-secondary" data-tab="predict" href="/predict"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12h4l3-8 4 16 3-8h4"/></svg><span>Price Outlook</span></a>
   <div class="side-item" data-tab="crypto" onclick="switchTab('crypto')"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 17l6-6 4 4 8-8"/><path d="M17 7h4v4"/></svg><span>Signals</span></div>
   <div class="side-item" data-tab="paper" onclick="switchTab('paper')"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18M3 12h18M3 18h12"/></svg><span>Paper Trading</span></div>
   <div class="side-item" data-tab="guard" onclick="switchTab('guard')"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l8 4v5c0 5-3.4 8.5-8 10-4.6-1.5-8-5-8-10V7z"/></svg><span>Session Guard</span></div>

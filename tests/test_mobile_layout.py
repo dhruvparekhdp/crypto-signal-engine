@@ -474,28 +474,61 @@ class TestTheNavBarActuallyFits(unittest.TestCase):
     def test_labels_wrap_rather_than_truncate(self):
         """"Price Outl…" and "Paper Tradi…" are not navigation."""
         self.assertIn("white-space:normal", self.phone)
-        self.assertNotIn("text-overflow:ellipsis", self.phone[:self.phone.index("More")])
+
+    def test_labels_break_at_spaces_and_not_inside_words(self):
+        """word-break:break-word turned the bar into "Da shb oar d"."""
+        self.assertNotIn("word-break:break-word", self.phone)
 
     def test_the_icon_does_not_shrink_with_the_label(self):
         self.assertIn(".side-item svg{flex:none}", self.phone)
 
-    def test_six_items_fit_a_small_phone(self):
+    def test_exactly_five_tabs_live_on_the_bar(self):
         """
-        Arithmetic rather than faith: at flex:1 1 0 each item gets an equal
-        share, so the only question is whether the label fits two lines in it.
+        The design says five plus More. Accuracy was never marked secondary,
+        so the bar actually carried six plus More — seven items at 55px each,
+        which is where "Da shb oar d" came from.
+        """
+        import re
+
+        primary = len(re.findall(r'class="side-item"', health._HTML))
+        self.assertEqual(primary, 5)
+
+    def test_every_label_fits_without_breaking_a_word(self):
+        """
+        At flex:1 1 0 each item gets an equal share, so the question is
+        whether the longest WORD fits — a label breaks at its spaces, and a
+        word wider than the item is what forces a mid-word break.
         """
         labels = ["Dashboard", "Price Outlook", "Signals", "Paper Trading",
                   "Session Guard", "More"]
-        per_item = 360 / len(labels)
-        chars_per_line = int((per_item - 6) / 4.4)      # ~8.5px font
+        text_width = 360 / len(labels) - 6          # 3px padding each side
+        chars = text_width / 4.7                    # ~9px font
         for label in labels:
             with self.subTest(label=label):
-                lines = -(-len(label) // chars_per_line)
-                self.assertLessEqual(lines, 2, f"{label} needs {lines} lines")
+                longest = max(len(word) for word in label.split())
+                self.assertLessEqual(longest, chars,
+                                     f"'{label}' has a {longest}-char word")
 
     def test_more_is_still_the_sixth_item_and_still_opens_the_sheet(self):
         self.assertIn(".side-more{display:flex}", self.phone)
         self.assertIn("toggleMore()", health._HTML)
+
+    def test_the_open_sheet_lays_its_cards_above_the_bar(self):
+        """
+        Both were in one flex-wrap container. The cards claim a third of the
+        width each and the bar items shrink to nothing, so the browser packed
+        cards and tabs onto the same first row and squeezed the tabs to 50px.
+        """
+        self.assertIn(".sidebar.more-open .side-secondary{order:-1", self.phone)
+
+    def test_everything_unreachable_from_the_bar_is_in_the_sheet(self):
+        """Six destinations behind More, and none of them orphaned."""
+        import re
+
+        secondary = re.findall(r'class="side-item side-secondary"[^>]*data-tab="(\w+)"',
+                               health._HTML)
+        self.assertEqual(set(secondary),
+                         {"predict", "historic", "watchlist", "audit", "diag", "settings"})
 
 
 class TestPricesAreFormatted(unittest.TestCase):
