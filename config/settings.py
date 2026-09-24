@@ -149,6 +149,14 @@ class Settings(BaseSettings):
     # an unreachable first entry is what the rest of the chain is for.
     ollama_base_url: str = ""
 
+    # Scoring a headline is a short structured classification — a number, a
+    # confidence and one tag from a closed list. That is the shape of work a
+    # small local model does well and a frontier model is wasted on, and at
+    # a few hundred headlines a day it is also the one that would cost the
+    # most through a metered API. Local first, and the free tiers behind it.
+    llm_chain_news_scoring: str = (
+        "ollama:qwen3:1.7b, groq:openai/gpt-oss-20b, gemini:gemini-2.5-flash")
+
     llm_chain_position_review: str = (
         "ollama:qwen3:8b, gemini:gemini-2.5-flash, groq:openai/gpt-oss-120b")
 
