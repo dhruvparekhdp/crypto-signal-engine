@@ -269,13 +269,28 @@ class TestTheReviewPaysItsOwnWay(unittest.TestCase):
         self.assertIn('ask_json("position_review"', inspect.getsource(review_position))
 
     def test_its_chain_leads_with_something_cheaper_than_the_post_mortems(self):
+        """
+        Not the same model as the post-mortems, and cheaper — first a model on
+        our own hardware, then the cheap hosted one, with the expensive
+        reasoning model nowhere in the chain.
+        """
         from collectors.llm_client import _parse_chain
         from config.settings import settings
 
-        review = _parse_chain(settings.llm_chain_position_review)[0]
+        chain = _parse_chain(settings.llm_chain_position_review)
         post = _parse_chain(settings.llm_chain_post_trade)[0]
-        self.assertNotEqual(review, post)
-        self.assertEqual(review[0], "gemini")
+        self.assertNotEqual(chain[0], post)
+        # Whatever leads, it must not be a metered frontier model.
+        self.assertIn(chain[0][0], ("ollama", "gemini", "groq"))
+        self.assertNotIn("anthropic", [p for p, _ in chain])
+
+    def test_only_a_free_or_local_provider_leads_it(self):
+        """125 calls a day is where the bill actually comes from."""
+        from collectors.llm_client import PROVIDERS, _parse_chain
+        from config.settings import settings
+
+        leader = _parse_chain(settings.llm_chain_position_review)[0][0]
+        self.assertFalse(PROVIDERS[leader].needs_key and leader == "anthropic")
 
 
 class TestItCanOnlyTightenRisk(unittest.TestCase):
