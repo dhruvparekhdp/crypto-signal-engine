@@ -157,9 +157,34 @@ class ScalpConfig:
     # absurd.
     target_reward_risk: float = 2.0
 
-    # Where the setup is wrong, in multiples of one bar's average range. Under
-    # two, ordinary noise reaches it.
-    stop_atr_multiple: float = 2.0
+    # Where the setup is wrong, in multiples of ONE BAR's average range.
+    #
+    # It was 2.0, and the mismatch in that is the whole story of the first live
+    # cycle: thirteen of fourteen trades exited on the stop, none reached a
+    # target. A 1-minute ATR times two is a one-minute measurement, and the
+    # positions it was guarding stayed open for a median of twenty-seven
+    # minutes and sometimes a day. Measured on the live trades the stop landed
+    # at 0.408% of price, against a measured 1-hour move spread of 0.592% — so
+    # it sat at 0.69 of a single hour's standard deviation, well inside the
+    # range price covers by doing nothing in particular.
+    #
+    # What widening fixes is NOT the odds of the trade. For a market with no
+    # edge either way, the chance of reaching the target before the stop is
+    # stop/(stop+target) — a property of the ratio alone, identical at any
+    # distance. Simulated over 60,000 paths: 34.8% at the old distance, 33.7%
+    # at the new one, both the 33.3% the ratio predicts.
+    #
+    # What it fixes is the toll. The round trip is a fixed 0.118% of notional
+    # whatever the stop, so at 0.408% the fee was 28.9% of everything the trade
+    # risked; at 0.918% it is 12.9%. And because time to reach a barrier grows
+    # with the square of the distance, the same market produces about eleven
+    # trades a day instead of fifty-three. Five times fewer tolls.
+    #
+    # 4.5 puts the stop near 1.5 standard deviations of an hour. It does not
+    # create edge and nothing here should be read as if it does — the system
+    # still needs to beat 33.3%. It stops the bleed being fast while that gets
+    # settled.
+    stop_atr_multiple: float = 4.5
 
     # The cost of a round trip, as a share of what the trade risks.
     #

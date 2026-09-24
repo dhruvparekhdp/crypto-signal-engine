@@ -48,8 +48,15 @@ class TestCryptoSignals(unittest.TestCase):
         state.sentiment_news_count = 12
         state.rsi_14 = 48.0
         now = datetime.now(timezone.utc)
+        # A realistic minute for SOL: a ~0.1% true range. The earlier fixture
+        # used a 2.50 range on a 150 price — 1.67% per minute, which annualises
+        # to something no market has ever done — and that fed a derived target
+        # of 15%. It passed only because the old stop multiple halved it; the
+        # TARGET_ABSURD guard refuses it now, correctly. The analyzer under
+        # test gates on sentiment and RSI, so the candle shape is incidental to
+        # it and simply has to be possible.
         for _ in range(20):
-            state.candles_1m.append(OHLCVCandle(149.0, 151.0, 148.5, 150.0, 40.0, now))
+            state.candles_1m.append(OHLCVCandle(149.96, 150.06, 149.91, 150.0, 40.0, now))
         recalculate_indicators(state)
         state.rsi_14 = 48.0   # recompute overwrites it; the analyzer gates on this
 

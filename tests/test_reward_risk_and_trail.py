@@ -181,26 +181,54 @@ class TestTrailDistanceScalesWithTheSetup(unittest.TestCase):
         p.initial_stop_price = stop
         return p
 
-    def _trailed_stop(self, trail, leverage):
-        p, fees = self._pos(), FeeModel()
+    def _trailed_stop(self, trail, leverage, stop=2511.25):
+        p, fees = self._pos(stop=stop), FeeModel()
         p.leverage = leverage
         for high in (2534, 2548, 2575):
             p.update_trail(high, high - 2, trail, fees)
         return p.stop_price
 
-    def test_a_margin_trail_moves_when_only_the_leverage_dial_moves(self):
+    def test_a_margin_trail_still_moves_with_the_leverage_dial(self):
         """
         The setup is identical at both leverages — same entry, same stop, same
-        bars. Only the dial changed, and the exit moved with it. That is the
+        bars. Only the dial changed, and the exit moves with it. That is the
         defect: 0.20 of margin is 2.0% of price at 10x and 0.57% at 35x, so the
         same trade is trailed loosely or tightly for a reason that has nothing
         to do with the trade.
+
+        Shown here on a WIDE stop, because a tight one now hides it: the trail
+        is capped at 1R, and with a signal-derived stop the margin form exceeds
+        that at every leverage, so the cap — not the dial — decides the exit.
+        The defect is bounded now, not repaired. R-denominated is still the
+        right setting.
         """
         margin_trail = TrailingStop(enabled=True, activate_at_r=0.75,
                                     trail_pct_of_margin=0.20)
-        at10 = self._trailed_stop(margin_trail, 10.0)
-        at35 = self._trailed_stop(margin_trail, 35.0)
+        # 57 of risk: wide enough that the margin trail (50.4 at 10x, 14.4 at
+        # 35x) stays under the 1R cap, tight enough that a 53-point move still
+        # clears the 0.75R activation.
+        wide = 2465.0
+        at10 = self._trailed_stop(margin_trail, 10.0, stop=wide)
+        at35 = self._trailed_stop(margin_trail, 35.0, stop=wide)
         self.assertNotAlmostEqual(at10, at35, delta=1.0)
+
+    def test_the_trail_never_rides_further_away_than_the_stop_it_replaces(self):
+        """
+        The cap that bounds the defect above, and the reason it exists.
+
+        Leverage now falls as the stop widens, to hold the loss per trade at
+        the risk budget. The margin form divides by leverage, so a 2x position
+        produced a trail five times wider than its own stop — and since the
+        ratchet only moves the stop toward price, it could not move at all.
+        Trailing activated and then silently did nothing.
+        """
+        margin_trail = TrailingStop(enabled=True, activate_at_r=0.75,
+                                    trail_pct_of_margin=0.20)
+        at2 = self._trailed_stop(margin_trail, 2.0)
+        at35 = self._trailed_stop(margin_trail, 35.0)
+        self.assertAlmostEqual(at2, at35, delta=1e-9)
+        # 1R behind the last high the trail saw, not five R.
+        self.assertGreater(at2, self._pos().stop_price)
 
     def test_an_r_trail_is_the_same_exit_at_any_leverage(self):
         t = TrailingStop.runner()

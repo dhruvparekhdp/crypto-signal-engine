@@ -167,6 +167,14 @@ def open_from_signal(
     # Leverage may scale with confidence too, bounded by volatility, so the
     # margin has to be re-capped against total exposure afterwards.
     leverage = cfg.leverage_for_signal(signal.confidence, atr_pct)
+
+    # Then lowered until being stopped out costs what the risk budget allows.
+    # The stop is placed by the market — the signal derives it from volatility
+    # — so leaving leverage fixed would make the cost of a failed trade a
+    # function of how noisy the hour happened to be. Pinning the loss and
+    # letting the leverage move puts that the right way round.
+    leverage = cfg.leverage_for_stop(leverage, signal.current_price, signal.stop_loss)
+
     margin = cfg.cap_margin_to_notional(margin, leverage, state.wallet)
     if margin <= 0:
         return None

@@ -452,10 +452,29 @@ class Position:
             trail_move = risk * trail.trail_r
         else:
             trail_move = self.entry_price * trail.trail_pct_of_margin / self.leverage
+
+        # A trail can never ride further from price than the stop it replaces.
+        #
+        # The margin-denominated form above divides by leverage, so it was
+        # calibrated for a world where leverage was fixed at 10x. Now that
+        # leverage falls as the stop widens — to hold the loss per trade at the
+        # risk budget — a 2x position produced a trail five times wider than
+        # its own stop. The ratchet only ever moves the stop toward price, so
+        # that trail could not move it at all and trailing silently stopped
+        # working. Clamping is the honest reading: a stop further away than the
+        # one already set is not a trailing stop, it is a looser one.
+        trail_move = min(trail_move, risk)
         if trail.step_r is not None:
             step = risk * trail.step_r
         else:
             step = self.entry_price * trail.step_pct_of_margin / self.leverage
+        # The step exists to stop the level twitching on every bar, so it has
+        # to stay small against the move it is gating. The same leverage
+        # division that widened the trail also inflated this: at 2x it came out
+        # larger than the whole trail distance, so no improvement was ever big
+        # enough to be written and the trail activated but never moved. A
+        # quarter of the trail is a threshold; more than the trail is a veto.
+        step = min(step, trail_move * 0.25)
         candidate = best - s * trail_move
 
         if trail.lock_breakeven:
@@ -1172,6 +1191,19 @@ class CycleConfig:
     # to tell a run from a single spike without lagging into irrelevance.
     drift_lookback: int = 3
 
+    # The most one stopped-out trade may cost, as a share of the margin posted
+    # for it. This is the risk budget, and it is deliberately the thing that is
+    # configured rather than the leverage: leverage is then whatever satisfies
+    # it at the stop distance the market asked for. Four percent reproduces
+    # what the first cycle actually risked per trade (10x against a 0.408%
+    # stop), so widening the stop changes where the exit sits without changing
+    # what a failure costs.
+    max_loss_pct_of_margin: float = 0.04
+
+    # A floor, so an unusually wide stop cannot reduce leverage to the point
+    # where the position is too small to clear one lot.
+    min_leverage: float = 1.0
+
     def is_target_viable(self, entry: float, target: float) -> bool:
         """Can this trade pay for itself if it works? If not, don't open it."""
         if entry <= 0 or target <= 0:
@@ -1186,6 +1218,35 @@ class CycleConfig:
             return self.leverage
         return self.leverage_scaling.leverage_for(
             confidence, atr_pct, self.fees.maintenance_margin_pct)
+
+    def leverage_for_stop(self, leverage: float, entry: float,
+                          stop_price: float) -> float:
+        """
+        Lower the leverage until being stopped out costs no more than
+        `max_loss_pct_of_margin`.
+
+        This is the half of "widen the stop" that is easy to leave out and
+        expensive to forget. What a stop-out costs is leverage times the price
+        distance — 10x against a 0.408% stop is 4.1% of margin. Move the stop
+        to 0.918% and leave the leverage alone and the same trade now loses
+        9.2%, so a change made to survive noise would have doubled the loss on
+        every trade that fails. That is the opposite of the instruction.
+
+        Tying the two together means the risk budget is the thing that is
+        actually configured, and the stop distance is free to follow the
+        market. A quiet hour produces a tight stop and more leverage; a violent
+        one produces a wide stop and less. The amount at stake does not move.
+
+        Only ever reduces. A generous stop is not a reason to take more
+        leverage than was asked for.
+        """
+        if entry <= 0 or stop_price <= 0 or leverage <= 0:
+            return leverage
+        stop_move = abs(entry - stop_price) / entry
+        if stop_move <= 0:
+            return leverage
+        affordable = self.max_loss_pct_of_margin / stop_move
+        return max(self.min_leverage, min(leverage, affordable))
 
     def cap_margin_to_notional(self, margin: float, leverage: float,
                                wallet: float) -> float:
