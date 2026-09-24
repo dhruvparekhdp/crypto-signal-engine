@@ -97,6 +97,71 @@ class TestRolesAreConfiguredSeparately(unittest.TestCase):
                     self.assertIn(provider, PROVIDERS)
 
 
+class TestAModelOnHardwareYouOwn(unittest.TestCase):
+    """
+    Ollama serves an OpenAI-shaped /v1/chat/completions, so it needs no
+    adapter — only an address, and permission to have no key.
+
+    It goes at the head of the position-review chain because that role is six
+    times the volume of every other role combined, has a twelve-second budget
+    rather than two, and clamps the model to a +0.10/-0.15 nudge on a score
+    the local arithmetic already settles. Slow and free beats fast and billed
+    for exactly that shape of work.
+    """
+
+    def test_it_needs_no_api_key(self):
+        self.assertFalse(PROVIDERS["ollama"].needs_key)
+
+    def test_an_unset_address_means_not_configured(self):
+        """The address is the on/off switch; nothing else has to change."""
+        with patch("collectors.llm_client.settings") as st:
+            st.ollama_base_url = ""
+            self.assertFalse(PROVIDERS["ollama"].configured)
+            self.assertEqual(PROVIDERS["ollama"].url, "")
+
+    def test_a_set_address_builds_the_full_endpoint(self):
+        with patch("collectors.llm_client.settings") as st:
+            st.ollama_base_url = "http://dhruv-ai:11434"
+            self.assertTrue(PROVIDERS["ollama"].configured)
+            self.assertEqual(PROVIDERS["ollama"].url,
+                             "http://dhruv-ai:11434/v1/chat/completions")
+
+    def test_a_trailing_slash_does_not_double_up(self):
+        with patch("collectors.llm_client.settings") as st:
+            st.ollama_base_url = "http://dhruv-ai:11434/"
+            self.assertEqual(PROVIDERS["ollama"].url,
+                             "http://dhruv-ai:11434/v1/chat/completions")
+
+    def test_it_leads_the_position_review_chain(self):
+        from config.settings import settings as real
+
+        self.assertEqual(_parse_chain(real.llm_chain_position_review)[0][0], "ollama")
+
+    def test_the_cloud_still_sits_behind_it(self):
+        """
+        The laptop being asleep is not a problem to solve. It is the first
+        entry in a chain, and an unreachable first entry is what the rest of
+        the chain is for.
+        """
+        from config.settings import settings as real
+
+        chain = _parse_chain(real.llm_chain_position_review)
+        self.assertGreater(len(chain), 1)
+        self.assertNotIn("ollama", [p for p, _ in chain[1:]])
+
+    def test_no_other_role_depends_on_the_laptop(self):
+        """
+        A signal must never wait on a machine at home. pre_trade has two
+        seconds before the price it asked about is gone.
+        """
+        from config.settings import settings as real
+
+        for role in ("pre_trade", "post_trade", "research"):
+            with self.subTest(role=role):
+                named = [p for p, _ in _parse_chain(getattr(real, f"llm_chain_{role}"))]
+                self.assertNotIn("ollama", named)
+
+
 class TestReplyParsing(unittest.TestCase):
     def test_plain_json(self):
         self.assertEqual(_extract_json('{"a": 1}'), {"a": 1})

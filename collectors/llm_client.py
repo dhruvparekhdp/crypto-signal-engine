@@ -61,6 +61,12 @@ class Provider:
     kind: str
     endpoint: str
     key_attr: str
+    # A provider whose address is configuration rather than a constant: a
+    # self-hosted model lives wherever its owner put it, and that address is
+    # also the switch. Empty means "not set up", so the chain skips it.
+    endpoint_attr: str = ""
+    # A model running on your own machine has nothing to authenticate to.
+    needs_key: bool = True
 
     @property
     def api_key(self) -> str:
@@ -70,8 +76,15 @@ class Provider:
         return raw.get_secret_value() if hasattr(raw, "get_secret_value") else str(raw)
 
     @property
+    def url(self) -> str:
+        if not self.endpoint_attr:
+            return self.endpoint
+        base = (getattr(settings, self.endpoint_attr, "") or "").strip().rstrip("/")
+        return f"{base}{self.endpoint}" if base else ""
+
+    @property
     def configured(self) -> bool:
-        return bool(self.api_key)
+        return bool(self.api_key) if self.needs_key else bool(self.url)
 
 
 PROVIDERS: dict[str, Provider] = {
@@ -88,6 +101,12 @@ PROVIDERS: dict[str, Provider] = {
     "anthropic": Provider(
         "anthropic", ANTHROPIC_SHAPED,
         "https://api.anthropic.com/v1/messages", "anthropic_api_key"),
+    # A model on hardware you own. Ollama serves an OpenAI-shaped
+    # /v1/chat/completions, so it needs no adapter of its own — only an
+    # address and permission to have no key.
+    "ollama": Provider(
+        "ollama", OPENAI_SHAPED, "/v1/chat/completions", "",
+        endpoint_attr="ollama_base_url", needs_key=False),
 }
 
 
@@ -187,8 +206,9 @@ async def _call_openai_shaped(provider: Provider, model: str, system: str,
     if provider.name != "gemini":
         payload["response_format"] = {"type": "json_object"}
 
-    headers = {"Authorization": f"Bearer {provider.api_key}",
-               "Content-Type": "application/json"}
+    headers = {"Content-Type": "application/json"}
+    if provider.needs_key:
+        headers["Authorization"] = f"Bearer {provider.api_key}"
     if provider.name == "openrouter":
         # OpenRouter asks callers to identify themselves; without these the
         # request works but is rate-limited more aggressively.
@@ -196,7 +216,7 @@ async def _call_openai_shaped(provider: Provider, model: str, system: str,
         headers["X-Title"] = "crypto-signal-engine"
 
     async with httpx.AsyncClient(timeout=timeout) as client:
-        resp = await client.post(provider.endpoint, json=payload, headers=headers)
+        resp = await client.post(provider.url, json=payload, headers=headers)
         if resp.status_code != 200:
             raise RuntimeError(f"{provider.name} returned {resp.status_code}: {resp.text[:200]}")
         return resp.json()["choices"][0]["message"]["content"]

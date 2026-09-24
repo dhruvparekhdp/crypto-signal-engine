@@ -139,8 +139,18 @@ class Settings(BaseSettings):
     # Rs 2,000 a month on its own — the whole budget, before the post-mortems
     # and the research pass it would be sharing with. Flash does the same job
     # for about Rs 400, with the free tier behind it.
+    # Where a self-hosted model answers, if there is one. Empty means there
+    # is not, and every chain that names ollama simply skips it — so this one
+    # setting is the whole on/off switch and nothing else has to change.
+    #
+    # The engine runs on EC2 and the model runs at home, so this is a
+    # Tailscale hostname rather than localhost. That the laptop might be
+    # asleep is not a problem to solve: it is the first entry in a chain, and
+    # an unreachable first entry is what the rest of the chain is for.
+    ollama_base_url: str = ""
+
     llm_chain_position_review: str = (
-        "gemini:gemini-2.5-flash, groq:openai/gpt-oss-120b, anthropic:claude-sonnet-5")
+        "ollama:qwen3:8b, gemini:gemini-2.5-flash, groq:openai/gpt-oss-120b")
 
     llm_chain_research: str = (
         "anthropic:claude-opus-5, gemini:gemini-2.5-pro")
