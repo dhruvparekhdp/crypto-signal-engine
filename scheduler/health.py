@@ -1424,9 +1424,25 @@ section h2{color:var(--accent-soft)}
 .side-more{display:none}
 
 @media(max-width:640px){
-  .sidebar{overflow-x:visible;justify-content:space-around}
+  .sidebar{overflow-x:visible;justify-content:space-between}
   .side-secondary{display:none}
   .side-more{display:flex}
+
+  /* The six items have to SHARE the width, not each take what they want.
+     At their natural widths — 9px labels, nowrap, 14px of side padding — the
+     bar needs about 463px and a phone has 390. It overflowed by 73, and the
+     item that fell off the end was More, which is the one that reaches the
+     other six pages. The sheet was built, shipped, and unreachable.
+
+     flex:1 1 0 with min-width:0 is what makes the items divide the bar
+     instead of overflowing it; without the min-width they refuse to shrink
+     below their content and nothing changes. Labels wrap to a second line
+     rather than truncating, because "Price Outl…" and "Paper Tradi…" are
+     not navigation. */
+  .side-item{flex:1 1 0;min-width:0;padding:7px 3px;white-space:normal;
+    font-size:8.5px;line-height:1.12;text-align:center;overflow:hidden}
+  .side-item svg{flex:none}
+  .side-item span{display:block;width:100%;word-break:break-word}
   /* Opening it wrapped the bar into a second and third row, which pushed
      the five primary tabs up the screen and reflowed the page behind. A
      sheet leaves the bar where the thumb last saw it. */
@@ -2711,7 +2727,7 @@ function esc(s){return String(s).replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>
 // which is five and a half hours from the only clock the operator has. The
 // raw value stays in the title, because this page exists for checking what is
 // actually stored and a formatted-only view would hide it.
-const _ISO = /^\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}/;
+const _ISO = /^\\d{4}-\\d{2}-\\d{2}[T ]\\d{2}:\\d{2}/;
 function cell(v){
   if(v===null||v===undefined) return '<td class="null">NULL</td>';
   if(typeof v === 'string' && _ISO.test(v)){
@@ -4493,7 +4509,7 @@ async function apiFetch(url, opts){
 if(!window.fmtStamp){
   window.fmtStamp = function(iso, opts){
     if(!iso) return '—';
-    var d = new Date(/[Z+]|-\d\d:\d\d$/.test(iso) ? iso : iso + 'Z');
+    var d = new Date(/[Z+]|-\\d\\d:\\d\\d$/.test(iso) ? iso : iso + 'Z');
     if(isNaN(d)) return String(iso);
     var o = opts || {};
     var now = new Date();
@@ -4508,7 +4524,7 @@ if(!window.fmtStamp){
   // wanted: the first tells you whether to care, the second which row it was.
   window.fmtAgo = function(iso){
     if(!iso) return '';
-    var d = new Date(/[Z+]|-\d\d:\d\d$/.test(iso) ? iso : iso + 'Z');
+    var d = new Date(/[Z+]|-\\d\\d:\\d\\d$/.test(iso) ? iso : iso + 'Z');
     if(isNaN(d)) return '';
     var s = Math.floor((Date.now() - d.getTime()) / 1000);
     if(s < 0) return 'in ' + window.fmtAgo(new Date(Date.now()*2 - d.getTime()).toISOString());

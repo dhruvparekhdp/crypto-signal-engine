@@ -130,23 +130,42 @@ class TestTheDecision(unittest.TestCase):
         """Cutting early costs a spread; holding on costs the trade."""
         self.assertGreater(AI_MAX_HARM, AI_MAX_HELP)
 
-    def test_no_model_answer_falls_back_to_the_local_read(self):
+    def test_a_silent_model_closes_the_position(self):
         """
-        Not to closing, which is the one place this does not take the safer
-        branch. Closing on a model outage would shut positions for a reason
-        with nothing to do with the market — a provider hiccup at 3am would
-        liquidate the book. The local read is a measurement; the model is a
-        bounded adjustment on top, and losing it should not flip the
-        measurement.
+        On instruction. The local read alone is exactly what was judged
+        insufficient inside this band — that is why the model was asked — so
+        treating silence as agreement would make an outage the most permissive
+        state the system has.
         """
-        self.assertFalse(decide(0.70, None).hold)   # local read says close
-        self.assertTrue(decide(0.84, None).hold)    # local read says hold
-        self.assertFalse(decide(0.84, None).asked_model)
+        from analysis.position_review import _no_answer
 
-    def test_the_model_could_still_have_closed_that_position(self):
-        """So the fallback is a real choice, not an equivalent outcome."""
+        for trend in (0.70, 0.84):
+            with self.subTest(trend=trend):
+                self.assertFalse(_no_answer(trend).hold)
+
+    def test_that_is_a_real_choice_and_not_an_equivalent_outcome(self):
+        """At 0.84 the local read would have held. The outage overrides it."""
         self.assertTrue(decide(0.84, None).hold)
-        self.assertFalse(decide(0.84, -AI_MAX_HARM).hold)
+
+        from analysis.position_review import _no_answer
+
+        self.assertFalse(_no_answer(0.84).hold)
+
+    def test_an_outage_outside_the_band_changes_nothing(self):
+        """
+        A position at 0.95 is not closed because a provider timed out — the
+        model was never going to be asked about it.
+        """
+        from analysis.position_review import _needs_model
+
+        self.assertFalse(_needs_model(0.95))
+        self.assertTrue(decide(0.95).hold)
+
+    def test_the_behaviour_is_a_setting_not_a_hardcoded_opinion(self):
+        """Both directions are defensible; this one was chosen, not assumed."""
+        from config.settings import settings
+
+        self.assertTrue(settings.position_review_close_on_outage)
 
 
 class TestTheTrailForWinners(unittest.TestCase):

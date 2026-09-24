@@ -445,6 +445,59 @@ class TestTheMoreSheetIsASheet(unittest.TestCase):
         self.assertIn(".sidebar.more-open{box-shadow:", self.css)
 
 
+class TestTheNavBarActuallyFits(unittest.TestCase):
+    """
+    The More sheet was built, shipped, and unreachable.
+
+    Six items at their natural widths — 9px labels, nowrap, 14px of side
+    padding — need about 463px. A phone has 390. The bar overflowed by 73px
+    and the item that fell off the end was More, which is the one that reaches
+    the other six pages. Everything about the sheet worked; nobody could open
+    it.
+    """
+
+    def setUp(self):
+        html = health._HTML
+        self.phone = html[html.index("@media(max-width:640px){\n  .sidebar{"):]
+
+    def test_the_items_divide_the_bar_rather_than_overflow_it(self):
+        self.assertIn(".side-item{flex:1 1 0;min-width:0", self.phone)
+
+    def test_min_width_zero_is_present_because_flex_alone_does_nothing(self):
+        """
+        A flex item refuses to shrink below its content width without this,
+        so `flex:1` on its own leaves the overflow exactly as it was.
+        """
+        nav = self.phone[:self.phone.index(".side-item svg")]
+        self.assertIn("min-width:0", nav)
+
+    def test_labels_wrap_rather_than_truncate(self):
+        """"Price Outl…" and "Paper Tradi…" are not navigation."""
+        self.assertIn("white-space:normal", self.phone)
+        self.assertNotIn("text-overflow:ellipsis", self.phone[:self.phone.index("More")])
+
+    def test_the_icon_does_not_shrink_with_the_label(self):
+        self.assertIn(".side-item svg{flex:none}", self.phone)
+
+    def test_six_items_fit_a_small_phone(self):
+        """
+        Arithmetic rather than faith: at flex:1 1 0 each item gets an equal
+        share, so the only question is whether the label fits two lines in it.
+        """
+        labels = ["Dashboard", "Price Outlook", "Signals", "Paper Trading",
+                  "Session Guard", "More"]
+        per_item = 360 / len(labels)
+        chars_per_line = int((per_item - 6) / 4.4)      # ~8.5px font
+        for label in labels:
+            with self.subTest(label=label):
+                lines = -(-len(label) // chars_per_line)
+                self.assertLessEqual(lines, 2, f"{label} needs {lines} lines")
+
+    def test_more_is_still_the_sixth_item_and_still_opens_the_sheet(self):
+        self.assertIn(".side-more{display:flex}", self.phone)
+        self.assertIn("toggleMore()", health._HTML)
+
+
 class TestPricesAreFormatted(unittest.TestCase):
     """
     Exit prices rendered as raw floats — 86807.23385676013, 1.5262954668640325

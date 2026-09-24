@@ -168,6 +168,23 @@ def _needs_model(trend: float) -> bool:
     return (HOLD_THRESHOLD - AI_MAX_HELP) <= trend < (HOLD_THRESHOLD + AI_MAX_HARM)
 
 
+def _no_answer(trend: float) -> Review:
+    """
+    The model was worth asking and did not answer.
+
+    Closing rather than falling back to the local read, because the local read
+    alone is exactly the thing that was judged insufficient here — that is why
+    the model was being asked. Treating its silence as agreement would make an
+    outage the most permissive state the system has.
+    """
+    from config.settings import settings
+
+    if not settings.position_review_close_on_outage:
+        return decide(trend)
+    return Review(hold=False, confidence=trend, trend=trend,
+                  reason="no model answer, closing on instruction")
+
+
 def decide(trend: float, ai_delta: float | None = None,
            factors: str = "", summary: str = "") -> Review:
     """Combine the local read with the model's adjustment, if one was taken."""
@@ -269,17 +286,19 @@ async def review_position(pos, state, now: datetime, losing: bool = True) -> Rev
     The full decision for a position at a loss: local read, then the model
     only if its answer could change the outcome.
 
-    Never raises, and falls back to the local read when the model cannot be
-    reached — which means an unreachable model can leave a position open that
-    it might have closed.
+    Never raises.
 
-    That is deliberate, and it is the one place this does not simply choose
-    the safer branch. Closing on a model outage would shut positions for a
-    reason with nothing to do with the market, and a provider hiccup at 3am
-    would liquidate the book. The local read is a measurement of price, time
-    and distance to the stop; it is the primary signal here and the model is a
-    bounded adjustment on top of it. Losing the adjustment should not flip the
-    measurement.
+    When the model cannot be reached the position is CLOSED rather than held,
+    on instruction. The two choices fail in opposite directions and neither is
+    free: holding through an outage keeps a position a model might have shut,
+    and closing books a real trade because of an API problem. The second was
+    chosen because "keep the loss to a minimum" is the stated priority, and a
+    closed trade at a small loss is recoverable in a way an open one running
+    against you is not.
+
+    This only applies to the band where the model was worth asking. Outside
+    it the local read is decisive on its own and an outage changes nothing —
+    a position at 0.95 is not closed because a provider timed out.
     """
     trend = trend_confidence(pos, state, now)
 
@@ -299,10 +318,10 @@ async def review_position(pos, state, now: datetime, losing: bool = True) -> Rev
                                max_tokens=400, temperature=0.2, timeout=12.0)
     except Exception as exc:
         log.warning("position_review_failed", symbol=pos.symbol, error=str(exc)[:160])
-        return decide(trend)
+        return _no_answer(trend)
 
     if not reply:
-        return decide(trend)
+        return _no_answer(trend)
 
     from collectors.macro_sentinel import _clean_factors
 

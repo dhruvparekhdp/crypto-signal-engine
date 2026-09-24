@@ -110,6 +110,19 @@ class Settings(BaseSettings):
     position_review_enabled: bool = True
     position_review_interval_seconds: int = 300
 
+    # What to do with a losing position when no model answers.
+    #
+    # Two defensible answers and they fail in opposite directions. Falling
+    # back to the local read keeps trading through a provider outage, at the
+    # cost of holding positions a model might have closed. Closing honours
+    # "keep the loss to a minimum" literally, at the cost of booking real
+    # trades because of an API problem — a Groq hiccup at 3am shuts the book.
+    #
+    # Set to close, on instruction. The local read is still what decides
+    # everything else; this is only the tie-break for the case where the half
+    # that was asked for cannot be obtained.
+    position_review_close_on_outage: bool = True
+
     # A winning position is reviewed less often than a losing one. It is not
     # deciding whether to exist — the trail already bounds what it can give
     # back — it is only choosing how much rope that trail gets, and a trail
