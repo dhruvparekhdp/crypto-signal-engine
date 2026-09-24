@@ -86,6 +86,9 @@ class AppRunner:
         # lifetime for something regenerated weekly.
         self.last_research: dict = {}
         self.last_research_text: str = ""
+        # When each symbol's open position was last put to the reviewer. The
+        # tick is every 30s and no market reconsiders that often.
+        self._last_position_review: dict[str, datetime] = {}
         self.oi_collector = BinanceFuturesOICollector(self.crypto_store)
         self._pending_paper_signals: list[tuple[CryptoSignal, object]] = []
         self.fear_greed = None
@@ -250,6 +253,15 @@ class AppRunner:
 
                     trade = resolve_at_price(pos, st.current_price, now, cfg, wallet)
                     if trade is None:
+                        # The position survived the tick's exits. A losing one
+                        # now has to justify staying open; a winning one has
+                        # its trail set by the same confidence. Nothing here
+                        # can defer an exit that already fired — by the time a
+                        # stop is reached the loss is no longer bounded, so
+                        # this runs only on what resolve_at_price left alive.
+                        trade = await self._review_open_position(
+                            pos, st, cfg, now, wallet, repo)
+                    if trade is None:
                         await repo.sync_position(row.id, pos)
                         live_ids[len(live)] = row.id
                         live.append(pos)
@@ -359,6 +371,59 @@ class AppRunner:
         except Exception:
             log.exception("crypto_signal_db_log_failed", symbol=sig.symbol)
             return 0
+
+    async def _review_open_position(self, pos, state, cfg, now, wallet, repo):
+        """
+        Hold, close early, or tighten the trail — decided every tick.
+
+        Losing positions are the ones that get reviewed against the 75%
+        threshold, because they are the ones costing money. Winners are left to
+        the trail, whose distance is set by the same local confidence: more
+        confidence buys a looser trail, less takes what is on the table.
+
+        Rate-limited per position, not per tick. The tick runs every thirty
+        seconds and no market changes its mind that often; without this, one
+        position open for two hours would be 240 reviews.
+        """
+        from analysis.position_review import (
+            review_losing_position,
+            trail_r_for_confidence,
+            trend_confidence,
+        )
+
+        if not settings.position_review_enabled:
+            return None
+
+        # Gross, not net: fees are already sunk at entry and would make every
+        # freshly opened position look like a loser for its first few minutes,
+        # which is exactly when there is least to judge.
+        losing = pos.gross_pnl(state.current_price) < 0
+        if not losing:
+            # Winning: no model call, just a confidence-scaled trail. The
+            # trade is already working and the trail bounds what it can give
+            # back, so an opinion is worth less here than the price action.
+            if cfg.trailing is not None and cfg.trailing.enabled:
+                conviction = trend_confidence(pos, state, now)
+                pos.trail_r_override = trail_r_for_confidence(conviction)
+            return None
+
+        last = self._last_position_review.get(pos.symbol)
+        if last is not None and (now - last).total_seconds() < (
+                settings.position_review_interval_seconds):
+            return None
+        self._last_position_review[pos.symbol] = now
+
+        review = await review_losing_position(pos, state, now)
+        if review.hold:
+            return None
+
+        from analysis.paper_trading import ExitReason, close_position, fees_for
+
+        log.info("position_closed_early", symbol=pos.symbol,
+                 confidence=round(review.confidence, 3), factors=review.factors,
+                 summary=review.summary)
+        return close_position(pos, state.current_price, ExitReason.CONVICTION_LOST,
+                              now, fees_for(pos.symbol), wallet)
 
     async def _review_closed_trade(self, trade, row) -> None:
         """

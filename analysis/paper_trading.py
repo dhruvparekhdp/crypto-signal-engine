@@ -300,6 +300,11 @@ class Position:
     # and 1R has to stay measured from the risk we originally accepted.
     initial_stop_price: float = 0.0
     peak_price: float = 0.0        # best price seen in our favour
+
+    # Set each tick by the position reviewer, in R. None means "use whatever
+    # the trailing config says" — the state a position is in before any
+    # review has run, and the state it stays in if reviews are switched off.
+    trail_r_override: float | None = None
     trail_active: bool = False
     # Highest rung the ladder has locked, so it can never step back down.
     locked_roe: float | None = None
@@ -448,7 +453,13 @@ class Position:
 
         # In R when the setup says so, otherwise % of margin converted to price
         # by dividing out the leverage.
-        if trail.trail_r is not None:
+        # An override set per tick by the position reviewer, from how much
+        # conviction the local read still has. More confidence rides looser;
+        # less takes what is on the table. It wins over the configured value
+        # because it is the more recent judgement about this specific trade.
+        if self.trail_r_override is not None:
+            trail_move = risk * self.trail_r_override
+        elif trail.trail_r is not None:
             trail_move = risk * trail.trail_r
         else:
             trail_move = self.entry_price * trail.trail_pct_of_margin / self.leverage

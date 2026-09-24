@@ -97,6 +97,19 @@ class Settings(BaseSettings):
         "groq:openai/gpt-oss-20b, openrouter:qwen/qwen3-32b")
     llm_chain_post_trade: str = (
         "anthropic:claude-sonnet-5, gemini:gemini-2.5-flash, groq:openai/gpt-oss-120b")
+    # Reviewing what is already open.
+    #
+    # A losing position has to keep earning the right to stay open: the local
+    # read of the market plus a bounded model adjustment must clear 75%, or it
+    # closes now rather than waiting for the stop. That can only ever close a
+    # trade EARLIER, never hold one past an exit that already fired.
+    #
+    # Thirty seconds is the tick; five minutes is the review. No market
+    # reconsiders itself twice a minute, and without the gap a single position
+    # open for two hours would be 240 reviews.
+    position_review_enabled: bool = True
+    position_review_interval_seconds: int = 300
+
     llm_chain_research: str = (
         "anthropic:claude-opus-5, gemini:gemini-2.5-pro")
 
