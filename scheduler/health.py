@@ -1688,10 +1688,7 @@ section h2{color:var(--accent-soft)}
 
 function fmtUptime(s){if(s==null||isNaN(s))return '—';if(s<60)return s+'s';if(s<3600)return Math.floor(s/60)+'m';const h=Math.floor(s/3600),m=Math.floor((s%3600)/60);return h+'h '+m+'m';}
 const _IST={timeZone:'Asia/Kolkata'};
-function fmtTime(iso){
-  const d=new Date(iso.endsWith('Z')||iso.includes('+')?iso:iso+'Z');
-  return d.toLocaleTimeString('en-IN',{..._IST,hour:'2-digit',minute:'2-digit'})+ ' IST';
-}
+function fmtTime(iso){ return window.fmtStamp(iso); }
 
 function esc(s){
   const d=document.createElement('div');
@@ -2250,7 +2247,7 @@ async function loadHistoric(){
     </tr></thead><tbody>` + rows.map(x=>{
       const m=moveOf(x);
       return `<tr>
-        <td class="sub">${new Date(x.timestamp).toLocaleString('en-IN',{day:'2-digit',month:'short',hour:'2-digit',minute:'2-digit'})}</td>
+        <td class="sub">${window.fmtStamp(x.timestamp)}</td>
         <td><b>${esc(x.symbol)}</b></td>
         <td>${esc(CR_SIG_NAME[x.signal_type]||x.signal_type)}</td>
         <td class="${x.direction==='long'?'pos':'neg'}">${x.direction.toUpperCase()}</td>
@@ -2443,19 +2440,20 @@ function renderCryptoSignalsPage(){
   }
 }
 
+// Both readings, because they answer different questions: the stamp says
+// which row this was, the relative time says whether to care.
+//
+// It used to build the stamp itself, with two faults. `new Date(iso)` on a
+// timestamp carrying no zone reads it as the viewer's local time rather than
+// UTC, which is what the wire actually sends — so every signal rendered five
+// and a half hours early. And the result was labelled "IST" while being
+// formatted in whatever zone the browser happened to be in, so the label was
+// right only by coincidence.
 function fmtSignalTime(iso){
   if(!iso) return 'time unknown';
-  const t = new Date(iso);
-  if(isNaN(t)) return 'time unknown';
-  const mins = Math.floor((Date.now() - t.getTime())/60000);
-  let ago;
-  if(mins < 1) ago = 'just now';
-  else if(mins < 60) ago = mins + 'm ago';
-  else if(mins < 1440) ago = Math.floor(mins/60) + 'h ' + (mins%60) + 'm ago';
-  else ago = Math.floor(mins/1440) + 'd ago';
-  const stamp = t.toLocaleString('en-IN',
-    {day:'2-digit',month:'short',hour:'2-digit',minute:'2-digit',hour12:true});
-  return stamp + ' IST · ' + ago;
+  const stamp = window.fmtStamp(iso);
+  if(stamp === '—') return 'time unknown';
+  return stamp + ' IST · ' + window.fmtAgo(iso);
 }
 
 function renderCryptoSignalCard(s){
@@ -2618,7 +2616,7 @@ async function refresh(){
 
     if(need.includes('paper')) await loadPaper();
 
-    setText('last-updated', 'Updated: '+new Date().toLocaleTimeString('en-IN',_IST)+' IST');
+    setText('last-updated', 'Updated ' + window.fmtStamp(new Date().toISOString(), {seconds:true}));
     setText('refresh-label', 'Next in 30s');
   }catch(e){
     console.error('refresh error:', e);
@@ -2708,8 +2706,17 @@ td.null{color:#475569;font-style:italic}
 <div id="tables"></div>
 <script>
 function esc(s){return String(s).replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));}
+// An ISO timestamp straight from the database reads as
+// "2026-09-24T10:09:00.123456" — technically a date and a time, and in UTC,
+// which is five and a half hours from the only clock the operator has. The
+// raw value stays in the title, because this page exists for checking what is
+// actually stored and a formatted-only view would hide it.
+const _ISO = /^\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}/;
 function cell(v){
   if(v===null||v===undefined) return '<td class="null">NULL</td>';
+  if(typeof v === 'string' && _ISO.test(v)){
+    return '<td title="'+esc(v)+'">'+esc(window.fmtStamp(v, {seconds:true}))+'</td>';
+  }
   return '<td title="'+esc(v)+'">'+esc(v)+'</td>';
 }
 function renderTable(t){
@@ -3897,13 +3904,7 @@ const SLICES = [
   ['by_edge','Target vs cost'],
 ];
 
-function fmtTime(iso){
-  if(!iso) return '';
-  const d = new Date(/[Z+]|-\\d\\d:\\d\\d$/.test(iso) ? iso : iso + 'Z');
-  if(isNaN(d)) return esc(iso);
-  return d.toLocaleString('en-IN',{..._IST,day:'2-digit',month:'short',
-    hour:'2-digit',minute:'2-digit',hour12:false});
-}
+function fmtTime(iso){ return iso ? esc(window.fmtStamp(iso)) : ''; }
 function px(v){
   if(v==null) return '&mdash;';
   const a = Math.abs(v);
@@ -4265,7 +4266,7 @@ async function load(){
   }
 
   document.getElementById('tick').textContent=
-    'updated '+new Date(d.generated_at).toLocaleTimeString('en-IN',{timeZone:'Asia/Kolkata'})
+    'updated ' + window.fmtStamp(d.generated_at) + ' · ' + window.fmtAgo(d.generated_at)
     +' IST · refreshes every 20s';
   document.getElementById('note').textContent=d.note;
 
@@ -4473,6 +4474,49 @@ async function apiFetch(url, opts){
     if(res.status === 401) localStorage.removeItem('api_token');
   }
   return res;
+}
+
+// One timestamp format for every page.
+//
+// There were two implementations of fmtTime and they had drifted: the audit
+// page printed "24 Sep, 15:39" and the dashboard printed "03:39 pm IST" with
+// no date at all. That was survivable while trades lasted twenty minutes and
+// everything on screen was obviously from today. It stopped being survivable
+// when the stop widened — holds run for hours now and the closed-trade history
+// spans days, so "11:14 am" no longer says which day, and two rows an hour
+// apart on screen can be two days apart in fact.
+//
+// Times are rendered in IST because that is where the operator is; the wire
+// format is UTC throughout, so a stamp arriving without a zone is read as UTC
+// rather than as the viewer's local time, which is the bug that makes
+// everything look 5h30m early.
+if(!window.fmtStamp){
+  window.fmtStamp = function(iso, opts){
+    if(!iso) return '—';
+    var d = new Date(/[Z+]|-\d\d:\d\d$/.test(iso) ? iso : iso + 'Z');
+    if(isNaN(d)) return String(iso);
+    var o = opts || {};
+    var now = new Date();
+    var parts = {timeZone:'Asia/Kolkata', day:'2-digit', month:'short',
+                 hour:'2-digit', minute:'2-digit', hour12:false};
+    // The year only earns its place once it is not this one.
+    if(d.getFullYear() !== now.getFullYear()) parts.year = 'numeric';
+    if(o.seconds) parts.second = '2-digit';
+    return d.toLocaleString('en-IN', parts).replace(',', '');
+  };
+  // "3h ago" answers a different question from "24 Sep 15:39" and both are
+  // wanted: the first tells you whether to care, the second which row it was.
+  window.fmtAgo = function(iso){
+    if(!iso) return '';
+    var d = new Date(/[Z+]|-\d\d:\d\d$/.test(iso) ? iso : iso + 'Z');
+    if(isNaN(d)) return '';
+    var s = Math.floor((Date.now() - d.getTime()) / 1000);
+    if(s < 0) return 'in ' + window.fmtAgo(new Date(Date.now()*2 - d.getTime()).toISOString());
+    if(s < 60) return s + 's ago';
+    if(s < 3600) return Math.floor(s/60) + 'm ago';
+    if(s < 86400) return Math.floor(s/3600) + 'h ago';
+    return Math.floor(s/86400) + 'd ago';
+  };
 }
 
 // Carry each table's column names onto its cells so the phone layout can

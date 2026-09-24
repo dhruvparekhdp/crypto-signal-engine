@@ -1,67 +1,131 @@
 """
-Timestamps on the wire.
+One timestamp format, on every page, carrying both the date and the time.
 
-Signals fired at 12:10 IST displayed as "06:40 am IST · 5h 37m ago". The
-stored instants were correct the whole time; the wire format was ambiguous.
-Every DateTime column here is naive UTC, and isoformat() on a naive value
-emits no offset — JavaScript parses an offset-less date-time as LOCAL time, so
-a browser in IST read a UTC instant as an IST wall clock and lost 5h30m.
+There were two implementations of fmtTime and they had drifted. The audit page
+printed "24 Sept 15:39"; the dashboard printed "03:39 pm IST" with no date at
+all. That was survivable while trades lasted twenty minutes and everything on
+screen was obviously from today. Widening the stop ended that: holds run for
+hours now and the closed-trade history spans days, so "11:14 am" no longer
+says which day, and two rows an hour apart on screen can be two days apart in
+fact.
+
+The zone handling is the part worth pinning hardest. Every timestamp on the
+wire is UTC and most arrive with no suffix saying so, which `new Date(iso)`
+reads as the viewer's LOCAL time — rendering every signal five and a half
+hours early for an operator in India, and differently again for anyone else.
 """
-import inspect
 import re
 import unittest
-from datetime import UTC, datetime
+from pathlib import Path
 
-import scheduler.health as health
+from scheduler import health
 
-
-class TestIsoHelper(unittest.TestCase):
-    def test_a_naive_value_is_labelled_utc(self):
-        self.assertEqual(health._iso(datetime(2026, 8, 21, 6, 40)),
-                         "2026-08-21T06:40:00+00:00")
-
-    def test_an_aware_value_is_left_alone(self):
-        self.assertEqual(health._iso(datetime(2026, 8, 21, 6, 40, tzinfo=UTC)),
-                         "2026-08-21T06:40:00+00:00")
-
-    def test_none_stays_none(self):
-        """ended_at is null on a running cycle; that must not become a date."""
-        self.assertIsNone(health._iso(None))
-
-    def test_the_output_always_carries_an_offset(self):
-        for dt in (datetime(2026, 1, 1), datetime(2026, 8, 21, 23, 59, 59)):
-            with self.subTest(dt=dt):
-                self.assertTrue(health._iso(dt).endswith("+00:00"))
+SRC = Path(__file__).resolve().parent.parent / "scheduler/health.py"
 
 
-class TestNothingBypassesIt(unittest.TestCase):
-    def test_no_bare_isoformat_reaches_the_browser(self):
+class TestThereIsOneImplementation(unittest.TestCase):
+    def test_the_formatter_is_defined_once_in_the_shared_snippet(self):
+        self.assertIn("window.fmtStamp = function", health._THEME_SNIPPET)
+        self.assertEqual(health._THEME_SNIPPET.count("window.fmtStamp = function"), 1)
+
+    def test_no_page_formats_a_time_by_itself(self):
         """
-        One missed call is one panel silently 5h30m out, with nothing to
-        distinguish it from a correct one.
+        Two copies is how the formats diverged. toLocaleTimeString and
+        toLocaleDateString each render only half of what was asked for, so
+        their presence anywhere is the bug returning.
         """
-        src = inspect.getsource(health)
-        bare = re.findall(r"(?<!def )[\w.]+\.isoformat\(\)", src)
-        # The helper's own body is the single legitimate use.
-        self.assertEqual(bare, ["dt.isoformat()"], f"unwrapped timestamps: {bare}")
+        source = SRC.read_text()
+        for banned in ("toLocaleTimeString", "toLocaleDateString"):
+            with self.subTest(banned=banned):
+                self.assertNotIn(banned, source)
+
+    def test_every_page_can_reach_it(self):
+        for name in ("_HTML", "_DATA_HTML", "_SETTINGS_HTML", "_AUDIT_HTML",
+                     "_PREDICT_HTML"):
+            with self.subTest(page=name):
+                self.assertIn("window.fmtStamp = function", getattr(health, name))
 
 
-class TestTheReportedCase(unittest.TestCase):
+class TestTheFormatCarriesBoth(unittest.TestCase):
+    def setUp(self):
+        snippet = health._THEME_SNIPPET
+        self.fn = snippet[snippet.index("window.fmtStamp = function"):
+                          snippet.index("window.fmtAgo = function")]
+
+    def test_it_asks_for_a_day_and_a_month(self):
+        self.assertIn("day:'2-digit'", self.fn)
+        self.assertIn("month:'short'", self.fn)
+
+    def test_it_asks_for_an_hour_and_a_minute(self):
+        self.assertIn("hour:'2-digit'", self.fn)
+        self.assertIn("minute:'2-digit'", self.fn)
+
+    def test_it_renders_in_the_operators_zone_not_the_viewers(self):
+        self.assertIn("timeZone:'Asia/Kolkata'", self.fn)
+
+    def test_a_stamp_with_no_zone_is_read_as_utc(self):
+        """
+        The wire sends naive UTC. Read as local time it is 5h30m out for the
+        operator, and out by a different amount for everyone else.
+        """
+        self.assertIn("+ 'Z'", self.fn)
+
+    def test_the_year_appears_only_when_it_is_not_this_one(self):
+        self.assertIn("getFullYear() !== now.getFullYear()", self.fn)
+
+
+class TestItSurvivesBadInput(unittest.TestCase):
+    def setUp(self):
+        snippet = health._THEME_SNIPPET
+        self.fn = snippet[snippet.index("window.fmtStamp = function"):
+                          snippet.index("window.fmtAgo = function")]
+
+    def test_a_missing_stamp_renders_a_dash_rather_than_throwing(self):
+        """
+        The dashboard's old copy called iso.endsWith() with no guard, so one
+        null opened_at took out the whole render.
+        """
+        self.assertIn("if(!iso) return", self.fn)
+
+    def test_an_unparseable_stamp_is_shown_rather_than_swallowed(self):
+        self.assertIn("if(isNaN(d)) return String(iso)", self.fn)
+
+
+class TestTheRelativeReadingIsAlsoAvailable(unittest.TestCase):
     """
-    The BCH signal that appeared in Telegram at 12:10 PM and on the site as
-    06:40 am IST. Same instant, two readings, 5h30m apart.
+    "3h ago" and "24 Sept 15:39" answer different questions — whether to care,
+    and which row it was — so the signal cards show both.
     """
 
-    FIRED_UTC = datetime(2026, 8, 21, 6, 40)
+    def test_fmtago_exists_in_the_shared_snippet(self):
+        self.assertIn("window.fmtAgo = function", health._THEME_SNIPPET)
 
-    def test_the_offset_is_exactly_the_ist_shift(self):
-        emitted = health._iso(self.FIRED_UTC)
-        self.assertIn("+00:00", emitted)
-        # 06:40Z is 12:10 IST — the time Telegram showed.
-        as_ist = self.FIRED_UTC.replace(tzinfo=UTC).astimezone(
-            __import__("zoneinfo").ZoneInfo("Asia/Kolkata"))
-        self.assertEqual((as_ist.hour, as_ist.minute), (12, 10))
+    def test_the_signal_cards_show_the_stamp_and_the_relative_time(self):
+        source = SRC.read_text()
+        fn = source[source.index("function fmtSignalTime"):
+                    source.index("function renderCryptoSignalCard")]
+        self.assertIn("window.fmtStamp(iso)", fn)
+        self.assertIn("window.fmtAgo(iso)", fn)
 
-    def test_a_naive_string_would_still_be_misread(self):
-        """Documents why the fix is at the boundary rather than in the browser."""
-        self.assertNotIn("+00:00", self.FIRED_UTC.isoformat())
+
+class TestTheRawDatabaseViewer(unittest.TestCase):
+    def test_it_formats_timestamps_but_keeps_the_exact_value(self):
+        """
+        /data exists for checking what is actually stored, so the raw ISO has
+        to stay reachable — it moves to the title rather than disappearing.
+        """
+        source = SRC.read_text()
+        fn = source[source.index("function cell(v){"):
+                    source.index("function renderTable(t){")]
+        self.assertIn("window.fmtStamp(v", fn)
+        self.assertIn('title="\'+esc(v)+\'"', fn)
+
+    def test_the_pattern_matches_what_postgres_and_sqlite_actually_return(self):
+        pattern = re.compile(r"^\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}")
+        for stamp in ("2026-09-24T10:09:00.123456", "2026-09-24 10:09:00",
+                      "2026-09-24T10:09:00+00:00"):
+            with self.subTest(stamp=stamp):
+                self.assertTrue(pattern.match(stamp))
+        for other in ("btcusdt", "86713.6705", "confluence", ""):
+            with self.subTest(other=other):
+                self.assertFalse(pattern.match(other))
