@@ -478,6 +478,35 @@ class MoveAttribution(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_now_utc, index=True)
 
 
+class HistoryEvent(Base):
+    """
+    One large past move found in the Binance lake, with what could be seen
+    before it and, once reviewed, a model's label of it.
+
+    Built by scripts/review_history.py. The facts are measured from candles,
+    open interest and funding before the move; the review is filled later by
+    the local model or Groq, so a scan costs nothing and labelling can run a
+    little each day within the free limits.
+    """
+
+    __tablename__ = "history_events"
+    __table_args__ = (UniqueConstraint("symbol", "at", "timeframe", name="uq_history_event"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    symbol: Mapped[str] = mapped_column(String, index=True)
+    at: Mapped[datetime] = mapped_column(DateTime, index=True)
+    timeframe: Mapped[str] = mapped_column(String, default="1h")
+    ret_pct: Mapped[float] = mapped_column(Float, default=0.0)
+    zscore: Mapped[float] = mapped_column(Float, default=0.0)
+    direction: Mapped[str] = mapped_column(String, default="")
+    facts: Mapped[str] = mapped_column(Text, default="{}")        # JSON, before the move
+    after: Mapped[str] = mapped_column(Text, default="{}")        # JSON, what followed
+    review: Mapped[str] = mapped_column(Text, default="")         # JSON label, "" = not yet
+    reviewed_by: Mapped[str] = mapped_column(String, default="")
+    reviewed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=_now_utc)
+
+
 class PaperPosition(Base):
     """
     An open paper position. Deleted on close — the record lives on as a

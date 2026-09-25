@@ -122,6 +122,11 @@ class Settings(BaseSettings):
     event_monitor_daily_cap: int = 120
     llm_chain_briefing_calm: str = (
         "groq:openai/gpt-oss-20b+search, groq:openai/gpt-oss-120b+search")
+    # Labelling past moves from the Binance lake (scripts/review_history.py).
+    # Local first: it is bulk work and the free Groq requests are shared with
+    # live trading. The biggest moves use web search to find that day's news.
+    llm_chain_history: str = "ollama:qwen3:8b, groq:openai/gpt-oss-120b"
+    llm_chain_history_search: str = "groq:openai/gpt-oss-120b+search"
     move_attribution_minutes: int = 60
     move_attribution_window_hours: int = 12
     # Reviewing what is already open.

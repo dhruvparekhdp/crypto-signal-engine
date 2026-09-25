@@ -792,6 +792,49 @@ class Repository:
             select(MoveAttribution).order_by(MoveAttribution.created_at.desc()).limit(limit))
         return list(res.scalars().all())
 
+    async def save_history_events(self, symbol: str, events: list[dict],
+                                  timeframe: str = "1h") -> int:
+        """Insert scanned events, skipping ones already stored. Returns how many were new."""
+        import json
+
+        from storage.models import HistoryEvent
+        if not events:
+            return 0
+        res = await self.session.execute(
+            select(HistoryEvent.at).where(HistoryEvent.symbol == symbol.lower(),
+                                          HistoryEvent.timeframe == timeframe))
+        have = {t for (t,) in res.all()}
+        new = 0
+        for e in events:
+            if e["at"] in have:
+                continue
+            self.session.add(HistoryEvent(
+                symbol=symbol.lower(), at=e["at"], timeframe=timeframe,
+                ret_pct=e["ret_pct"], zscore=e["z"], direction=e["direction"],
+                facts=json.dumps(e.get("facts", {})), after=json.dumps(e.get("after", {}))))
+            new += 1
+        await self.session.commit()
+        return new
+
+    async def unreviewed_history_events(self, limit: int = 50, min_z: float = 0.0) -> list:
+        """Largest moves first: they teach the most per call."""
+        from storage.models import HistoryEvent
+        res = await self.session.execute(
+            select(HistoryEvent).where(HistoryEvent.review == "")
+            .where(func.abs(HistoryEvent.zscore) >= min_z)
+            .order_by(func.abs(HistoryEvent.zscore).desc()).limit(limit))
+        return list(res.scalars().all())
+
+    async def save_history_review(self, event_id: int, review: dict, model: str) -> None:
+        import json
+
+        from storage.models import HistoryEvent
+        row = await self.session.get(HistoryEvent, event_id)
+        if row is None:
+            return
+        row.review, row.reviewed_by, row.reviewed_at = json.dumps(review), model, _now_utc()
+        await self.session.commit()
+
     async def latest_briefing(self):
         from storage.models import MarketBriefing
         res = await self.session.execute(
