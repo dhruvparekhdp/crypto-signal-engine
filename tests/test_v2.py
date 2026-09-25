@@ -73,10 +73,24 @@ class TestGates(unittest.TestCase):
         s = stats(rs)
         self.assertEqual(s["trades"], 300)
         self.assertAlmostEqual(s["expectancy_r"], 0.417, places=3)
-        self.assertAlmostEqual(s["expectancy_after_tax_r"], (5.5 * 0.7 - 3) / 6, places=3)
+        self.assertAlmostEqual(s["expectancy_after_tax_vda_r"], (5.5 * 0.688 - 3) / 6,
+                               places=3)
+
         mc = monte_carlo(rs, risk_pct=0.5)
         self.assertGreater(mc["final_equity_p50"], 1.0)
         self.assertEqual(grade([])["promote_to_paper"], False)
+
+    def test_business_tax_nets_the_year_and_carries_losses(self):
+        from types import SimpleNamespace as T
+
+        from analysis.v2_backtest import after_tax_business
+        trades = ([T(filled_at="2024-03-01", r=r) for r in (3.0, -1.0, -1.0)]    # +1 in 2024
+                  + [T(filled_at="2025-03-01", r=r) for r in (-2.0, -1.0)]       # -3 in 2025
+                  + [T(filled_at="2026-03-01", r=r) for r in (4.0, 1.0)])        # +5 in 2026
+        got = after_tax_business(trades)["after_tax_r_by_year"]
+        self.assertAlmostEqual(got[2024], 1 - 0.312, places=2)      # taxed on the NET, not +3
+        self.assertEqual(got[2025], -3.0)
+        self.assertAlmostEqual(got[2026], 5 - 2 * 0.312, places=2)  # 3 carried forward
 
 
 def market(n_days=40, seed=11):

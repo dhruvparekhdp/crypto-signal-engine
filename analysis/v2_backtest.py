@@ -159,6 +159,47 @@ def _filled(cand: Candidate, ts, h, lo, ex: ExecConfig) -> bool:
 
 # ── Statistics and gates ─────────────────────────────────────────────────────
 
+# 30% plus 4% health and education cess. For INR-settled futures taxed as
+# business income this is the owner's slab rate, which at his salary is 30%.
+TAX_RATE = 0.312
+
+
+def after_tax_business(trades) -> dict:
+    """
+    INR-settled futures (CoinDCX INR-M) as speculative business income, the
+    common CA view: the YEAR's net profit is taxed at the slab rate, losses
+    offset gains within the year, and a net loss carries forward 4 years
+    against later speculative profit. Returns the after-tax R per year and
+    the after-tax expectancy per trade. Law not settled: get a CA's view.
+    """
+    if not trades:
+        return {}
+    by_year: dict[int, float] = {}
+    for t in trades:
+        y = pd.Timestamp(t.filled_at).year
+        by_year[y] = by_year.get(y, 0.0) + t.r
+    carried: list[tuple[int, float]] = []          # (year of loss, loss left)
+    kept = {}
+    for y in sorted(by_year):
+        net = by_year[y]
+        carried = [(ly, left) for ly, left in carried if y - ly <= 4]
+        if net > 0:
+            taxable = net
+            for i, (ly, left) in enumerate(carried):
+                use = min(left, taxable)
+                taxable -= use
+                carried[i] = (ly, left - use)
+            carried = [(ly, left) for ly, left in carried if left > 0]
+            kept[y] = round(net - taxable * TAX_RATE, 2)
+        else:
+            if net < 0:
+                carried.append((y, -net))
+            kept[y] = round(net, 2)
+    total = sum(kept.values())
+    return {"after_tax_r_by_year": kept,
+            "expectancy_after_tax_business_r": round(total / len(trades), 3)}
+
+
 def stats(rs: list[float]) -> dict:
     if not rs:
         return {"trades": 0}
@@ -179,9 +220,10 @@ def stats(rs: list[float]) -> dict:
         "profit_factor": (round(float(wins.sum() / -losses.sum()), 3)
                           if len(losses) and losses.sum() < 0 else None),
         "total_r": round(float(a.sum()), 2),
-        # India: 30% on each winning trade, losses not set off (VDA rules as
-        # commonly read; get a CA's view). The edge that matters is this one.
-        "expectancy_after_tax_r": round(float(np.where(a > 0, a * 0.7, a).mean()), 3),
+        # USDT-settled futures (Binance USD-M): commonly treated as VDA —
+        # 30% + 4% cess on EACH winning trade, losses set off against nothing.
+        "expectancy_after_tax_vda_r": round(float(np.where(a > 0, a * (1 - TAX_RATE),
+                                                           a).mean()), 3),
         "max_drawdown_r": round(dd, 2),
         "longest_losing_streak": int(streak),
     }
@@ -236,6 +278,7 @@ def grade(trades: list[TradeResult]) -> dict:
         "profit_factor": (s.get("profit_factor") or 0) >= GATES["min_profit_factor"],
         "windows_positive": pos >= GATES["min_positive_windows"],
     }
+    s.update(after_tax_business(trades))
     return {"stats": s, "positive_windows": round(pos, 2), "windows": wf,
             "monte_carlo": monte_carlo(rs), "gates": checks,
             "promote_to_paper": all(checks.values())}

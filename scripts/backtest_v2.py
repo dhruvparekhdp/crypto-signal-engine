@@ -40,7 +40,9 @@ def _line(name: str, g: dict) -> str:
     pf = s["profit_factor"]
     gates = " ".join(f"{k}:{'ok' if v else 'NO'}" for k, v in g["gates"].items())
     return (f"  {name:22} {s['trades']:5} trades  win {s['win_rate'] * 100:5.1f}%  "
-            f"exp {s['expectancy_r']:+.3f}R (taxed {s['expectancy_after_tax_r']:+.3f}R)  "
+            f"exp {s['expectancy_r']:+.3f}R (after tax: INR-futures "
+            f"{s.get('expectancy_after_tax_business_r', 0):+.3f}R, USDT "
+            f"{s['expectancy_after_tax_vda_r']:+.3f}R)  "
             f"PF {pf if pf is not None else '-':>5}  "
             f"DD {s['max_drawdown_r']:6.1f}R  windows+ {g['positive_windows'] * 100:4.0f}%"
             f"  | {gates}  => {'PROMOTE' if g['promote_to_paper'] else 'hold'}")
