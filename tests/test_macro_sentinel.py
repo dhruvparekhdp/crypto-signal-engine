@@ -52,7 +52,7 @@ async def test_groq_sentinel_clamping_and_review():
     state.current_price = 65000.0
     state.cvd_trend = "bullish_delta"
 
-    # Test 1: Groq returns large positive delta -> clamped to +0.03
+    # Test 1: Groq returns large positive delta -> 0: the reviewer can only veto
     mock_resp_positive = MagicMock()
     mock_resp_positive.status_code = 200
     mock_resp_positive.json.return_value = {
@@ -69,7 +69,7 @@ async def test_groq_sentinel_clamping_and_review():
          patch("httpx.AsyncClient.post", new_callable=AsyncMock) as mock_post:
         mock_post.return_value = mock_resp_positive
         delta, review, verdict = await sentinel.review_signal_candidate(sig, state)
-        assert delta == 0.03  # Clamped from 0.15 to +0.03
+        assert delta == 0.0  # an approval never adds confidence
         assert "Clean breakout" in review
         assert verdict == "APPROVE"
 

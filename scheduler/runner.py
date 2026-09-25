@@ -317,8 +317,21 @@ class AppRunner:
                     pending = []
 
                 from analysis.paper_cycle import reprice_signal
+                from analysis.protections import RecentTrade, check_entry
                 from analysis.scalp_levels import ScalpConfig
                 max_age = ScalpConfig().max_signal_age_seconds
+                protect = self._protection_config()
+                recent: list = []
+                day_start_wallet = 0.0
+                if pending and protect.enabled:
+                    rows_t = await repo.get_cycle_trades(cycle.id, 50)
+                    recent = [RecentTrade(t.symbol, t.closed_at, t.net_pnl)
+                              for t in rows_t if t.closed_at is not None]
+                    today0 = now.replace(tzinfo=None, hour=0, minute=0, second=0,
+                                         microsecond=0)
+                    pnl_today = sum(t.net_pnl for t in recent if t.closed_at >= today0)
+                    equity = wallet + sum(p.margin for p in cstate.positions)
+                    day_start_wallet = equity - pnl_today
                 for sig, st in pending:
                     if st.current_price <= 0:
                         continue
@@ -328,13 +341,19 @@ class AppRunner:
                         continue
                     sig = self._apply_sentiment(sig, st.funding_rate_per_8h)
                     ok, _why = should_open(sig, cfg, cstate, now)
+                    if ok:
+                        from analysis.instruments import spec_for
+                        ok, _why = check_entry(
+                            now.replace(tzinfo=None), sig.symbol, sig.direction, recent,
+                            day_start_wallet, cstate.positions, protect,
+                            is_crypto=spec_for(sig.symbol).kind == "crypto")
                     if not ok:
                         log.info("paper_trade_skipped", symbol=sig.symbol, reason=_why)
                         continue
                     atr_pct = (st.atr_14 / st.current_price
                                if st.current_price > 0 and st.atr_14 > 0 else None)
                     pos = open_from_signal(sig, cfg, cstate, now,
-                                           pcfg.usdt_inr, atr_pct)
+                                           pcfg.usdt_inr, atr_pct, protect=protect)
                     if pos is None:
                         continue
                     cstate.wallet -= pos.margin
@@ -477,13 +496,23 @@ class AppRunner:
             self._close_votes.pop(pos.symbol, None)
             return None
 
+        if review.asked_model:
+            held = (now - pos.opened_at).total_seconds() / 60.0
+            if held < settings.position_review_min_hold_minutes:
+                log.info("position_close_too_early", symbol=pos.symbol,
+                         held_minutes=round(held, 1))
+                return None
         if review.asked_model and settings.position_review_confirm_close:
             first = self._close_votes.get(pos.symbol)
-            window = settings.position_review_interval_seconds * 3
-            if first is None or (now - first).total_seconds() > window:
+            gap = settings.position_review_confirm_gap_minutes * 60
+            window = max(settings.position_review_interval_seconds * 3, gap * 3)
+            age = (now - first).total_seconds() if first is not None else None
+            if age is None or age > window:
                 self._close_votes[pos.symbol] = now
                 log.info("position_close_pending_confirmation", symbol=pos.symbol,
                          confidence=round(review.confidence, 3))
+                return None
+            if age < gap:
                 return None
         self._close_votes.pop(pos.symbol, None)
 
@@ -1133,6 +1162,18 @@ class AppRunner:
             return context_block(b, headlines, symbol), (b.id if b is not None else 0)
         except Exception:
             return "", 0
+
+    def _protection_config(self):
+        from analysis.protections import ProtectionConfig
+        return ProtectionConfig(
+            enabled=settings.protections_enabled,
+            session_filter=settings.session_filter_enabled,
+            session_start_utc=settings.session_start_utc,
+            session_end_utc=settings.session_end_utc,
+            weekdays_only=settings.session_weekdays_only,
+            daily_loss_pct=settings.daily_loss_limit_pct,
+            max_same_direction=settings.max_same_direction_positions,
+        )
 
     def _review_extras(self, state) -> dict:
         """Market mood at review time, stored beside the verdict."""

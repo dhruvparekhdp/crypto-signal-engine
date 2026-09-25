@@ -216,8 +216,15 @@ def open_from_signal(
     now: datetime,
     usdt_inr: float,
     atr_pct: float | None = None,
+    protect=None,
 ) -> Position | None:
-    """Build a position from a signal, or None if it fails the viability gate."""
+    """
+    Build a position from a signal, or None if it fails the viability gate.
+
+    `protect` (analysis.protections.ProtectionConfig) adds two gates: a stop
+    closer than 1.5x the round-trip cost is refused, and leverage is capped
+    so liquidation sits at least 3x the stop distance away.
+    """
     margin = cfg.margin_for_signal(state.wallet, signal.confidence,
                                    committed_margin(state.positions))
     if margin <= 0:
@@ -234,6 +241,21 @@ def open_from_signal(
     # letting the leverage move puts that the right way round.
     costs = stop_out_costs(signal.symbol, cfg)
     leverage = cfg.leverage_for_stop(leverage, signal.current_price, signal.stop_loss, costs)
+
+    if protect is not None and protect.enabled:
+        from analysis.protections import max_leverage_for_liquidation, stop_too_tight
+        spec = spec_for(signal.symbol)
+        if stop_too_tight(signal.current_price, signal.stop_loss,
+                          fees_for(signal.symbol).round_trip_pct(), protect):
+            log.info("paper.rejected", symbol=signal.symbol, reason="stop_inside_fees")
+            return None
+        cap = max_leverage_for_liquidation(signal.current_price, signal.stop_loss,
+                                           spec.maintenance_margin_pct, protect)
+        if cap is not None:
+            if cap < 1.0:
+                log.info("paper.rejected", symbol=signal.symbol, reason="liquidation_too_near")
+                return None
+            leverage = min(leverage, cap)
 
     # At the leverage floor a wide stop can still cost more than the budget.
     # Then the position shrinks instead, so the rupees at risk stay at the

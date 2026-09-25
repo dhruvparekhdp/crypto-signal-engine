@@ -127,6 +127,16 @@ class Settings(BaseSettings):
     # live trading. The biggest moves use web search to find that day's news.
     llm_chain_history: str = "ollama:qwen3:8b, groq:openai/gpt-oss-120b"
     llm_chain_history_search: str = "groq:openai/gpt-oss-120b+search"
+    # Entry protections (analysis/protections.py): session window, daily
+    # loss limit, losing-streak brake, pair cooldown, correlated exposure,
+    # stop-vs-fee floor and liquidation distance.
+    protections_enabled: bool = True
+    session_filter_enabled: bool = True
+    session_start_utc: int = 7
+    session_end_utc: int = 17
+    session_weekdays_only: bool = True
+    daily_loss_limit_pct: float = 3.0
+    max_same_direction_positions: int = 2
     # The database keeps this many days; older rows go to gzipped JSON files
     # under cold_storage_dir (storage/cold_storage.py), never deleted outright.
     db_retention_days: int = 365
@@ -163,6 +173,11 @@ class Settings(BaseSettings):
     # LLM verdicts flip between adjacent steps, one vote is noise. The stop
     # still protects the position while the second vote is pending.
     position_review_confirm_close: bool = True
+    # The two votes must be at least this far apart, and no model-driven
+    # close happens in a position's first minutes (research: 2 votes >= 15 min
+    # apart, minimum hold 2 x 15m bars before any discretionary close).
+    position_review_confirm_gap_minutes: int = 10
+    position_review_min_hold_minutes: int = 30
 
     # A winning position is reviewed less often than a losing one. It is not
     # deciding whether to exist — the trail already bounds what it can give

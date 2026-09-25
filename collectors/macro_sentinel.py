@@ -195,7 +195,7 @@ class GroqSentinel:
             "JSON only:\n"
             '{"reasoning": "2 to 4 sentences: what you checked and what decided it", '
             '"verdict": "APPROVE|CAUTION|REJECT", '
-            '"confidence_delta": -0.04 to 0.03, '
+            '"confidence_delta": -0.04 to 0.0, '
             '"factors": ["tag"], '
             '"summary": "one plain sentence for the trader, under 200 chars"}'
         )
@@ -213,7 +213,14 @@ class GroqSentinel:
         # Clamped hard. The model is a stakeholder in the decision, not the
         # decider: it can nudge a confidence score, never overturn the maths
         # that produced it.
-        clamped_delta = max(-0.04, min(0.03, float(parsed.get("confidence_delta", 0.0) or 0.0)))
+        # And it can only say no (research: LLMs agree with confident-looking
+        # setups and are a coin flip on direction). An approval adds nothing;
+        # caution and rejection subtract.
+        try:
+            raw_delta = float(parsed.get("confidence_delta", 0.0) or 0.0)
+        except (TypeError, ValueError):
+            raw_delta = 0.0
+        clamped_delta = max(-0.04, min(0.0, raw_delta)) if raw_delta == raw_delta else 0.0
         # The reasoning used to be thrown away, leaving only a 120-character
         # one-liner to judge the reviewer by. Keep both.
         summary = str(parsed.get("summary", "")).strip()
