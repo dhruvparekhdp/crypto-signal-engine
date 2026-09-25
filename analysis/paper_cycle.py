@@ -84,6 +84,64 @@ def config_for_cycle(row) -> CycleConfig:
     )
 
 
+def reprice_signal(signal, live_price: float, now: datetime,
+                   max_age_seconds: int = 90, max_chase: float = 0.5):
+    """
+    Re-check a queued signal against the live price before it becomes a trade.
+
+    A signal waits for the AI review, the Telegram send and the next paper
+    tick before it opens. It used to fill at the price from when it was
+    generated, so a move through the target while it waited was booked as a
+    win that was never available. Now:
+
+      - older than `max_age_seconds`  -> dropped ("stale")
+      - live price already past target or stop -> dropped
+      - more than `max_chase` of the way to target already -> dropped ("chased"):
+        the move it predicted has mostly happened
+      - otherwise it fills at the live price, levels unchanged
+
+    Returns (signal or None, reason).
+    """
+    from dataclasses import replace as _replace
+
+    ts = getattr(signal, "timestamp", None)
+    if ts is not None:
+        if ts.tzinfo is None:
+            ts = ts.replace(tzinfo=UTC)
+        ref = now if now.tzinfo else now.replace(tzinfo=UTC)
+        if (ref - ts).total_seconds() > max_age_seconds:
+            return None, "stale"
+    if live_price <= 0:
+        return None, "no_price"
+    entry, target, stop = signal.current_price, signal.target_price, signal.stop_loss
+    long = signal.direction == "long"
+    if target and ((long and live_price >= target) or (not long and live_price <= target)):
+        return None, "target_passed"
+    if stop and ((long and live_price <= stop) or (not long and live_price >= stop)):
+        return None, "stop_passed"
+    if target and entry and target != entry:
+        progress = (live_price - entry) / (target - entry)
+        if progress > max_chase:
+            return None, "chased"
+    try:
+        return _replace(signal, current_price=live_price), "ok"
+    except TypeError:
+        signal.current_price = live_price
+        return signal, "ok"
+
+
+def stop_out_costs(symbol: str, cfg) -> float:
+    """
+    What a stop-out costs beyond the price distance, as a fraction of price:
+    the round-trip fee, the spread crossed on entry and exit, and the stop's
+    extra slippage.
+    """
+    slip = getattr(cfg, "slippage", None)
+    spread = 2 * slip.spread_pct if slip is not None else 0.0
+    stop_extra = slip.stop_extra_pct if slip is not None else 0.0
+    return fees_for(symbol).round_trip_pct() + spread + stop_extra
+
+
 def fees_for(symbol: str) -> FeeModel:
     """Per-market costs — gold is a fifth of ether, so this cannot be global."""
     spec = spec_for(symbol)
@@ -173,7 +231,17 @@ def open_from_signal(
     # — so leaving leverage fixed would make the cost of a failed trade a
     # function of how noisy the hour happened to be. Pinning the loss and
     # letting the leverage move puts that the right way round.
-    leverage = cfg.leverage_for_stop(leverage, signal.current_price, signal.stop_loss)
+    costs = stop_out_costs(signal.symbol, cfg)
+    leverage = cfg.leverage_for_stop(leverage, signal.current_price, signal.stop_loss, costs)
+
+    # At the leverage floor a wide stop can still cost more than the budget.
+    # Then the position shrinks instead, so the rupees at risk stay at the
+    # budget share of the margin that was intended.
+    if signal.current_price > 0 and signal.stop_loss > 0:
+        stop_move = abs(signal.current_price - signal.stop_loss) / signal.current_price
+        loss_frac = leverage * (stop_move + costs)
+        if loss_frac > cfg.max_loss_pct_of_margin > 0:
+            margin *= cfg.max_loss_pct_of_margin / loss_frac
 
     margin = cfg.cap_margin_to_notional(margin, leverage, state.wallet)
     if margin <= 0:

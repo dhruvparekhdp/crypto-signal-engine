@@ -315,6 +315,13 @@ async def review_position(pos, state, now: datetime, losing: bool = True,
     if losing and not _needs_model(trend):
         return decide(trend)
 
+    # No provider configured is not an outage: nothing was ever going to
+    # answer, so closing "on outage" would shut every losing position in the
+    # band for a missing API key.
+    from collectors.llm_client import chain_for
+    if not chain_for("position_review"):
+        return decide(trend)
+
     try:
         from collectors.llm_client import ask_json
 

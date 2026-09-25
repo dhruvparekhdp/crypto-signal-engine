@@ -1231,7 +1231,7 @@ class CycleConfig:
             confidence, atr_pct, self.fees.maintenance_margin_pct)
 
     def leverage_for_stop(self, leverage: float, entry: float,
-                          stop_price: float) -> float:
+                          stop_price: float, costs_pct: float = 0.0) -> float:
         """
         Lower the leverage until being stopped out costs no more than
         `max_loss_pct_of_margin`.
@@ -1250,13 +1250,17 @@ class CycleConfig:
 
         Only ever reduces. A generous stop is not a reason to take more
         leverage than was asked for.
+
+        `costs_pct` is what a stop-out costs on top of the distance: the
+        round-trip fee, the spread both ways and the stop's own slippage.
+        Leaving it out made a "4%" loss really 4.8-6.7% of margin.
         """
         if entry <= 0 or stop_price <= 0 or leverage <= 0:
             return leverage
         stop_move = abs(entry - stop_price) / entry
         if stop_move <= 0:
             return leverage
-        affordable = self.max_loss_pct_of_margin / stop_move
+        affordable = self.max_loss_pct_of_margin / (stop_move + max(0.0, costs_pct))
         return max(self.min_leverage, min(leverage, affordable))
 
     def cap_margin_to_notional(self, margin: float, leverage: float,

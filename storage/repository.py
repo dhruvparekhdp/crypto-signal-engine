@@ -86,7 +86,6 @@ class Repository:
             return moved
 
         cutoff = _now_utc() - timedelta(days=days)
-        dialect = self.session.bind.dialect.name if self.session.bind else ""
         for live, archive, key in (
             (CryptoSnapshot, CryptoSnapshotArchive, "crypto_snapshots"),
             (CommoditySnapshot, CommoditySnapshotArchive, "commodity_snapshots"),
@@ -430,7 +429,14 @@ class Repository:
         return list(res.scalars().all())
 
     async def save_position(self, cycle_id: int, pos) -> PaperPosition:
-        row = PaperPosition(
+        row = self._position_row(cycle_id, pos)
+        self.session.add(row)
+        await self.session.commit()
+        await self.session.refresh(row)
+        return row
+
+    def _position_row(self, cycle_id: int, pos) -> PaperPosition:
+        return PaperPosition(
             cycle_id=cycle_id,
             symbol=pos.symbol,
             side=pos.side.value,
@@ -446,6 +452,8 @@ class Repository:
             liq_price=pos.liq_price,
             peak_price=pos.peak_price,
             trail_active=pos.trail_active,
+            trail_r_override=pos.trail_r_override,
+            locked_roe=pos.locked_roe,
             entry_fee=pos.entry_fee,
             signal_type=pos.signal_type,
             timeframe=pos.timeframe,
@@ -453,10 +461,6 @@ class Repository:
             opened_at=pos.opened_at.replace(tzinfo=None),
             expires_at=pos.expires_at.replace(tzinfo=None) if pos.expires_at else None,
         )
-        self.session.add(row)
-        await self.session.commit()
-        await self.session.refresh(row)
-        return row
 
     async def sync_position(self, row_id: int, pos) -> None:
         """Persist trail movement. Called every tick, so it writes only what moves."""
@@ -467,6 +471,8 @@ class Repository:
         row.target_price = pos.target_price
         row.peak_price = pos.peak_price
         row.trail_active = pos.trail_active
+        row.trail_r_override = pos.trail_r_override
+        row.locked_roe = pos.locked_roe
         await self.session.commit()
 
     async def delete_position(self, row_id: int) -> None:
@@ -475,7 +481,42 @@ class Repository:
             await self.session.delete(row)
             await self.session.commit()
 
+    async def close_position_atomic(self, cycle_id: int, row_id: int, trade,
+                                    wallet: float) -> None:
+        """
+        Record the trade, remove the position and credit the wallet in ONE commit.
+
+        These used to be three commits with the wallet written once at the end
+        of the tick, so a deploy or an exception in between lost the margin and
+        profit of a trade that the dashboard already showed as closed.
+        """
+        self._add_trade(cycle_id, trade)
+        row = await self.session.get(PaperPosition, row_id)
+        if row is not None:
+            await self.session.delete(row)
+        await self._set_wallet(cycle_id, wallet)
+        await self.session.commit()
+
+    async def open_position_atomic(self, cycle_id: int, pos, wallet: float) -> PaperPosition:
+        """Store a new position and debit its margin in one commit."""
+        row = self._position_row(cycle_id, pos)
+        self.session.add(row)
+        await self._set_wallet(cycle_id, wallet)
+        await self.session.commit()
+        await self.session.refresh(row)
+        return row
+
+    async def _set_wallet(self, cycle_id: int, wallet: float) -> None:
+        cycle = await self.session.get(PaperCycle, cycle_id)
+        if cycle is not None:
+            cycle.wallet = wallet
+            cycle.peak_wallet = max(cycle.peak_wallet, wallet)
+
     async def record_trade(self, cycle_id: int, trade) -> None:
+        self._add_trade(cycle_id, trade)
+        await self.session.commit()
+
+    def _add_trade(self, cycle_id: int, trade) -> None:
         pos = trade.position
         self.session.add(PaperTrade(
             cycle_id=cycle_id,
@@ -507,7 +548,6 @@ class Repository:
             opened_at=pos.opened_at.replace(tzinfo=None),
             closed_at=trade.closed_at.replace(tzinfo=None),
         ))
-        await self.session.commit()
 
     async def get_cycle_trades(self, cycle_id: int, limit: int = 500) -> list[PaperTrade]:
         res = await self.session.execute(

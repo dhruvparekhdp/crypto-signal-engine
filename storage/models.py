@@ -459,6 +459,11 @@ class PaperPosition(Base):
     liq_price: Mapped[float] = mapped_column(Float)
     peak_price: Mapped[float] = mapped_column(Float, default=0.0)
     trail_active: Mapped[bool] = mapped_column(Boolean, default=False)
+    # The position reviewer's trail distance in R, and the highest ladder rung
+    # locked. Both used to live only in memory, and the position is rebuilt
+    # from this row every tick, so the reviewer's trail never took effect.
+    trail_r_override: Mapped[float | None] = mapped_column(Float, nullable=True)
+    locked_roe: Mapped[float | None] = mapped_column(Float, nullable=True)
 
     entry_fee: Mapped[float] = mapped_column(Float)
     signal_type: Mapped[str] = mapped_column(String, default="")

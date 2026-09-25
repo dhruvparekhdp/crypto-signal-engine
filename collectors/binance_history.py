@@ -201,19 +201,32 @@ class BinanceHistory:
             rows = None
             reached = False
             for host in KLINE_HOSTS:
-                try:
-                    resp = await client.get(f"{host}/api/v3/klines", params=params)
+                for attempt in range(3):
+                    try:
+                        resp = await client.get(f"{host}/api/v3/klines", params=params)
+                    except Exception:
+                        break
                     if resp.status_code == 200:
                         reached = True
                         rows = resp.json()
                         break
-                    # A 4xx from Binance is Binance answering — a bad symbol
-                    # or an out-of-range window. That is data, not an outage.
+                    # Rate limited: wait and retry this page. Treating a 429
+                    # as an answer ended a backfill early with exit 0.
+                    if resp.status_code in (418, 429):
+                        import asyncio
+                        wait = float(resp.headers.get("Retry-After") or 2 ** attempt)
+                        await asyncio.sleep(min(wait, 30.0))
+                        continue
+                    # Geo-blocked or forbidden on this host: try the next one.
+                    if resp.status_code in (403, 451):
+                        break
+                    # Any other 4xx is Binance answering (a bad symbol or an
+                    # out-of-range window): data, not an outage.
                     if 400 <= resp.status_code < 500:
                         reached = True
-                        break
-                except Exception:
-                    continue
+                    break
+                if reached:
+                    break
 
             if reached:
                 self.responses_seen += 1
@@ -236,7 +249,14 @@ class BinanceHistory:
             if len(rows) < REST_PAGE:
                 break
 
-        return out
+        if cursor < end - step:
+            self.shortfalls = getattr(self, "shortfalls", 0) + 1
+            log.warning("binance_rest_shortfall", symbol=symbol, interval=interval,
+                        stopped_at=cursor.isoformat(), wanted_until=end.isoformat())
+        # Never store the bar that is still forming: ON CONFLICT DO NOTHING
+        # would keep its half-finished numbers forever.
+        now = datetime.now(UTC).replace(tzinfo=None)
+        return [c for c in out if c["open_time"] + step <= now]
 
     # ── The thing callers use ────────────────────────────────────────────
 

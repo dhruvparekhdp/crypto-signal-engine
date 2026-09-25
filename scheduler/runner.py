@@ -211,6 +211,8 @@ class AppRunner:
             peak_price=row.peak_price,
             trail_active=row.trail_active,
         )
+        pos.trail_r_override = getattr(row, "trail_r_override", None)
+        pos.locked_roe = getattr(row, "locked_roe", None)
         # Size was fixed at fill time, so it is restored rather than re-derived:
         # recomputing it from the current wallet would silently resize the
         # position every time the process restarts.
@@ -272,8 +274,7 @@ class AppRunner:
                         continue
 
                     wallet = trade.wallet_after
-                    await repo.record_trade(cycle.id, trade)
-                    await repo.delete_position(row.id)
+                    await repo.close_position_atomic(cycle.id, row.id, trade, wallet)
                     # Post-mortem runs detached: the trade is already closed and
                     # recorded, so a slow or failing reviewer must not hold up
                     # the rest of the tick or the positions still to resolve.
@@ -305,8 +306,15 @@ class AppRunner:
                              kind=blackout.kind, skipped=len(pending))
                     pending = []
 
+                from analysis.paper_cycle import reprice_signal
+                from analysis.scalp_levels import ScalpConfig
+                max_age = ScalpConfig().max_signal_age_seconds
                 for sig, st in pending:
                     if st.current_price <= 0:
+                        continue
+                    sig, why_not = reprice_signal(sig, st.current_price, now, max_age)
+                    if sig is None:
+                        log.info("paper_trade_skipped", symbol=st.symbol, reason=why_not)
                         continue
                     sig = self._apply_sentiment(sig, st.funding_rate_per_8h)
                     ok, _why = should_open(sig, cfg, cstate, now)
@@ -321,7 +329,7 @@ class AppRunner:
                         continue
                     cstate.wallet -= pos.margin
                     wallet = cstate.wallet
-                    row = await repo.save_position(cycle.id, pos)
+                    row = await repo.open_position_atomic(cycle.id, pos, wallet)
                     cstate.position_ids[len(cstate.positions)] = row.id
                     cstate.positions.append(pos)
                     log.info("paper_trade_opened", symbol=pos.symbol,
@@ -445,6 +453,13 @@ class AppRunner:
             # the score only decides how far behind price it rides.
             if cfg.trailing is not None and cfg.trailing.enabled:
                 pos.trail_r_override = trail_r_for_confidence(review.confidence)
+                # Apply it on this tick. The trail already ran inside
+                # resolve_at_price with the old distance; without this the
+                # new one would wait a tick, and before it was persisted it
+                # never applied at all.
+                from analysis.paper_cycle import fees_for
+                pos.update_trail(state.current_price, state.current_price,
+                                 cfg.trailing, fees_for(pos.symbol))
             return None
 
         if review.hold:
@@ -678,6 +693,7 @@ class AppRunner:
                 signals = self.crypto_engine.process(state)
                 for sig in signals:
                     if scfg.crypto_min_confidence > 0 and sig.confidence < scfg.crypto_min_confidence:
+                        self.crypto_engine.forget(sig)
                         continue
 
                     # Groq AI Pre-Signal Sanity Review.
@@ -728,6 +744,7 @@ class AppRunner:
                             # blocking it is measurable. A filter only ever
                             # judged on what it let through cannot be wrong.
                             await self._log_signal(sig, suppressed_by="ai_review")
+                            self.crypto_engine.forget(sig)
                             continue
 
                     msg = format_crypto_signal(sig)

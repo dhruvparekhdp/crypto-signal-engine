@@ -86,6 +86,7 @@ class TestPositionReviewGarbage(unittest.TestCase):
             return Reply(data=data, provider="x", model="y")
 
         with patch("collectors.llm_client.ask_json", fake), \
+             patch("collectors.llm_client.chain_for", lambda role: [("groq", "m")]), \
              patch.object(pr, "_needs_model", lambda t: True):
             got = asyncio.run(pr.review_position(pos, state, now))
             trend = pr.trend_confidence(pos, state, now)

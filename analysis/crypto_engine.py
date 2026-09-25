@@ -128,10 +128,15 @@ class CryptoEngine:
         if sig.signal_type == "rsi_divergence":
             return False
 
+        # 360 one-minute bars give 24 fifteen-minute bars, enough for the 20-bar
+        # EMA. The feed used to fetch 200 (13 bars), so this filter silently
+        # never ran; now a skip is logged instead of passing unseen.
         candles = state.get_candles("1h")
         if len(candles) < 20:
             candles = state.get_candles("15m")
         if len(candles) < 20:
+            log.debug("htf_filter_skipped_short_history", symbol=state.symbol,
+                      bars=len(candles))
             return False
 
         closes = [c.close for c in candles if c.is_closed]
@@ -238,6 +243,20 @@ class CryptoEngine:
                 self._live.pop((sig.symbol, other), None)
                 return None
         return prev
+
+    def forget(self, sig: CryptoSignal) -> None:
+        """
+        Undo process() for a signal the runner dropped before publishing.
+
+        process() marks a signal live and starts its cooldown the moment it is
+        produced. When the confidence floor or the AI review then drops it,
+        that bookkeeping stayed: a signal nobody saw blocked the next real
+        one on the same coin for the whole cooldown.
+        """
+        key = (sig.symbol, sig.direction)
+        if self._live.get(key) is sig:
+            self._live.pop(key, None)
+        self._cooldowns.pop((sig.symbol.lower(), sig.signal_type), None)
 
     def _is_on_cooldown(self, symbol: str, signal_type: str) -> bool:
         key = (symbol.lower(), signal_type)

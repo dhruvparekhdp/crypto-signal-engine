@@ -2915,7 +2915,7 @@ td.null{color:#475569;font-style:italic}
 <div class="note">Newest rows first (by primary key). Increase rows/table to dump more — capped at 2000 per table.</div>
 <div id="tables"></div>
 <script>
-function esc(s){return String(s).replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));}
+function esc(s){return String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));}
 // An ISO timestamp straight from the database reads as
 // "2026-09-24T10:09:00.123456" — technically a date and a time, and in UTC,
 // which is five and a half hours from the only clock the operator has. The

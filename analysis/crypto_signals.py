@@ -222,10 +222,18 @@ class RSIDivergenceAnalyzer:
     """Detects RSI divergence (momentum vs price discrepancies) indicating upcoming reversals."""
 
     def analyze(self, state: CryptoState) -> CryptoSignal | None:
-        if len(state.candles_1m) < 20 or state.current_price <= 0:
+        # Off by default. With a 20-bar window this detector could never fire;
+        # fixed, it calls reversals all through a steady trend (12% longs in a
+        # rising test market). It stays off until it beats random entries on
+        # real candles in the null test.
+        if not getattr(settings, "rsi_divergence_enabled", False):
+            return None
+        if len(state.candles_1m) < 40 or state.current_price <= 0:
             return None
 
-        div = state.rsi_divergence(lookback=20)
+        # 40 bars, not 20: RSI needs 14 bars to warm up and the pivot test
+        # needs 8 RSI values, so a 20-bar window could never fire at all.
+        div = state.rsi_divergence(lookback=40)
         if not div:
             return None
 

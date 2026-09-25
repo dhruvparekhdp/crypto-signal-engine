@@ -174,6 +174,10 @@ async def _migrate_columns(conn) -> None:
         # News context stored with every review. Postgres form first; the
         # plain form is for an existing SQLite file, and whichever does not
         # apply fails harmlessly.
+        "ALTER TABLE paper_positions ADD COLUMN IF NOT EXISTS trail_r_override FLOAT",
+        "ALTER TABLE paper_positions ADD COLUMN IF NOT EXISTS locked_roe FLOAT",
+        "ALTER TABLE paper_positions ADD COLUMN trail_r_override FLOAT",
+        "ALTER TABLE paper_positions ADD COLUMN locked_roe FLOAT",
         "ALTER TABLE signal_reviews ADD COLUMN IF NOT EXISTS briefing_id INTEGER DEFAULT 0",
         "ALTER TABLE signal_reviews ADD COLUMN IF NOT EXISTS news_context TEXT DEFAULT ''",
         "ALTER TABLE signal_reviews ADD COLUMN IF NOT EXISTS sentiment_score FLOAT DEFAULT 0.0",

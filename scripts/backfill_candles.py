@@ -106,6 +106,7 @@ async def backfill(symbols: list[str], interval: str, start: datetime,
     print()
     grand_new = grand_seen = 0
     unreachable = 0
+    short = 0
 
     for symbol in symbols:
         # A fresh fetcher per symbol so one symbol's failure count does not
@@ -127,6 +128,7 @@ async def backfill(symbols: list[str], interval: str, start: datetime,
             print(f"  {symbol:<10} FAILED after {new:,} rows: {str(exc)[:120]}")
             continue
 
+        short += getattr(history, "shortfalls", 0)
         async with AsyncSessionFactory() as session:
             cov = await Repository(session).candle_coverage(symbol, interval)
         dupes = seen - new
@@ -151,6 +153,10 @@ async def backfill(symbols: list[str], interval: str, start: datetime,
         print("  not an error. Re-running this command is always safe.\n")
     else:
         print()
+    if short:
+        print(f"  {short} fetch(es) stopped before the end of the range (rate limit or")
+        print("  block). Re-run to fill the rest; nothing already stored is duplicated.\n")
+        return 1
     return 0
 
 
@@ -164,7 +170,10 @@ async def main(args) -> int:
               f"Known: {', '.join(sorted(INTERVAL_SECONDS, key=lambda i: INTERVAL_SECONDS[i]))}")
         return 2
 
-    end = datetime.now(UTC).replace(tzinfo=None, second=0, microsecond=0)
+    # Floored to the interval grid, so the bar still forming is never asked for.
+    secs = INTERVAL_SECONDS[args.interval]
+    end = datetime.fromtimestamp((int(datetime.now(UTC).timestamp()) // secs) * secs,
+                                 UTC).replace(tzinfo=None)
     days = args.days if args.days else int(args.years * 365)
     start = end - timedelta(days=days)
 

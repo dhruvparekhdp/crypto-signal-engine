@@ -175,7 +175,7 @@ class BinanceKlines:
         return None
 
     async def fetch_candles(self, symbol: str, interval: str = "1m",
-                            limit: int = 200) -> list[dict]:
+                            limit: int = 360) -> list[dict]:
         rows = await self._get("/api/v3/klines", {
             "symbol": venue_symbol(symbol), "interval": interval,
             "limit": min(limit, 1000)})

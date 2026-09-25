@@ -65,6 +65,38 @@ def _compute_rsi(closes: list[float], period: int = 14) -> float:
     return round(100.0 - (100.0 / (1.0 + rs)), 2)
 
 
+def _ema_series(values: list[float], period: int) -> list[float]:
+    """EMA at every point, seeded with the SMA of the first `period` values."""
+    if len(values) < period:
+        return []
+    k = 2.0 / (period + 1.0)
+    ema = sum(values[:period]) / period
+    out = [ema]
+    for v in values[period:]:
+        ema = (v - ema) * k + ema
+        out.append(ema)
+    return out
+
+
+def _macd(closes: list[float]) -> tuple[float, float, float]:
+    """
+    (line, signal, histogram). The signal is the 9-period EMA of the MACD line.
+
+    Only the line used to be computed; signal and histogram stayed 0.0, so the
+    position reviewer's "MACD still points our way" read the line against zero
+    and every stored snapshot has a meaningless macd_signal.
+    """
+    fast, slow = _ema_series(closes, 12), _ema_series(closes, 26)
+    if not slow:
+        return 0.0, 0.0, 0.0
+    fast = fast[len(fast) - len(slow):]
+    line = [f - s for f, s in zip(fast, slow)]
+    sig = _ema_series(line, 9)
+    if not sig:
+        return line[-1], 0.0, 0.0
+    return line[-1], sig[-1], line[-1] - sig[-1]
+
+
 def _compute_ema(values: list[float], period: int) -> float:
     if not values:
         return 0.0
@@ -146,9 +178,11 @@ def recalculate_indicators(state: CryptoState) -> None:
     state.rsi_14_prev = state.rsi_14
     state.rsi_14 = _compute_rsi(closes[-(_RSI_PERIOD + 1):], _RSI_PERIOD)
 
-    ema_12 = _compute_ema(closes, 12)
-    ema_26 = _compute_ema(closes, 26)
-    state.macd_line = ema_12 - ema_26
+    line, signal, hist = _macd(closes)
+    if line or signal:
+        state.macd_line, state.macd_signal, state.macd_histogram = line, signal, hist
+    else:
+        state.macd_line = _compute_ema(closes, 12) - _compute_ema(closes, 26)
 
     state.ema_9 = _compute_ema(closes, 9)
     state.ema_20 = _compute_ema(closes, 20)
