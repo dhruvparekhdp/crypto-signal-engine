@@ -26,6 +26,25 @@ from storage.models import (
 )
 
 
+def _bounded(value, lo: float, hi: float, default: float) -> float:
+    """
+    A float clamped to [lo, hi]. Missing, unparseable or non-finite -> default.
+
+    NaN must not be clamped: max(lo, min(hi, nan)) returns hi, so a garbage
+    score became the most bullish reading possible.
+    """
+    import math
+    if value is None or value == "":
+        return default
+    try:
+        x = float(value)
+    except (TypeError, ValueError):
+        return default
+    if not math.isfinite(x):
+        return default
+    return max(lo, min(hi, x))
+
+
 def _now_utc() -> datetime:
     """Current UTC time as naive datetime for TIMESTAMP WITHOUT TIME ZONE database compatibility."""
     return datetime.now(UTC).replace(tzinfo=None)
@@ -612,8 +631,10 @@ class Repository:
                 headline=str(item.get("headline") or "")[:2000],
                 source=str(item.get("source") or "")[:200],
                 url=str(item.get("url") or "")[:500],
-                score=max(-1.0, min(1.0, float(item.get("score") or 0.0))),
-                confidence=max(0.0, min(1.0, float(item.get("confidence") or 0.5))),
+                score=_bounded(item.get("score"), -1.0, 1.0, 0.0),
+                # 0.0 is a real answer ("I don't know"); only a missing value
+                # takes the default. `or 0.5` used to turn 0.0 into 0.5.
+                confidence=_bounded(item.get("confidence"), 0.0, 1.0, 0.5),
                 event_type=str(item.get("event_type") or "other")[:40],
                 model=str(item.get("model") or "")[:80],
                 published_at=_parse_dt(item.get("published_at")) or _now_utc(),
@@ -622,6 +643,15 @@ class Repository:
         if accepted:
             await self.session.commit()
         return accepted, duplicates
+
+    async def news_sentiment_since(self, hours: int = 12, limit: int = 2000) -> list[NewsSentiment]:
+        """Every scored headline in the window, all symbols, newest first."""
+        cutoff = _now_utc() - timedelta(hours=hours)
+        res = await self.session.execute(
+            select(NewsSentiment)
+            .where(NewsSentiment.published_at >= cutoff)
+            .order_by(NewsSentiment.published_at.desc()).limit(limit))
+        return list(res.scalars().all())
 
     async def recent_news_sentiment(self, symbol: str, hours: int = 6) -> list[NewsSentiment]:
         cutoff = _now_utc() - timedelta(hours=hours)

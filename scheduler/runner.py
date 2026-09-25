@@ -92,6 +92,8 @@ class AppRunner:
         self.oi_collector = BinanceFuturesOICollector(self.crypto_store)
         self._pending_paper_signals: list[tuple[CryptoSignal, object]] = []
         self.fear_greed = None
+        # High-impact headlines seen by the news job, as blackout events.
+        self._news_events: tuple = ()
         self.multi_horizon = MultiHorizonPredictor()
         self._ws_tasks: list[asyncio.Task] = []
         # Binance-only leaves klines as the single source of candles, depth
@@ -290,6 +292,16 @@ class AppRunner:
                 # 2. Consider new positions from queued signals.
                 pending = list(self._pending_paper_signals)
                 self._pending_paper_signals.clear()
+
+                # Around FOMC / CPI / jobs releases and after confident
+                # high-impact news, price spikes both ways within seconds and
+                # takes out stops sized for an ordinary hour. Stand aside;
+                # open positions keep their stops.
+                blackout = self._blackout(now)
+                if blackout is not None and pending:
+                    log.info("paper_trades_blackout", event=blackout.name,
+                             kind=blackout.kind, skipped=len(pending))
+                    pending = []
 
                 for sig, st in pending:
                     if st.current_price <= 0:
@@ -711,6 +723,48 @@ class AppRunner:
         except Exception:
             log.exception("crypto_analysis_job_failed")
 
+    async def _news_sentiment_job(self) -> None:
+        """
+        Turn the scored headlines the news scorer posts into sentiment_score.
+
+        Every five minutes: read the last twelve hours of headlines, weight
+        each by confidence, source and age, and set each followed symbol's
+        score from its own news plus half the macro news. A quiet feed decays
+        to zero by itself. Also notes confident high-impact headlines, which
+        the paper tick treats as a blackout.
+
+        Stands down when CryptoPanic is configured, so two jobs never write
+        the same field.
+        """
+        if not settings.news_sentiment_enabled or settings.cryptopanic_auth_token:
+            return
+        from analysis.event_calendar import news_events
+        from analysis.news_sentiment import WINDOW_HOURS, per_symbol
+        from collectors.hermes import HIGH_IMPACT
+
+        try:
+            async with AsyncSessionFactory() as session:
+                rows = await Repository(session).news_sentiment_since(WINDOW_HOURS)
+            now = datetime.now(UTC).replace(tzinfo=None)
+            symbols = await self.crypto_store.get_symbols()
+            scores = per_symbol(rows, symbols, now)
+            for sym, (score, count) in scores.items():
+                await self.crypto_store.set_sentiment(sym, score, count)
+            self._news_events = news_events(rows, now, HIGH_IMPACT)
+            log.info("news_sentiment_updated", headlines=len(rows),
+                     scores={s: round(v[0], 3) for s, v in scores.items()},
+                     high_impact=len(self._news_events))
+        except Exception:
+            log.exception("news_sentiment_job_failed")
+
+    def _blackout(self, now: datetime):
+        """The event that forbids opening a trade right now, or None."""
+        if not settings.event_blackout_enabled:
+            return None
+        from analysis.event_calendar import active_blackout
+        naive = now.replace(tzinfo=None) if now.tzinfo else now
+        return active_blackout(naive, extra=self._news_events)
+
     async def _crypto_news_job(self) -> None:
         """Poll CryptoPanic for news and compute global & coin-specific sentiment."""
         if not settings.cryptopanic_auth_token:
@@ -906,6 +960,14 @@ class AppRunner:
             "interval",
             seconds=60,
             id="crypto_analysis",
+            max_instances=1,
+            next_run_time=datetime.now(UTC),
+        )
+        self.scheduler.add_job(
+            self._news_sentiment_job,
+            "interval",
+            minutes=5,
+            id="news_sentiment",
             max_instances=1,
             next_run_time=datetime.now(UTC),
         )

@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import json
 import math
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 from aiohttp import web
 
@@ -875,6 +875,30 @@ async def _api_crypto_watchlist(runner, request: web.Request) -> web.Response:
     symbols = sorted(await runner.crypto_store.get_symbols())
     return web.Response(text=json.dumps({"symbols": symbols}),
                         content_type="application/json")
+
+
+async def _api_events(runner, request: web.Request) -> web.Response:
+    """
+    GET /api/events — is trading paused right now, and what is coming up.
+
+    Scheduled releases (FOMC, CPI, jobs, PCE, PPI) for the next two weeks,
+    and the event currently holding new trades back, if any.
+    """
+    from analysis.event_calendar import WINDOWS, upcoming
+
+    now = datetime.now(UTC)
+    naive = now.replace(tzinfo=None)
+    current = runner._blackout(now) if hasattr(runner, "_blackout") else None
+
+    def row(ev):
+        before, after = WINDOWS.get(ev.kind, (0, 0))
+        return {"at": _iso(ev.at), "kind": ev.kind, "name": ev.name,
+                "pause_from": _iso(ev.at - timedelta(minutes=before)),
+                "pause_until": _iso(ev.at + timedelta(minutes=after))}
+
+    body = {"blackout": row(current) if current else None,
+            "upcoming": [row(e) for e in upcoming(naive)]}
+    return web.Response(text=json.dumps(body), content_type="application/json")
 
 
 async def _api_binance_symbols(runner, request: web.Request) -> web.Response:
@@ -4862,6 +4886,7 @@ async def make_app(runner) -> web.Application:
     app.router.add_get("/api/debug/volume", _bind(_api_debug_volume))
     app.router.add_get("/api/crypto/watchlist", _bind(_api_crypto_watchlist))
     app.router.add_get("/api/binance/symbols", _bind(_api_binance_symbols))
+    app.router.add_get("/api/events", _bind(_api_events))
     app.router.add_post("/api/crypto/watchlist/add", _bind(_api_crypto_watchlist_add))
     app.router.add_post("/api/crypto/watchlist/remove", _bind(_api_crypto_watchlist_remove))
     app.router.add_get("/api/commodities", _bind(_api_commodities))

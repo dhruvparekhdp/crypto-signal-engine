@@ -381,6 +381,15 @@ class CryptoStateStore:
                     state.sentiment_news_count = news_count
                     state.last_sentiment_update = datetime.now(UTC)
 
+    async def set_sentiment(self, symbol: str, score: float, news_count: int) -> None:
+        """Set one symbol's sentiment, already combined from its own and macro news."""
+        async with self._lock:
+            state = self._states.get(symbol.lower())
+            if state is not None:
+                state.sentiment_score = score
+                state.sentiment_news_count = news_count
+                state.last_sentiment_update = datetime.now(UTC)
+
     async def get(self, symbol: str) -> CryptoState | None:
         async with self._lock:
             return self._states.get(symbol.lower())
