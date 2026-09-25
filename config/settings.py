@@ -105,17 +105,20 @@ class Settings(BaseSettings):
         "groq:groq/compound, groq:openai/gpt-oss-120b, anthropic:claude-sonnet-5")
     # The 30-minute world-events briefing. Only web-searching models: a model
     # without search asked for "today's news" invents it.
-    llm_chain_briefing: str = "groq:groq/compound, groq:groq/compound-mini"
+    llm_chain_briefing: str = (
+        "groq:groq/compound, groq:groq/compound-mini, groq:openai/gpt-oss-120b+search")
     market_briefing_enabled: bool = True
     market_briefing_minutes: int = 30
     # Hourly: why each watchlist coin moved, and how our signals fared.
-    llm_chain_attribution: str = "groq:groq/compound, groq:openai/gpt-oss-120b"
+    llm_chain_attribution: str = (
+        "groq:groq/compound, groq:openai/gpt-oss-120b+search, groq:openai/gpt-oss-120b")
     move_attribution_enabled: bool = True
     # The event monitor: adaptive, jittered web checks with a daily cap that
     # keeps Groq's free web-search limit (250/day) intact. Shadow mode only.
     event_monitor_enabled: bool = True
     event_monitor_daily_cap: int = 200
-    llm_chain_briefing_calm: str = "groq:groq/compound-mini, groq:groq/compound"
+    llm_chain_briefing_calm: str = (
+        "groq:groq/compound-mini, groq:groq/compound, groq:openai/gpt-oss-120b+search")
     move_attribution_minutes: int = 60
     move_attribution_window_hours: int = 12
     # Reviewing what is already open.
@@ -143,6 +146,11 @@ class Settings(BaseSettings):
     # everything else; this is only the tie-break for the case where the half
     # that was asked for cannot be obtained.
     position_review_close_on_outage: bool = True
+    # A model-driven close must be said twice in a row (the next review, about
+    # 5 min later). The 22-25 Sep log flipped hold/close 18 times in 52 reviews;
+    # LLM verdicts flip between adjacent steps, one vote is noise. The stop
+    # still protects the position while the second vote is pending.
+    position_review_confirm_close: bool = True
 
     # A winning position is reviewed less often than a losing one. It is not
     # deciding whether to exist — the trail already bounds what it can give

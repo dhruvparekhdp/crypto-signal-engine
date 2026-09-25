@@ -79,7 +79,7 @@ class TestRouting(unittest.TestCase):
         from collectors.llm_client import _parse_chain
         from config.settings import settings
         for _, model in _parse_chain(settings.llm_chain_briefing):
-            self.assertTrue(model.startswith("groq/compound"), model)
+            self.assertTrue(model.startswith("groq/compound") or model.endswith("+search"), model)
 
     def test_compound_gets_no_structured_output_knobs(self):
         from collectors import llm_client

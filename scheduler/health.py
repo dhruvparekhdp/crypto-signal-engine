@@ -941,6 +941,10 @@ async def _api_moves(runner, request: web.Request) -> web.Response:
         },
         "upcoming": [{"at": _iso(e.at), "kind": e.kind, "name": e.name}
                      for e in upcoming(now, days=7)],
+        "monitor": {
+            "last_run": _iso(getattr(runner, "_monitor_last_run", None)),
+            "failures": list(getattr(runner, "_monitor_failures", []) or []),
+        },
         "events": [{
             "id": e.id, "title": e.title, "category": e.category, "at": _iso(e.happened_at),
             "level": e.level_current, "level_initial": e.level_initial,
@@ -4636,6 +4640,11 @@ h2{font-size:15px;color:var(--text-strong);margin-bottom:10px}
 .verdict{display:grid;grid-template-columns:1fr 1fr;gap:18px}
 .lesson{background:var(--acc-t);border:1px solid var(--acc-t2);border-radius:10px;padding:12px 14px}
 .lesson b{color:var(--accent)}
+.facts{display:flex;flex-wrap:wrap;gap:6px;margin-top:10px}
+.facts span{font-size:12px;background:var(--acc-t);border:1px solid var(--acc-t2);border-radius:8px;padding:3px 8px}
+.watch{margin-top:10px;font-size:14px;line-height:1.45}
+.pill.wait{background:var(--acc-t);color:var(--muted,#888)}
+.meta.warn{color:#b4540a;margin-top:6px;word-break:break-word}
 .events{display:grid;gap:6px;font-size:13px}
 .events div{display:flex;gap:10px} .events time{color:var(--muted);white-space:nowrap;font-variant-numeric:tabular-nums}
 .hist{display:grid;gap:6px}
@@ -4691,6 +4700,19 @@ function stamp(iso){ return window.fmtStamp? window.fmtStamp(iso) : esc(iso); }
 function ago(iso){ return window.fmtAgo? window.fmtAgo(iso) : ''; }
 const CAUSE={news:'News event',market_wide:'Whole market',coin_specific:'Coin-specific',no_clear_cause:'No clear cause'};
 let DATA=null, SEL=0;
+// The measured numbers the model was handed, so its reasoning can be checked.
+function factsBlock(f){ if(!f) return ''; const out=[]; const n=v=>(v>=0?'+':'')+v;
+  if(f.volume_last3h_vs_prior!=null) out.push('vol 3h '+f.volume_last3h_vs_prior+'× prior');
+  if(f.volume_vs_avg!=null) out.push('vol 24h '+f.volume_vs_avg+'× avg');
+  if(f.largest_1h_candle) out.push('big candle '+n(f.largest_1h_candle.change_pct)+'% @ '+f.largest_1h_candle.at);
+  if(f.structure_15m) out.push('15m '+f.structure_15m);
+  if(f.support!=null) out.push('support '+f.support);
+  if(f.resistance!=null) out.push('resistance '+f.resistance);
+  if(f.funding_8h_pct!=null) out.push('funding '+n(f.funding_8h_pct)+'%');
+  if(f.open_interest_1h_pct!=null) out.push('OI 1h '+n(f.open_interest_1h_pct)+'%');
+  if(f.order_flow) out.push(f.order_flow.replace(/_/g,' '));
+  if(f.vs_btc_4h_pct!=null) out.push('vs BTC 4h '+n(f.vs_btc_4h_pct)+'%');
+  return out.length?'<div class="facts">'+out.map(x=>'<span>'+esc(x)+'</span>').join('')+'</div>':''; }
 
 function render(){
   const main=document.getElementById('main');
@@ -4706,13 +4728,16 @@ function render(){
   // hero
   h+='<section class="card hero"><div><div class="eyebrow">What moved the market · last '+run.window_hours+'h</div>'
     +'<p>'+esc(r.overall||'No summary.')+'</p>'
-    +'<div class="meta">'+stamp(run.at)+' · '+ago(run.at)+' · '+esc(run.model)+' · '+Math.round((run.latency_ms||0)/1000)+'s</div></div>';
+    +'<div class="meta">'+stamp(run.at)+' · '+ago(run.at)+' · '+esc(run.model)+' · '+Math.round((run.latency_ms||0)/1000)+'s</div>'
+    +((r.skipped||[]).length?'<div class="meta warn">Web search skipped: '+r.skipped.map(esc).join(' · ')+'</div>':'')+'</div>';
   const b=DATA.briefing;
   if(b){ const t=Math.max(-1,Math.min(1,b.risk_tone||0));
     h+='<div class="tone"><div class="eyebrow">World risk tone</div><div class="val '+(t>=0?'pos':'neg')+'">'+(t>=0?'+':'')+t.toFixed(2)+'</div>'
       +'<div class="gauge"><i style="left:calc('+((t+1)/2*100)+'% - 1px)"></i></div><div class="gauge-l"><span>risk-off</span><span>risk-on</span></div>'
       +'<div class="meta">briefing '+ago(b.at)+'</div></div>'; }
-  else h+='<div class="tone"><div class="eyebrow">World risk tone</div><div class="meta">No briefing yet.</div></div>';
+  else { const mf=((DATA.monitor||{}).failures)||[];
+    h+='<div class="tone"><div class="eyebrow">World risk tone</div><div class="meta">No briefing yet.</div>'
+      +(mf.length?'<div class="meta warn">Web search failing: '+mf.map(esc).join(' · ')+'</div>':'')+'</div>'; }
   h+='</section>';
   // drivers
   const drivers=r.drivers||[];
@@ -4741,7 +4766,10 @@ function render(){
           +(s.outcome!=='pending'?' '+(s.pnl_pct>=0?'+':'')+s.pnl_pct.toFixed(2)+'%':'')
           +(s.blocked_by?' · <span class="muted">blocked by '+esc(s.blocked_by)+'</span>':'')+'</div>').join('')
         : '<div class="sig">None fired on this coin.</div>')
-      +(c.signals_review?'<div class="review">'+esc(c.signals_review)+'</div>':'')+'</div></article>'; });
+      +(c.signals_review?'<div class="review">'+esc(c.signals_review)+'</div>':'')+'</div>'
+      +factsBlock(m.facts)
+      +(c.watch?'<div class="watch">'+(c.bias?'<span class="pill '+esc(c.bias)+'">'+esc(c.bias)+'</span> ':'')+'<b>Watch:</b> '+esc(c.watch)+'</div>':'')
+      +'</article>'; });
   h+='</div></section>';
   // verdict
   h+='<section class="card verdict"><div><h2>How our signals did</h2><p>'+esc(r.signals_verdict||'No verdict.')+'</p></div>'

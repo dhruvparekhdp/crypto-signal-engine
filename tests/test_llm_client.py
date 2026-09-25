@@ -263,3 +263,38 @@ async def test_the_reply_records_who_answered():
 
     assert reply.served_by == "anthropic/claude-sonnet-5"
     assert reply.latency_ms >= 0
+
+
+class TestSearchSuffix(unittest.IsolatedAsyncioTestCase):
+    async def test_search_suffix_turns_on_browser_search(self):
+        from collectors import llm_client
+
+        sent = {}
+
+        class Resp:
+            status_code = 200
+
+            def json(self):
+                return {"choices": [{"message": {"content": "{}"}}]}
+
+        class Client:
+            def __init__(self, **kw):
+                pass
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *a):
+                return False
+
+            async def post(self, url, json, headers):
+                sent.update(json)
+                return Resp()
+
+        with patch.object(llm_client.httpx, "AsyncClient", Client):
+            await llm_client._call_openai_shaped(
+                llm_client.PROVIDERS["groq"], "openai/gpt-oss-120b+search",
+                "s", "u", 100, 0.2, 5.0)
+        self.assertEqual(sent["model"], "openai/gpt-oss-120b")
+        self.assertEqual(sent["tools"], [{"type": "browser_search"}])
+        self.assertNotIn("response_format", sent)

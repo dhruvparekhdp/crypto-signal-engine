@@ -81,6 +81,69 @@ def summarise_moves(points_by_symbol: dict[str, list[tuple[datetime, float]]],
     return sorted(out, key=lambda m: m.symbol)
 
 
+def coin_facts(state, move: Move | None = None, btc: Move | None = None) -> dict:
+    """
+    Hard numbers about one coin, computed here so the model has something
+    concrete to cite instead of "liquidity drift".
+
+    From the live state: volume against its average, the largest 1h candle
+    of the window and when, 15m structure with the nearest levels, funding,
+    open-interest change and order-flow read, and the move net of BTC.
+    Anything the state cannot supply is left out, never guessed.
+    """
+    from analysis.price_action import levels, structure
+
+    facts: dict = {}
+    if state is None:
+        return facts
+    price = float(getattr(state, "current_price", 0) or 0)
+    ratio = getattr(state, "volume_ratio", None)
+    try:
+        ratio = ratio() if callable(ratio) else ratio
+    except Exception:
+        ratio = None
+    if ratio:
+        facts["volume_vs_avg"] = round(float(ratio), 2)
+    try:
+        h1 = [c for c in state.get_candles("1h") if getattr(c, "is_closed", True)][-12:]
+        c15 = [c for c in state.get_candles("15m") if getattr(c, "is_closed", True)]
+    except Exception:
+        h1, c15 = [], []
+    if h1:
+        big = max(h1, key=lambda c: abs(c.close - c.open) / c.open if c.open else 0)
+        if big.open:
+            facts["largest_1h_candle"] = {
+                "at": big.timestamp.strftime("%H:%M UTC"),
+                "change_pct": round((big.close - big.open) / big.open * 100, 2),
+            }
+        vols = [c.volume for c in h1]
+        if len(vols) >= 6 and sum(vols[:-3]) > 0:
+            facts["volume_last3h_vs_prior"] = round(
+                (sum(vols[-3:]) / 3) / (sum(vols[:-3]) / len(vols[:-3])), 2)
+    if len(c15) >= 12 and price > 0:
+        facts["structure_15m"] = structure(c15)
+        sup, res = levels(c15, price)
+        if sup:
+            facts["support"] = round(sup, 6)
+        if res:
+            facts["resistance"] = round(res, 6)
+        facts["high_12h"] = round(max(c.high for c in c15[-48:]), 6)
+        facts["low_12h"] = round(min(c.low for c in c15[-48:]), 6)
+    fr = getattr(state, "funding_rate_per_8h", None)
+    if fr is not None:
+        facts["funding_8h_pct"] = round(fr * 100, 4)
+    oi = getattr(state, "oi_change_1h_pct", 0.0)
+    if oi:
+        facts["open_interest_1h_pct"] = round(oi, 2)
+    cvd = getattr(state, "cvd_trend", "")
+    if cvd and cvd != "neutral":
+        facts["order_flow"] = cvd
+    if move is not None and btc is not None and move.symbol != btc.symbol:
+        if move.change_4h is not None and btc.change_4h is not None:
+            facts["vs_btc_4h_pct"] = round(move.change_4h - btc.change_4h, 2)
+    return facts
+
+
 def signals_digest(signals) -> list[dict]:
     """The signals from the window, in the form the model and the page read."""
     return [{
@@ -111,6 +174,18 @@ ATTRIBUTION_SYSTEM = (
     "anyway (liquidity, a liquidation cascade, drift, a move too small to "
     "mean anything) and say so plainly. Never invent a cause to fill the gap.\n"
     "Compare each coin with BTC: moving with BTC is usually market_wide.\n\n"
+    "Be concrete. Each coin comes with measured facts (volume against its "
+    "average, the largest 1h candle and when, 15m structure, support and "
+    "resistance, funding, open-interest change, order flow, move net of "
+    "BTC). Every reasoning must cite at least two of them with their "
+    "numbers, e.g. 'volume 2.3x average, the +1.8% candle at 14:00 broke "
+    "resistance 339.5, OI +4% so new longs opened'. Words like 'drift', "
+    "'liquidity swings' or 'risk-on tilt' are not causes unless a number "
+    "backs them. A rise on falling OI is shorts covering; on rising OI with "
+    "positive funding it is new longs, crowded if funding is high.\n\n"
+    "Then say what to watch next for each coin, as prices: the level whose "
+    "break continues the move, the level whose loss ends it, and whether "
+    "that makes a long, a short or no trade right now.\n\n"
     "Then grade the signals: were they on the right side of what drove the "
     "market, did any fire into a news event they could not see, and what "
     "would have been the better call. Be specific, cite times.\n\n"
@@ -122,20 +197,26 @@ ATTRIBUTION_SYSTEM = (
     '"coins": [{"symbol": "btcusdt", "cause_type": "news", '
     '"cause": "short name of the cause", "confidence": 0.0-1.0, '
     '"reasoning": "2 to 4 sentences", '
-    '"signals_review": "how our signals on this coin fit the cause, or empty"}], '
+    '"signals_review": "how our signals on this coin fit the cause, or empty", '
+    '"watch": "above X it continues to Y; below Z the move is over", '
+    '"bias": "long|short|wait"}], '
     '"signals_verdict": "2 to 4 sentences grading the desk overall", '
     '"lesson": "one practical change for the desk, or empty"}'
 )
 
 
 def build_prompt(moves: list[Move], signals: list[dict], news: str,
-                 window_hours: int) -> str:
+                 window_hours: int, facts: dict | None = None) -> str:
     def f(v):
         return "n/a" if v is None else f"{v:+.2f}%"
+    import json
+
     lines = [f"Window: last {window_hours} hours.", "", "Moves (price, 1h, 4h, 12h, 12h range):"]
     for m in moves:
         lines.append(f"- {m.symbol.upper()}: {m.price:,.6g} | 1h {f(m.change_1h)} | "
                      f"4h {f(m.change_4h)} | 12h {f(m.change_12h)} | range {f(m.range_12h)}")
+        if facts and facts.get(m.symbol):
+            lines.append(f"  facts: {json.dumps(facts[m.symbol], separators=(',', ':'))}")
     lines += ["", f"Our signals in the window ({len(signals)}):"]
     if not signals:
         lines.append("- none fired")
@@ -172,6 +253,10 @@ def parse_attribution(data: dict, symbols: set[str]) -> dict:
             "confidence": _clamp(c.get("confidence"), 0.0, 1.0, 0.5),
             "reasoning": str(c.get("reasoning") or "").strip()[:900],
             "signals_review": str(c.get("signals_review") or "").strip()[:600],
+            "watch": str(c.get("watch") or "").strip()[:300],
+            "bias": (str(c.get("bias") or "").strip().lower()
+                     if str(c.get("bias") or "").strip().lower() in ("long", "short", "wait")
+                     else ""),
         })
     drivers = []
     for d in (data.get("drivers") or [])[:10]:
@@ -192,4 +277,5 @@ def parse_attribution(data: dict, symbols: set[str]) -> dict:
         "coins": coins,
         "signals_verdict": str(data.get("signals_verdict") or "").strip()[:1000],
         "lesson": str(data.get("lesson") or "").strip()[:400],
+        "skipped": [],
     }

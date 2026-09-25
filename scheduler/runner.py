@@ -89,6 +89,10 @@ class AppRunner:
         # When each symbol's open position was last put to the reviewer. The
         # tick is every 30s and no market reconsiders that often.
         self._last_position_review: dict[str, datetime] = {}
+        # Why the last event-monitor call fell through its chain, for /moves.
+        self._monitor_failures: list[str] = []
+        # symbol -> time of an unconfirmed model "close" vote.
+        self._close_votes: dict[str, datetime] = {}
         self.oi_collector = BinanceFuturesOICollector(self.crypto_store)
         self._pending_paper_signals: list[tuple[CryptoSignal, object]] = []
         self.fear_greed = None
@@ -469,7 +473,18 @@ class AppRunner:
             return None
 
         if review.hold:
+            self._close_votes.pop(pos.symbol, None)
             return None
+
+        if review.asked_model and settings.position_review_confirm_close:
+            first = self._close_votes.get(pos.symbol)
+            window = settings.position_review_interval_seconds * 3
+            if first is None or (now - first).total_seconds() > window:
+                self._close_votes[pos.symbol] = now
+                log.info("position_close_pending_confirmation", symbol=pos.symbol,
+                         confidence=round(review.confidence, 3))
+                return None
+        self._close_votes.pop(pos.symbol, None)
 
         from analysis.paper_trading import ExitReason, close_position, fees_for
 
@@ -871,7 +886,9 @@ class AppRunner:
             reply = await ask_json(monitor_model_role(max_level), MONITOR_SYSTEM,
                                    monitor_prompt(calendar_text(now), active),
                                    max_tokens=1800, temperature=0.2, timeout=90.0)
+            self._monitor_failures = reply.failures[:4]
             if not reply or not isinstance(reply.data, dict):
+                log.warning("event_monitor_no_answer", failures=reply.failures)
                 return
             got = parse_monitor(reply.data, {e.id for e in active})
             news = []
@@ -1035,6 +1052,7 @@ class AppRunner:
         from analysis.move_attribution import (
             ATTRIBUTION_SYSTEM,
             build_prompt,
+            coin_facts,
             parse_attribution,
             signals_digest,
             summarise_moves,
@@ -1063,16 +1081,27 @@ class AppRunner:
                 return
             digest = signals_digest(sigs)
             news = context_block(briefing, headlines, "*", limit=20)
+            btc = next((m for m in moves if m.symbol == "btcusdt"), None)
+            facts = {}
+            for m in moves:
+                try:
+                    facts[m.symbol] = coin_facts(await self.crypto_store.get(m.symbol), m, btc)
+                except Exception:
+                    facts[m.symbol] = {}
             reply = await ask_json("attribution", ATTRIBUTION_SYSTEM,
-                                   build_prompt(moves, digest, news, hours),
-                                   max_tokens=2500, temperature=0.2, timeout=120.0)
+                                   build_prompt(moves, digest, news, hours, facts),
+                                   max_tokens=3000, temperature=0.2, timeout=120.0)
             if not reply or not isinstance(reply.data, dict):
+                log.warning("move_attribution_no_answer", failures=reply.failures)
                 return
             result = parse_attribution(reply.data, {m.symbol for m in moves})
+            # Why the web-search model was skipped, shown on the page.
+            result["skipped"] = reply.failures[:4]
+            move_rows = [dict(m.as_dict(), facts=facts.get(m.symbol, {})) for m in moves]
             async with AsyncSessionFactory() as session:
                 await Repository(session).save_move_attribution(
                     window_hours=hours, briefing_id=briefing.id if briefing else 0,
-                    moves=[m.as_dict() for m in moves], signals=digest, result=result,
+                    moves=move_rows, signals=digest, result=result,
                     model=reply.served_by, latency_ms=reply.latency_ms)
             log.info("move_attribution_saved", coins=len(result["coins"]),
                      drivers=len(result["drivers"]), served_by=reply.served_by)

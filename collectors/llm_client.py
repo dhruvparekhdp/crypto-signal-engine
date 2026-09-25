@@ -119,6 +119,9 @@ class Reply:
     model: str = ""
     latency_ms: int = 0
     attempts: list[str] = field(default_factory=list)
+    # "provider/model: why" for each link that did not answer, so a page can
+    # say why the web-search model was skipped without anyone reading logs.
+    failures: list[str] = field(default_factory=list)
 
     def __bool__(self) -> bool:
         return bool(self.data)
@@ -210,7 +213,16 @@ async def _call_openai_shaped(provider: Provider, model: str, system: str,
     # groq/compound is an agent with its own web-search tool; it rejects the
     # structured-output and reasoning knobs the plain models take.
     compound = model.startswith("groq/compound")
-    if provider.name != "gemini" and not compound:
+    # "openai/gpt-oss-120b+search" turns on Groq's built-in browser_search
+    # tool for gpt-oss: a web-searching fallback when compound is down or out
+    # of quota, so the briefing never silently falls to a model that would
+    # have to invent the news. Tools and json_object do not mix.
+    search = model.endswith("+search")
+    if search:
+        model = model[:-len("+search")]
+        payload["model"] = model
+        payload["tools"] = [{"type": "browser_search"}]
+    if provider.name != "gemini" and not compound and not search:
         payload["response_format"] = {"type": "json_object"}
     # Reasoning models spend max_tokens on thinking before they write the
     # answer, so a 120-token budget comes back empty and the chain falls
@@ -269,6 +281,7 @@ async def ask_json(role: str, system: str, user: str, *, max_tokens: int = 512,
     """
     started = time.perf_counter()
     attempts: list[str] = []
+    failures: list[str] = []
 
     for provider_name, model in chain_for(role):
         provider = PROVIDERS[provider_name]
@@ -284,6 +297,8 @@ async def ask_json(role: str, system: str, user: str, *, max_tokens: int = 512,
             if not data:
                 log.warning("llm_reply_was_not_json", role=role,
                             provider=provider_name, model=model, head=text[:120])
+                failures.append(f"{provider_name}/{model}: reply was not JSON "
+                                f"({text.strip()[:80]!r})")
                 continue
 
             elapsed = int((time.perf_counter() - started) * 1000)
@@ -291,12 +306,13 @@ async def ask_json(role: str, system: str, user: str, *, max_tokens: int = 512,
                 log.info("llm_served_by_fallback", role=role,
                          served_by=f"{provider_name}/{model}", after=attempts[:-1])
             return Reply(data=data, provider=provider_name, model=model,
-                         latency_ms=elapsed, attempts=attempts)
+                         latency_ms=elapsed, attempts=attempts, failures=failures)
 
         except Exception as exc:
             log.warning("llm_provider_failed", role=role, provider=provider_name,
                         model=model, error=str(exc)[:200])
+            failures.append(f"{provider_name}/{model}: {str(exc)[:160] or type(exc).__name__}")
 
     log.warning("llm_no_provider_answered", role=role, attempts=attempts)
     return Reply(latency_ms=int((time.perf_counter() - started) * 1000),
-                 attempts=attempts)
+                 attempts=attempts, failures=failures)
