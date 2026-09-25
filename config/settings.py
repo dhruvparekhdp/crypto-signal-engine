@@ -36,7 +36,11 @@ class Settings(BaseSettings):
     # minutes is ~5,000 rows a day; at roughly 150 bytes a row, 120 days is
     # about 90 MB — well inside a free managed-Postgres tier.
     snapshot_retention_days: int = 120
-    signal_log_retention_days: int = 30
+    # The signal log is the evaluation record: the null test reads 120 days
+    # of it and the accuracy page 365. At ~30 signals a day it is ~11,000
+    # rows a year, so keeping a year costs nothing; keeping 30 days meant a
+    # restore of older signals was deleted at the next six-hourly cleanup.
+    signal_log_retention_days: int = 365
     port: int = 8080
 
     # Telegram Notifications (optional in dev, required in prod)

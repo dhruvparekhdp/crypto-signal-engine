@@ -160,11 +160,15 @@ class TestRetention(unittest.TestCase):
     engine ran.
     """
 
-    def test_snapshots_outlive_the_signal_log_by_a_wide_margin(self):
+    def test_the_signal_log_outlives_every_window_that_reads_it(self):
+        """
+        The null test reads 120 days of signals and the accuracy page 365. A
+        shorter retention silently shrinks both, and deletes a restore of
+        older signals at the next cleanup.
+        """
         from config.settings import settings
 
-        self.assertGreater(settings.snapshot_retention_days,
-                           settings.signal_log_retention_days)
+        self.assertGreaterEqual(settings.signal_log_retention_days, 365)
 
     def test_retention_covers_the_longest_label_horizon_many_times_over(self):
         """A window barely longer than the horizon yields almost no usable rows."""
