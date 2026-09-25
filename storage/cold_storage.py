@@ -49,6 +49,7 @@ TIME_COLUMN = {
     "market_events": "last_seen",
     "event_shadow_trades": "created_at",
     "paper_trades": "closed_at",
+    "v2_shadow_signals": "decided_at",
 }
 
 

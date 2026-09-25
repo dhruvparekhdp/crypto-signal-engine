@@ -137,6 +137,10 @@ class Settings(BaseSettings):
     session_weekdays_only: bool = True
     daily_loss_limit_pct: float = 3.0
     max_same_direction_positions: int = 2
+    # v2 setups (analysis/v2_setups.py) run live in shadow every 5 minutes:
+    # recorded and resolved with the backtest's fill rules, never traded.
+    v2_shadow_enabled: bool = True
+    v2_shadow_minutes: int = 5
     # The database keeps this many days; older rows go to gzipped JSON files
     # under cold_storage_dir (storage/cold_storage.py), never deleted outright.
     db_retention_days: int = 365

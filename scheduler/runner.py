@@ -1084,6 +1084,47 @@ class AppRunner:
         except Exception:
             log.exception("market_briefing_job_failed")
 
+    async def _v2_shadow_job(self) -> None:
+        """
+        Every 5 minutes: run the v2 setups on fresh Binance frames for each
+        crypto on the watchlist, record new candidates, and resolve the open
+        ones with the backtest's own fill rules. Shadow only — nothing trades.
+        """
+        if not settings.v2_shadow_enabled:
+            return
+        import pandas as pd
+
+        from analysis.instruments import spec_for
+        from analysis.v2_setups import V2Config
+        from analysis.v2_shadow import step
+        from collectors.v2_feed import fetch_frames, fetch_funding
+
+        cfg = V2Config(session_filter=settings.session_filter_enabled,
+                       session_start_utc=settings.session_start_utc,
+                       session_end_utc=settings.session_end_utc,
+                       weekdays_only=settings.session_weekdays_only)
+        now = pd.Timestamp.now("UTC").tz_localize(None)
+        new_total = closed = 0
+        try:
+            symbols = [s for s in await self.crypto_store.get_symbols()
+                       if spec_for(s).kind == "crypto"]
+            for sym in symbols:
+                frames = await fetch_frames(sym)
+                if frames["5m"].empty:
+                    continue
+                funding = await fetch_funding(sym)
+                async with AsyncSessionFactory() as session:
+                    repo = Repository(session)
+                    rows = await repo.open_v2_shadows(sym)
+                    cands, updates = step(sym, frames, funding, rows, now, cfg)
+                    for u in updates:
+                        await repo.update_v2_shadow(u.row_id, **u.fields)
+                        closed += u.fields.get("status") == "closed"
+                    new_total += await repo.save_v2_candidates(cands)
+            log.info("v2_shadow_step", symbols=len(symbols), new=new_total, closed=closed)
+        except Exception:
+            log.exception("v2_shadow_failed")
+
     async def _move_attribution_job(self) -> None:
         """
         Every hour: ask Groq why each watchlist coin moved and whether our
@@ -1415,6 +1456,14 @@ class AppRunner:
             id="daily_trend",
             max_instances=1,
             next_run_time=datetime.now(UTC) + timedelta(seconds=30),
+        )
+        self.scheduler.add_job(
+            self._v2_shadow_job,
+            "interval",
+            minutes=settings.v2_shadow_minutes,
+            id="v2_shadow",
+            max_instances=1,
+            next_run_time=datetime.now(UTC) + timedelta(minutes=2),
         )
         self.scheduler.add_job(
             self._event_evaluation_job,

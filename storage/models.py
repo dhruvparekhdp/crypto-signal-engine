@@ -507,6 +507,63 @@ class HistoryEvent(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_now_utc)
 
 
+class V2ShadowSignal(Base):
+    """
+    A v2 setup found live, and what the backtest's own fill rules say became
+    of it. Shadow only: nothing is traded. Compared against the backtest, it
+    shows whether live behaves like history before any money follows it.
+    """
+
+    __tablename__ = "v2_shadow_signals"
+    __table_args__ = (UniqueConstraint("symbol", "setup", "side", "decided_at",
+                                       name="uq_v2_shadow"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    symbol: Mapped[str] = mapped_column(String, index=True)
+    setup: Mapped[str] = mapped_column(String)
+    side: Mapped[str] = mapped_column(String)
+    decided_at: Mapped[datetime] = mapped_column(DateTime, index=True)
+    entry: Mapped[float] = mapped_column(Float)
+    stop: Mapped[float] = mapped_column(Float)
+    target: Mapped[float] = mapped_column(Float)
+    notes: Mapped[str] = mapped_column(Text, default="{}")
+    status: Mapped[str] = mapped_column(String, default="pending", index=True)
+    # pending (limit resting) | open (filled) | closed | cancelled | expired
+    filled_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    exit_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    exit_price: Mapped[float] = mapped_column(Float, default=0.0)
+    reason: Mapped[str] = mapped_column(String, default="")
+    r: Mapped[float] = mapped_column(Float, default=0.0)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=_now_utc)
+
+
+class TradeJournal(Base):
+    """
+    The owner's own trades, and setups he looked at and skipped, with the
+    chart as it stood at the time measured automatically. The raw material
+    for encoding his style: rules first, a filter model later.
+    """
+
+    __tablename__ = "trade_journal"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    symbol: Mapped[str] = mapped_column(String, index=True)
+    side: Mapped[str] = mapped_column(String)
+    took: Mapped[bool] = mapped_column(Boolean, default=True)    # False = looked, skipped
+    opened_at: Mapped[datetime] = mapped_column(DateTime, index=True)
+    closed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    entry: Mapped[float] = mapped_column(Float, default=0.0)
+    stop: Mapped[float] = mapped_column(Float, default=0.0)
+    target: Mapped[float] = mapped_column(Float, default=0.0)
+    exit_price: Mapped[float] = mapped_column(Float, default=0.0)
+    leverage: Mapped[float] = mapped_column(Float, default=0.0)
+    tags: Mapped[str] = mapped_column(String, default="")        # comma-separated, fixed list
+    conviction: Mapped[int] = mapped_column(Integer, default=3)  # 1-5
+    note: Mapped[str] = mapped_column(Text, default="")
+    features: Mapped[str] = mapped_column(Text, default="{}")    # JSON, measured at opened_at
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=_now_utc)
+
+
 class PaperPosition(Base):
     """
     An open paper position. Deleted on close — the record lives on as a

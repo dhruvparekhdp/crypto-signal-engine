@@ -62,66 +62,99 @@ class TradeResult:
     bars: int
 
 
-def simulate(cands: list[Candidate], k5: pd.DataFrame,
-             ex: ExecConfig = ExecConfig()) -> list[TradeResult]:
-    """Run candidates of ONE symbol against its 5m bars."""
-    if not cands:
-        return []
+def _resolve(cand: Candidate, ts, h, lo, c, close_times, ex: ExecConfig):
+    """
+    ("cancelled" | "open" | "closed", TradeResult or None) for one candidate
+    against 5m bars. "open" means the data ends before the story does:
+    either the limit could still fill, or the filled trade is still running.
+    """
+    decided = np.datetime64(cand.ts.to_datetime64())
+    start = int(np.searchsorted(ts, decided, side="left"))    # first bar opening at/after
+    long = cand.side == "long"
+    risk = abs(cand.entry - cand.stop)
+    if risk <= 0:
+        return "cancelled", None
+    n = len(ts)
+    # 1. Does the resting limit fill (trade through it) within entry_bars?
+    fill = None
+    for b in range(start, min(start + ex.entry_bars, n)):
+        if (long and lo[b] < cand.entry) or (not long and h[b] > cand.entry):
+            fill = b
+            break
+    if fill is None:
+        return ("open", None) if n - start < ex.entry_bars else ("cancelled", None)
+    # 2. Manage from the fill bar on.
+    exit_px, reason, end = None, "", fill
+    for b in range(fill, n):
+        hit_stop = lo[b] <= cand.stop if long else h[b] >= cand.stop
+        hit_target = h[b] >= cand.target if long else lo[b] <= cand.target
+        # On the fill bar itself only the stop counts: the bar's order of
+        # events is unknown, so a same-bar target is never assumed.
+        if hit_stop:
+            exit_px = cand.stop * (1 - ex.stop_slip if long else 1 + ex.stop_slip)
+            reason, end = "stop", b
+            break
+        if hit_target and b > fill:
+            exit_px, reason, end = cand.target, "target", b
+            break
+        if b - fill >= ex.time_stop_bars:
+            r_now = ((c[b] - cand.entry) if long else (cand.entry - c[b])) / risk
+            if r_now < ex.time_stop_min_r:
+                exit_px, reason, end = c[b], "time", b
+                break
+    if exit_px is None:
+        return "open", None
+    move = (exit_px - cand.entry) / cand.entry * (1 if long else -1)
+    hours = (end - fill + 1) * 5 / 60
+    costs = ex.maker + (ex.maker if reason == "target" else ex.taker) \
+        + ex.funding_per_8h * hours / 8
+    r = (move - costs) / (risk / cand.entry)
+    return "closed", TradeResult(
+        cand.symbol, cand.setup, cand.side, str(cand.ts), str(pd.Timestamp(ts[fill])),
+        str(pd.Timestamp(close_times[end])), cand.entry, cand.stop, cand.target,
+        float(exit_px), reason, round(float(r), 4), end - fill + 1)
+
+
+def _arrays(k5: pd.DataFrame):
     k5 = k5.reset_index(drop=True)
     ts = k5["ts"].to_numpy()
     h, lo, c = (k5[x].to_numpy(dtype=float) for x in ("high", "low", "close"))
-    close_times = ts + np.timedelta64(5, "m")
+    return ts, h, lo, c, ts + np.timedelta64(5, "m")
+
+
+def resolve_one(cand: Candidate, k5: pd.DataFrame, ex: ExecConfig = ExecConfig()):
+    """Live shadow use: where one candidate stands against the bars so far."""
+    if k5.empty:
+        return "open", None
+    return _resolve(cand, *_arrays(k5), ex)
+
+
+def simulate(cands: list[Candidate], k5: pd.DataFrame,
+             ex: ExecConfig = ExecConfig()) -> list[TradeResult]:
+    """Run candidates of ONE symbol against its 5m bars, one position at a time."""
+    if not cands:
+        return []
+    ts, h, lo, c, close_times = _arrays(k5)
     busy_until = np.datetime64("1970-01-01")
     out: list[TradeResult] = []
     for cand in sorted(cands, key=lambda x: x.ts):
-        decided = np.datetime64(cand.ts.to_datetime64())
-        if decided < busy_until:
+        if np.datetime64(cand.ts.to_datetime64()) < busy_until:
             continue
-        start = int(np.searchsorted(ts, decided, side="left"))   # first bar opening at/after
-        long = cand.side == "long"
-        risk = abs(cand.entry - cand.stop)
-        if risk <= 0:
-            continue
-        # 1. Does the resting limit fill?
-        fill = None
-        for b in range(start, min(start + ex.entry_bars, len(k5))):
-            if (long and lo[b] < cand.entry) or (not long and h[b] > cand.entry):
-                fill = b
-                break
-        if fill is None:
-            continue
-        # 2. Manage from the fill bar on.
-        exit_px, reason, end = None, "", fill
-        for b in range(fill, len(k5)):
-            hit_stop = lo[b] <= cand.stop if long else h[b] >= cand.stop
-            hit_target = h[b] >= cand.target if long else lo[b] <= cand.target
-            # On the fill bar itself only the stop counts: the bar's order of
-            # events is unknown, so a same-bar target is never assumed.
-            if hit_stop:
-                exit_px = cand.stop * (1 - ex.stop_slip if long else 1 + ex.stop_slip)
-                reason, end = "stop", b
-                break
-            if hit_target and b > fill:
-                exit_px, reason, end = cand.target, "target", b
-                break
-            if b - fill >= ex.time_stop_bars:
-                r_now = ((c[b] - cand.entry) if long else (cand.entry - c[b])) / risk
-                if r_now < ex.time_stop_min_r:
-                    exit_px, reason, end = c[b], "time", b
-                    break
-        if exit_px is None:
+        status, trade = _resolve(cand, ts, h, lo, c, close_times, ex)
+        if status == "open" and trade is None and _filled(cand, ts, h, lo, ex):
             break                       # data ran out with the trade open
-        move = (exit_px - cand.entry) / cand.entry * (1 if long else -1)
-        hours = (end - fill + 1) * 5 / 60
-        costs = ex.maker + (ex.maker if reason == "target" else ex.taker) \
-            + ex.funding_per_8h * hours / 8
-        r = (move - costs) / (risk / cand.entry)
-        busy_until = close_times[end]
-        out.append(TradeResult(cand.symbol, cand.setup, cand.side, str(cand.ts),
-                               str(pd.Timestamp(ts[fill])), str(pd.Timestamp(close_times[end])),
-                               cand.entry, cand.stop, cand.target, float(exit_px), reason,
-                               round(float(r), 4), end - fill + 1))
+        if trade is None:
+            continue
+        busy_until = np.datetime64(pd.Timestamp(trade.exit_at).to_datetime64())
+        out.append(trade)
     return out
+
+
+def _filled(cand: Candidate, ts, h, lo, ex: ExecConfig) -> bool:
+    start = int(np.searchsorted(ts, np.datetime64(cand.ts.to_datetime64()), side="left"))
+    long = cand.side == "long"
+    return any((long and lo[b] < cand.entry) or (not long and h[b] > cand.entry)
+               for b in range(start, min(start + ex.entry_bars, len(ts))))
 
 
 # ── Statistics and gates ─────────────────────────────────────────────────────

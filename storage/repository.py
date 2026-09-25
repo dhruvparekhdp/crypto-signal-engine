@@ -835,6 +835,70 @@ class Repository:
         row.review, row.reviewed_by, row.reviewed_at = json.dumps(review), model, _now_utc()
         await self.session.commit()
 
+    # ── v2 shadow signals ───────────────────────────────────────
+
+    async def save_v2_candidates(self, cands: list) -> int:
+        """Store new live v2 candidates; ones already stored are skipped."""
+        import json
+
+        from storage.models import V2ShadowSignal
+        new = 0
+        for c in cands:
+            at = c.ts.to_pydatetime()
+            exists = (await self.session.execute(
+                select(V2ShadowSignal.id).where(
+                    V2ShadowSignal.symbol == c.symbol, V2ShadowSignal.setup == c.setup,
+                    V2ShadowSignal.side == c.side, V2ShadowSignal.decided_at == at)
+            )).scalar_one_or_none()
+            if exists is not None:
+                continue
+            self.session.add(V2ShadowSignal(
+                symbol=c.symbol, setup=c.setup, side=c.side, decided_at=at,
+                entry=c.entry, stop=c.stop, target=c.target,
+                notes=json.dumps(c.notes, default=str)))
+            new += 1
+        await self.session.commit()
+        return new
+
+    async def open_v2_shadows(self, symbol: str | None = None) -> list:
+        from storage.models import V2ShadowSignal
+        q = select(V2ShadowSignal).where(V2ShadowSignal.status.in_(("pending", "open")))
+        if symbol:
+            q = q.where(V2ShadowSignal.symbol == symbol)
+        return list((await self.session.execute(q)).scalars().all())
+
+    async def update_v2_shadow(self, row_id: int, **fields) -> None:
+        from storage.models import V2ShadowSignal
+        row = await self.session.get(V2ShadowSignal, row_id)
+        if row is None:
+            return
+        for k, v in fields.items():
+            setattr(row, k, v)
+        await self.session.commit()
+
+    async def recent_v2_shadows(self, days: float = 30, limit: int = 500) -> list:
+        from storage.models import V2ShadowSignal
+        cutoff = _now_utc() - timedelta(days=days)
+        res = await self.session.execute(
+            select(V2ShadowSignal).where(V2ShadowSignal.decided_at >= cutoff)
+            .order_by(V2ShadowSignal.decided_at.desc()).limit(limit))
+        return list(res.scalars().all())
+
+    # ── Owner's trade journal ───────────────────────────────────
+
+    async def add_journal_entry(self, **fields) -> int:
+        from storage.models import TradeJournal
+        row = TradeJournal(**fields)
+        self.session.add(row)
+        await self.session.commit()
+        return row.id
+
+    async def journal_entries(self, limit: int = 200) -> list:
+        from storage.models import TradeJournal
+        res = await self.session.execute(
+            select(TradeJournal).order_by(TradeJournal.opened_at.desc()).limit(limit))
+        return list(res.scalars().all())
+
     async def latest_briefing(self):
         from storage.models import MarketBriefing
         res = await self.session.execute(
