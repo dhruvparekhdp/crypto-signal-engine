@@ -843,12 +843,56 @@ async def _api_crypto_watchlist_add(runner, request: web.Request) -> web.Respons
         if not symbol:
             return web.Response(text=json.dumps({"error": "symbol required"}),
                                  content_type="application/json", status=400)
+        # The watchlist is the only list the engine reads, so a pair Binance
+        # does not list is a symbol that silently never gets data. Refused
+        # when Binance's list is known; allowed with a warning when it could
+        # not be fetched, because "unreachable" is not "unlisted".
+        from collectors.binance_symbols import is_listed
+        listed = await is_listed(symbol)
+        if listed is False:
+            return web.Response(text=json.dumps({
+                "error": f"{symbol.upper()} is not a Binance spot USDT pair. "
+                         "Search on the Watchlist page and add the exact pair."}),
+                content_type="application/json", status=400)
         await runner.add_crypto_symbol(symbol)
-        return web.Response(text=json.dumps({"symbol": symbol, "ok": True}),
-                             content_type="application/json")
+        body = {"symbol": symbol, "ok": True}
+        if listed is None:
+            body["warning"] = "Could not reach Binance to confirm this pair is listed."
+        return web.Response(text=json.dumps(body), content_type="application/json")
     except Exception as exc:
         return web.Response(text=json.dumps({"error": str(exc)}),
                              content_type="application/json", status=500)
+
+
+async def _api_crypto_watchlist(runner, request: web.Request) -> web.Response:
+    """
+    GET /api/crypto/watchlist — the symbols the engine is following.
+
+    Read-only and public like the other market endpoints. The news scorer on
+    the laptop reads it so it attributes headlines to watchlist coins only,
+    instead of carrying its own list that drifts from this one.
+    """
+    symbols = sorted(await runner.crypto_store.get_symbols())
+    return web.Response(text=json.dumps({"symbols": symbols}),
+                        content_type="application/json")
+
+
+async def _api_binance_symbols(runner, request: web.Request) -> web.Response:
+    """
+    GET /api/binance/symbols?q=gold — search the pairs Binance actually lists.
+
+    Returns price, 24h change, 24h volume and whether a perpetual exists, so
+    a pair can be judged before it goes on the watchlist.
+    """
+    from collectors.binance_symbols import search
+
+    q = (request.query.get("q") or "").strip()[:40]
+    if len(q) < 2:
+        return web.Response(text=json.dumps({"results": [], "available": True}),
+                            content_type="application/json")
+    watchlist = set(await runner.crypto_store.get_symbols())
+    payload = await search(q, watchlist)
+    return web.Response(text=json.dumps(payload), content_type="application/json")
 
 
 async def _api_crypto_watchlist_remove(runner, request: web.Request) -> web.Response:
@@ -1034,6 +1078,18 @@ footer{text-align:center;padding:16px;color:#334155;font-size:11px;border-top:1p
 /* ── Crypto tab ── */
 .cr-note{font-size:11px;color:#94a3b8;line-height:1.6;background:#0f172a;border:1px solid #1e293b;border-radius:8px;padding:10px 12px;margin-bottom:12px}
 .cr-watchlist-manager{display:flex;gap:8px;margin-bottom:14px}
+.wl-search{margin:12px 0 18px}
+.wl-search .cr-input{width:100%;max-width:520px}
+.wl-results{margin-top:10px;display:grid;gap:8px;max-width:720px}
+.wl-row{display:grid;grid-template-columns:1fr auto;gap:4px 12px;align-items:center;padding:10px 12px;border:1px solid var(--line,#334155);border-radius:10px;background:var(--panel,#1e293b)}
+.wl-row .wl-pair{font-weight:600;color:var(--text-strong,#f1f5f9)}
+.wl-row .wl-meta{grid-column:1;font-size:12px;color:var(--muted,#94a3b8);font-variant-numeric:tabular-nums}
+.wl-row .wl-up{color:var(--pos,#4ade80)} .wl-row .wl-down{color:var(--neg,#f87171)}
+.wl-row button{grid-row:1 / span 2;grid-column:2;padding:8px 14px;border-radius:8px;border:1px solid var(--accent,#0ea5e9);background:transparent;color:var(--accent,#0ea5e9);font-weight:600;cursor:pointer}
+.wl-row button:disabled{border-color:var(--line,#334155);color:var(--muted,#94a3b8);cursor:default}
+.wl-badge{display:inline-block;margin-left:6px;padding:1px 6px;border-radius:5px;font-size:11px;font-weight:500;background:var(--mut-t,rgba(148,163,184,.15));color:var(--muted,#94a3b8)}
+.wl-msg{font-size:13px;color:var(--muted,#94a3b8)}
+.wl-sub{font-size:14px;margin:4px 0 10px;color:var(--muted,#94a3b8);font-weight:600}
 .cr-input{flex:1;background:#0f172a;border:1px solid #334155;border-radius:8px;padding:9px 12px;color:#e2e8f0;font-size:13px}
 .cr-input::placeholder{color:#475569}
 .cr-add-btn{background:#0ea5e9;color:#0f172a;border:none;border-radius:8px;padding:9px 16px;font-weight:800;font-size:12px;cursor:pointer}
@@ -1607,11 +1663,12 @@ section h2{color:var(--accent-soft)}
 <div id="tab-watchlist" class="tab-content">
   <section>
     <h2>Watchlist</h2>
-    <div class="cr-note">Prices update every 30&ndash;60s from CoinDCX. Futures-only instruments such as gold come from the derivatives feed.</div>
-    <div class="cr-watchlist-manager">
-      <input type="text" id="cr-add-input2" class="cr-input" placeholder="Add symbol, e.g. xauusdt" onkeydown="if(event.key==='Enter')addCryptoSymbol2()">
-      <button class="cr-add-btn" onclick="addCryptoSymbol2()">+ Add</button>
+    <div class="cr-note">The engine follows only the pairs on this list. Search Binance, check the price and volume, then add the exact pair. For gold, search <b>gold</b>: Binance lists it as tokenised gold (PAXG, XAUT), not as XAUUSDT.</div>
+    <div class="wl-search">
+      <input type="search" id="cr-add-input2" class="cr-input" placeholder="Search Binance: gold, sol, pepe…" autocomplete="off" aria-label="Search Binance pairs" oninput="wlSearchSoon()" onkeydown="if(event.key==='Enter')wlSearchNow()">
+      <div id="wl-results" class="wl-results" aria-live="polite"></div>
     </div>
+    <h3 class="wl-sub">On the watchlist</h3>
     <div id="wl-coins"><div class="empty">Loading&hellip;</div></div>
   </section>
 </div>
@@ -2332,13 +2389,58 @@ document.addEventListener('click',e=>{
     document.getElementById('more-scrim').classList.remove('on');
 });
 
-function addCryptoSymbol2(){
-  const el=document.getElementById('cr-add-input2');
-  const v=(el.value||'').trim(); if(!v) return;
-  el.value='';
-  fetch('/api/crypto/watchlist',{method:'POST',headers:{'Content-Type':'application/json'},
-    body:JSON.stringify({symbol:v})}).then(()=>loadWatchlist());
+// Binance search on the Watchlist tab. The old box posted to a route that did
+// not exist, so adding from this tab silently did nothing; and a symbol typed
+// from memory is how "xauusdt" ended up on a list Binance cannot price.
+let _wlTimer=null, _wlSeq=0;
+function wlSearchSoon(){ clearTimeout(_wlTimer); _wlTimer=setTimeout(wlSearchNow,300); }
+function _wlCompact(n){
+  if(n==null||!isFinite(n)) return '—';
+  const a=Math.abs(n);
+  return a>=1e9?(n/1e9).toFixed(2)+'B':a>=1e6?(n/1e6).toFixed(1)+'M':a>=1e3?(n/1e3).toFixed(0)+'K':n.toFixed(0);
 }
+async function wlSearchNow(){
+  const q=(document.getElementById('cr-add-input2').value||'').trim();
+  const box=document.getElementById('wl-results');
+  if(q.length<2){ box.textContent=''; return; }
+  const seq=++_wlSeq;
+  box.innerHTML='<div class="wl-msg">Searching Binance…</div>';
+  const d=await jget('/api/binance/symbols?q='+encodeURIComponent(q),{results:[],available:false});
+  if(seq!==_wlSeq) return;             // a newer search already answered
+  box.textContent='';
+  if(!d.available){ const m=document.createElement('div'); m.className='wl-msg';
+    m.textContent=d.error||'Binance did not answer. Try again in a minute.'; box.appendChild(m); return; }
+  if(!d.results.length){ const m=document.createElement('div'); m.className='wl-msg';
+    m.textContent='No Binance USDT pair matches "'+q+'".'; box.appendChild(m); return; }
+  for(const r of d.results){
+    const row=document.createElement('div'); row.className='wl-row';
+    const pair=document.createElement('div'); pair.className='wl-pair';
+    pair.textContent=r.symbol.toUpperCase()+'  ';
+    const base=document.createElement('span'); base.className='wl-badge'; base.textContent=r.pair; pair.appendChild(base);
+    if(r.futures===true){ const f=document.createElement('span'); f.className='wl-badge'; f.textContent='perp futures'; pair.appendChild(f); }
+    if(r.futures===false){ const f=document.createElement('span'); f.className='wl-badge'; f.textContent='spot only'; pair.appendChild(f); }
+    const meta=document.createElement('div'); meta.className='wl-meta';
+    const chg=r.change_pct;
+    meta.append(document.createTextNode((r.price!=null?'$'+fmtPrice(r.price):'—')+' · 24h '));
+    const c=document.createElement('span'); c.className=chg>=0?'wl-up':'wl-down';
+    c.textContent=chg==null?'—':(chg>=0?'+':'')+chg.toFixed(2)+'%'; meta.appendChild(c);
+    meta.append(document.createTextNode(' · vol $'+_wlCompact(r.quote_volume_24h)));
+    if(r.quote_volume_24h!=null && r.quote_volume_24h<5e6)
+      meta.append(document.createTextNode(' · thin: spreads will be wide'));
+    const btn=document.createElement('button'); btn.type='button';
+    if(r.on_watchlist){ btn.textContent='Added'; btn.disabled=true; }
+    else { btn.textContent='+ Add'; btn.onclick=()=>wlAdd(r.symbol,btn); }
+    row.append(pair,btn,meta); box.appendChild(row);
+  }
+}
+async function wlAdd(sym,btn){
+  btn.disabled=true; btn.textContent='Adding…';
+  const res=await apiFetch('/api/crypto/watchlist/add',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({symbol:sym})});
+  let body={}; try{ body=await res.json(); }catch(e){}
+  if(res.ok){ btn.textContent=body.warning?'Added (unverified)':'Added'; loadWatchlist(); }
+  else { btn.disabled=false; btn.textContent='+ Add'; alert(body.error||('Could not add: HTTP '+res.status)); }
+}
+function addCryptoSymbol2(){ wlSearchNow(); }
 
 // ── CRYPTO ────────────────────────────────────────────────────────────────────
 // Enough precision that entry, target and stop are always distinguishable.
@@ -4758,6 +4860,8 @@ async def make_app(runner) -> web.Application:
     app.router.add_get("/api/audit/methods", _bind(_api_audit_methods))
     app.router.add_get("/api/audit/reviewer", _bind(_api_reviewer_scorecard))
     app.router.add_get("/api/debug/volume", _bind(_api_debug_volume))
+    app.router.add_get("/api/crypto/watchlist", _bind(_api_crypto_watchlist))
+    app.router.add_get("/api/binance/symbols", _bind(_api_binance_symbols))
     app.router.add_post("/api/crypto/watchlist/add", _bind(_api_crypto_watchlist_add))
     app.router.add_post("/api/crypto/watchlist/remove", _bind(_api_crypto_watchlist_remove))
     app.router.add_get("/api/commodities", _bind(_api_commodities))

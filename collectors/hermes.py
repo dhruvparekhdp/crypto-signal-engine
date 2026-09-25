@@ -73,18 +73,64 @@ EVENT_TYPES = [
 # decide on a blackout, not by the scorer.
 HIGH_IMPACT = {"rate_decision", "inflation_data", "jobs_data", "war", "tariff"}
 
-# Tickers the watchlist cares about, and the words that mean them. Matching
-# here rather than asking the model: a regex is free, deterministic, and
-# cannot hallucinate a symbol that is not traded.
-SYMBOL_WORDS: dict[str, tuple[str, ...]] = {
-    "btcusdt": ("bitcoin", "btc"),
-    "ethusdt": ("ethereum", "ether", "eth"),
-    "solusdt": ("solana", "sol"),
-    "xrpusdt": ("xrp", "ripple"),
-    "ltcusdt": ("litecoin", "ltc"),
-    "bchusdt": ("bitcoin cash", "bch"),
-    "xauusdt": ("gold", "bullion", "xau"),
+# Which coin a headline is about is a word match against the WATCHLIST, not
+# a list kept here: the engine's watchlist is the one list everything reads,
+# and scripts/hermes.py fetches it each pass. A regex is free, deterministic,
+# and cannot attribute a story to a coin that is not being followed.
+#
+# Names people write for a base asset. The ticker itself is matched too, but
+# only in capitals ("SOL", not "sol"), because many tickers are also words.
+BASE_NAMES: dict[str, tuple[str, ...]] = {
+    "BTC": ("bitcoin",),
+    "ETH": ("ethereum", "ether"),
+    "SOL": ("solana",),
+    "XRP": ("ripple", "xrp"),
+    "LTC": ("litecoin",),
+    "BCH": ("bitcoin cash",),
+    "BNB": ("binance coin", "bnb"),
+    "DOGE": ("dogecoin",),
+    "ADA": ("cardano",),
+    "LINK": ("chainlink",),
+    "DOT": ("polkadot",),
+    "AVAX": ("avalanche",),
+    "TRX": ("tron",),
+    "TON": ("toncoin",),
+    "SHIB": ("shiba inu",),
+    "PEPE": ("pepe",),
+    "SUI": ("sui network",),
+    "PAXG": ("gold", "bullion", "pax gold"),
+    "XAUT": ("gold", "bullion", "tether gold"),
+    "XAU": ("gold", "bullion"),
 }
+
+# Used until the engine's watchlist has been fetched, and when it cannot be.
+DEFAULT_WATCHLIST = ("btcusdt", "ethusdt", "solusdt", "xrpusdt", "ltcusdt",
+                     "bchusdt", "xauusdt")
+
+
+def _base(symbol: str) -> str:
+    s = symbol.upper()
+    return s[:-4] if s.endswith("USDT") and len(s) > 4 else s
+
+
+def words_for(symbols) -> dict[str, tuple[tuple[str, ...], str]]:
+    """symbol -> (lower-case names, upper-case ticker) for each watchlist symbol."""
+    out: dict[str, tuple[tuple[str, ...], str]] = {}
+    for sym in symbols:
+        base = _base(sym)
+        out[sym.lower()] = (BASE_NAMES.get(base, ()), base if len(base) >= 3 else "")
+    return out
+
+
+_watch = words_for(DEFAULT_WATCHLIST)
+
+
+def set_watchlist(symbols) -> None:
+    """Match headlines against these symbols from now on. Empty keeps the old list."""
+    global _watch
+    symbols = [s for s in symbols if s]
+    if symbols:
+        _watch = words_for(symbols)
 
 
 @dataclass
@@ -211,11 +257,15 @@ def guess_symbol(title: str) -> str:
     `all`, and `all` is the one that matters for a rate decision.
     """
     low = f" {title.lower()} "
-    for symbol, words in SYMBOL_WORDS.items():
-        for word in words:
-            if re.search(rf"\b{re.escape(word)}\b", low):
-                return symbol
-    return "all"
+    best, best_len = "all", 0
+    for symbol, (names, ticker) in _watch.items():
+        for name in names:
+            # The longest name wins, so "Bitcoin Cash" is BCH, not BTC.
+            if len(name) > best_len and re.search(rf"\b{re.escape(name)}\b", low):
+                best, best_len = symbol, len(name)
+        if ticker and len(ticker) > best_len and re.search(rf"\b{re.escape(ticker)}\b", title):
+            best, best_len = symbol, len(ticker)
+    return best
 
 
 async def fetch_feeds(timeout: float = 20.0,

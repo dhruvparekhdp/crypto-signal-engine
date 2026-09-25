@@ -151,6 +151,9 @@ class FakeCryptoStore:
     async def get_all(self):
         return []
 
+    async def get_symbols(self):
+        return ["btcusdt"]
+
 
 class FakeRunner:
     """Just enough of the real Runner for the three protected handlers."""
@@ -219,11 +222,37 @@ class TestProtectedEndpoints(AioHTTPTestCase):
         self.assertEqual(self.runner.added, [])
 
     async def test_watchlist_add_with_the_right_token_works(self):
-        resp = await self.client.post(
-            "/api/crypto/watchlist/add", json={"symbol": "dogeusdt"},
-            headers={"Authorization": "Bearer test-token-abc"})
+        with patch("collectors.binance_symbols.is_listed", new=AsyncMock(return_value=True)):
+            resp = await self.client.post(
+                "/api/crypto/watchlist/add", json={"symbol": "dogeusdt"},
+                headers={"Authorization": "Bearer test-token-abc"})
         self.assertEqual(resp.status, 200)
         self.assertEqual(self.runner.added, ["dogeusdt"])
+
+    async def test_a_pair_binance_does_not_list_is_refused(self):
+        """xauusdt is the case that mattered: no candles, then a stand-in, then 4.3e-05."""
+        with patch("collectors.binance_symbols.is_listed", new=AsyncMock(return_value=False)):
+            resp = await self.client.post(
+                "/api/crypto/watchlist/add", json={"symbol": "xauusdt"},
+                headers={"Authorization": "Bearer test-token-abc"})
+        self.assertEqual(resp.status, 400)
+        self.assertIn("not a Binance", (await resp.json())["error"])
+        self.assertEqual(self.runner.added, [])
+
+    async def test_an_unreachable_binance_does_not_block_adding(self):
+        """Unknown is not unlisted: add it, and say it was not confirmed."""
+        with patch("collectors.binance_symbols.is_listed", new=AsyncMock(return_value=None)):
+            resp = await self.client.post(
+                "/api/crypto/watchlist/add", json={"symbol": "paxgusdt"},
+                headers={"Authorization": "Bearer test-token-abc"})
+        self.assertEqual(resp.status, 200)
+        self.assertIn("warning", await resp.json())
+        self.assertEqual(self.runner.added, ["paxgusdt"])
+
+    async def test_the_watchlist_is_readable_without_a_token(self):
+        resp = await self.client.get("/api/crypto/watchlist")
+        self.assertEqual(resp.status, 200)
+        self.assertIn("symbols", await resp.json())
 
     async def test_watchlist_remove_without_a_token_is_refused(self):
         resp = await self.client.post("/api/crypto/watchlist/remove", json={"symbol": "dogeusdt"})

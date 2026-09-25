@@ -7,7 +7,9 @@ Hermes — run this on the machine with the model. It feeds the engine.
 
 Needs two things in the environment:
 
-    ENGINE_URL           http://52.62.37.4:8080   (or the Tailscale name)
+    ENGINE_URL           http://crypto-engine:8080  (the engine's Tailscale name;
+                                                     never the public IP, or the
+                                                     token travels in plain text)
     SENTIMENT_INGEST_TOKEN                        same value as on the engine
     OLLAMA_BASE_URL      http://localhost:11434   (this box, so localhost)
 
@@ -32,7 +34,27 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import httpx  # noqa: E402
 
-from collectors.hermes import HIGH_IMPACT, fetch_feeds, score_headline  # noqa: E402
+from collectors.hermes import (  # noqa: E402
+    HIGH_IMPACT,
+    fetch_feeds,
+    score_headline,
+    set_watchlist,
+)
+
+
+async def refresh_watchlist(engine: str) -> int:
+    """
+    Follow the engine's watchlist, so headlines are only ever attributed to
+    coins the engine trades. Returns how many symbols, 0 if it could not ask.
+    """
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.get(f"{engine.rstrip('/')}/api/crypto/watchlist")
+        symbols = resp.json().get("symbols", []) if resp.status_code == 200 else []
+    except Exception:
+        symbols = []
+    set_watchlist(symbols)
+    return len(symbols)
 
 
 async def push(items: list[dict], engine: str, token: str) -> tuple[int, int]:
@@ -48,6 +70,9 @@ async def push(items: list[dict], engine: str, token: str) -> tuple[int, int]:
 
 
 async def one_pass(engine: str, token: str, dry_run: bool, limit: int) -> int:
+    followed = await refresh_watchlist(engine)
+    print(f"  watchlist: {followed} symbols from the engine" if followed
+          else "  watchlist: engine not reachable, using the last known list")
     batch = await fetch_feeds()
     if not batch.headlines:
         print("  no headlines — every feed failed or returned nothing")
