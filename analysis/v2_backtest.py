@@ -179,6 +179,9 @@ def stats(rs: list[float]) -> dict:
         "profit_factor": (round(float(wins.sum() / -losses.sum()), 3)
                           if len(losses) and losses.sum() < 0 else None),
         "total_r": round(float(a.sum()), 2),
+        # India: 30% on each winning trade, losses not set off (VDA rules as
+        # commonly read; get a CA's view). The edge that matters is this one.
+        "expectancy_after_tax_r": round(float(np.where(a > 0, a * 0.7, a).mean()), 3),
         "max_drawdown_r": round(dd, 2),
         "longest_losing_streak": int(streak),
     }

@@ -73,6 +73,7 @@ class TestGates(unittest.TestCase):
         s = stats(rs)
         self.assertEqual(s["trades"], 300)
         self.assertAlmostEqual(s["expectancy_r"], 0.417, places=3)
+        self.assertAlmostEqual(s["expectancy_after_tax_r"], (5.5 * 0.7 - 3) / 6, places=3)
         mc = monte_carlo(rs, risk_pct=0.5)
         self.assertGreater(mc["final_equity_p50"], 1.0)
         self.assertEqual(grade([])["promote_to_paper"], False)
