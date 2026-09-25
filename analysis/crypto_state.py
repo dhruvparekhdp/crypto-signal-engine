@@ -122,6 +122,10 @@ class CryptoState:
 
     # Sentiment (FinBERT / VADER / CryptoPanic)
     sentiment_score: float = 0.0                                   # -1.0 (bearish) to +1.0 (bullish)
+    # Daily trend, refreshed hourly from Binance daily candles: the 20-day
+    # simple average of closes, and when it was computed. None until fetched.
+    daily_sma20: float | None = None
+    daily_trend_at: datetime | None = None
     sentiment_news_count: int = 0
     last_sentiment_update: datetime | None = None
 

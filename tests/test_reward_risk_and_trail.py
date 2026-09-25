@@ -132,20 +132,15 @@ class TestTheTrailCanNowActuallyFire(unittest.TestCase):
         self.assertEqual(TrailingStop().activate_at_r, 1.0)
         self.assertFalse(cfg.trailing_can_activate())
 
-    def test_a_one_to_one_target_leaves_the_runner_almost_no_room(self):
+    def test_a_one_to_one_target_never_lets_the_runner_arm(self):
         """
-        Arming at 0.75R against a 1.0R target is not literally dead — it is
-        worse than that, because it looks alive. There is a quarter of an R
-        between arming and the target closing the trade, so the trail books a
-        scratch and never gets to run.
+        The runner arms at 1.25R. Against a 1.0R target the target closes the
+        trade first, so the trail would be dead code; at 2.0R there is room.
         """
         cfg = CycleConfig(reward_risk=1.0, trailing=TrailingStop.runner())
-        self.assertTrue(cfg.trailing_can_activate())
-        room = cfg.reward_risk - cfg.trailing.activate_at_r
-        self.assertLess(room, 0.5)
+        self.assertFalse(cfg.trailing_can_activate())
         widened = CycleConfig(reward_risk=2.0, trailing=TrailingStop.runner())
-        self.assertGreater(widened.reward_risk - widened.trailing.activate_at_r,
-                           room)
+        self.assertTrue(widened.trailing_can_activate())
 
     def test_the_new_ratio_lets_it_arm(self):
         cfg = CycleConfig(reward_risk=2.0, trailing=TrailingStop.runner())
@@ -156,7 +151,10 @@ class TestTheTrailCanNowActuallyFire(unittest.TestCase):
         self.assertTrue(t.enabled)
         self.assertLess(t.activate_at_r, 2.0)
         self.assertTrue(t.release_target)
-        self.assertTrue(t.lock_breakeven)
+        # 9 of 42 paper trades were closed at exactly entry + fees by the
+        # early breakeven jump; the runner now rides 1R behind from 1.25R.
+        self.assertFalse(t.lock_breakeven)
+        self.assertGreaterEqual(t.activate_at_r, 1.25)
 
     def test_the_shipped_settings_turn_both_on_together(self):
         from config.settings import settings
@@ -251,16 +249,22 @@ class TestTrailDistanceScalesWithTheSetup(unittest.TestCase):
             seen.append(p.stop_price)
         self.assertEqual(seen, sorted(seen))
 
-    def test_arming_locks_a_scratch_not_a_loss(self):
+    def test_arming_locks_a_profit_not_a_loss(self):
         p, fees = self._pos(), FeeModel()
         t = TrailingStop.runner()
-        p.update_trail(2534, 2532, t, fees)
+        p.update_trail(2537, 2536, t, fees)          # 1.4R, past the 1.25R arm
         self.assertTrue(p.trail_active)
         self.assertGreater(p.stop_price, 2522.0)
 
+    def test_a_wiggle_below_the_arm_no_longer_scratches_the_trade(self):
+        p, fees = self._pos(), FeeModel()
+        p.update_trail(2534, 2532, TrailingStop.runner(), fees)   # 1.1R
+        self.assertFalse(p.trail_active)
+        self.assertEqual(p.stop_price, 2511.25)
+
     def test_the_target_is_released_so_a_winner_can_run(self):
         p, fees = self._pos(), FeeModel()
-        p.update_trail(2534, 2532, TrailingStop.runner(), fees)
+        p.update_trail(2537, 2536, TrailingStop.runner(), fees)
         self.assertTrue(math.isinf(p.target_price))
 
     def test_it_does_not_arm_before_the_threshold(self):

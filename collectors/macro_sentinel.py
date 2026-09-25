@@ -90,7 +90,10 @@ class GroqSentinel:
     them is configuration.
     """
 
-    def __init__(self, timeout: float = 4.0) -> None:
+    # 10 s, not 4: gpt-oss-120b with reasoning often needs 3-6 s, so a 4 s
+    # budget turned many reviews into "no answer" or a fallback's one-liner.
+    # The signal is repriced at the live price before it opens anyway.
+    def __init__(self, timeout: float = 10.0) -> None:
         self.timeout = timeout
         self.last_factors = ""
         # Who actually answered the last pre-trade review, and how fast —
@@ -174,11 +177,11 @@ class GroqSentinel:
             "structurally broken, not merely dull.\n\n"
             f"Tags, use only these: {_FACTOR_HELP}\n\n"
             "JSON only:\n"
-            '{"reasoning": "the one thing that decided it, under 100 chars", '
+            '{"reasoning": "2 to 4 sentences: what you checked and what decided it", '
             '"verdict": "APPROVE|CAUTION|REJECT", '
             '"confidence_delta": -0.04 to 0.03, '
             '"factors": ["tag"], '
-            '"summary": "one sentence as you would say it, under 120 chars"}'
+            '"summary": "one plain sentence for the trader, under 200 chars"}'
         )
 
         # This one IS on the clock. The signal it is reviewing is priced off a
@@ -186,7 +189,7 @@ class GroqSentinel:
         # late is worth less than a quick one now — hence the short timeout
         # and the fast end of the chain.
         reply = await ask_json("pre_trade", system_prompt, user_content,
-                               max_tokens=320, temperature=0.2, timeout=self.timeout)
+                               max_tokens=900, temperature=0.2, timeout=self.timeout)
         if not reply:
             return 0.0, "", ""
 
@@ -195,7 +198,12 @@ class GroqSentinel:
         # decider: it can nudge a confidence score, never overturn the maths
         # that produced it.
         clamped_delta = max(-0.04, min(0.03, float(parsed.get("confidence_delta", 0.0) or 0.0)))
+        # The reasoning used to be thrown away, leaving only a 120-character
+        # one-liner to judge the reviewer by. Keep both.
         summary = str(parsed.get("summary", "")).strip()
+        why = str(parsed.get("reasoning", "")).strip()
+        if why:
+            summary = (summary + " | why: " + why)[:900]
         verdict = str(parsed.get("verdict", "")).strip().upper()
         self.last_factors = _clean_factors(parsed.get("factors"), PRE_FACTORS)
         self.last_model = reply.served_by

@@ -921,6 +921,21 @@ class AppRunner:
             except Exception:
                 log.exception("event_monitor_reschedule_failed")
 
+    async def _daily_trend_job(self) -> None:
+        """Hourly: 60 daily candles per watchlist coin -> 20-day average on its state."""
+        from analysis.daily_trend import sma
+        try:
+            for st in await self.crypto_store.get_all():
+                bars = await self.klines.fetch_candles(st.symbol, interval="1d", limit=60)
+                # The last daily bar is still forming; average closed days only.
+                closes = [b["close"] for b in (bars or [])][:-1]
+                st.daily_sma20 = sma(closes, 20)
+                st.daily_trend_at = datetime.now(UTC)
+                if st.daily_sma20 is None:
+                    log.info("daily_trend_unavailable", symbol=st.symbol, bars=len(bars or []))
+        except Exception:
+            log.exception("daily_trend_job_failed")
+
     def _maybe_trigger_monitor(self, states) -> None:
         """A fast BTC move means something probably just happened: check now."""
         btc = next((s for s in states if s.symbol == "btcusdt"), None)
@@ -1310,6 +1325,14 @@ class AppRunner:
                 max_instances=1,
                 next_run_time=datetime.now(UTC),
             )
+        self.scheduler.add_job(
+            self._daily_trend_job,
+            "interval",
+            minutes=60,
+            id="daily_trend",
+            max_instances=1,
+            next_run_time=datetime.now(UTC) + timedelta(seconds=30),
+        )
         self.scheduler.add_job(
             self._event_evaluation_job,
             "interval",

@@ -277,6 +277,8 @@ class Settings(BaseSettings):
     # RSI divergence detector. It never fired before (window too short); now
     # that it can, it trades against trends. Off until it passes the null test.
     rsi_divergence_enabled: bool = False
+    # Longs only above the 20-day average, shorts only below it.
+    daily_trend_filter_enabled: bool = True
     # No new paper trades around FOMC / CPI / NFP / PCE / PPI releases, or for
     # an hour after confidently scored high-impact news (war, tariffs, rates).
     event_blackout_enabled: bool = True

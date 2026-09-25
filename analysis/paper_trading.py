@@ -907,14 +907,18 @@ class TrailingStop:
         Let winners run, cut losers at 1R. The point of pairing a trail with a
         reward:risk above 1.
 
-        Arms at 0.75R — before the 2R target, or the position would close at
-        the target first and the trail would be dead code. On arming the stop
-        jumps to entry plus the round trip, so a trade that came good and then
-        turned is a scratch rather than a loss, and the fixed target is
-        released so nothing caps the upside but the trail itself.
+        Arms at 1.25R — before the 2R target, or the position would close at
+        the target first and the trail would be dead code — and the fixed
+        target is released so nothing caps the upside but the trail itself.
         """
-        return cls(enabled=True, activate_at_r=0.75, trail_r=1.0, step_r=0.10,
-                   lock_breakeven=True, release_target=True)
+        # Arms at 1.25R with no breakeven jump. At 0.75R with a jump to
+        # breakeven, 9 of 42 paper trades (21-25 Sep) came good by +0.1-0.3%,
+        # armed, and were closed by ordinary noise at exactly entry plus fees.
+        # Armed at 1.25R and riding up to 1R behind, the worst case after
+        # arming is still a small profit, and a normal wiggle no longer ends
+        # the trade.
+        return cls(enabled=True, activate_at_r=1.25, trail_r=1.0, step_r=0.10,
+                   lock_breakeven=False, release_target=True)
 
 
 @dataclass(frozen=True)

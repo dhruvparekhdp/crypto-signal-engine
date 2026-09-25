@@ -125,6 +125,17 @@ class CryptoEngine:
         """
         if not getattr(settings, "crypto_htf_filter_enabled", True):
             return False
+
+        # Daily trend first: the strongest evidence and the rule the 21-25 Sep
+        # book needed (every losing short fought a rising coin).
+        if getattr(settings, "daily_trend_filter_enabled", True):
+            from analysis.daily_trend import against_daily_trend
+            if against_daily_trend(sig.direction, state.current_price,
+                                   getattr(state, "daily_sma20", None)):
+                log.info("crypto_signal_against_daily_trend", symbol=sig.symbol,
+                         direction=sig.direction, price=state.current_price,
+                         sma20=state.daily_sma20)
+                return True
         if sig.signal_type == "rsi_divergence":
             return False
 

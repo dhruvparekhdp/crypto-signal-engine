@@ -911,6 +911,15 @@ class Repository:
         except Exception:
             await self.session.rollback()
 
+    async def recent_reviews(self, days: int = 7, phase: str = "", limit: int = 300) -> list:
+        from storage.models import SignalReview
+        q = select(SignalReview).where(
+            SignalReview.created_at >= _now_utc() - timedelta(days=days))
+        if phase:
+            q = q.where(SignalReview.phase == phase)
+        res = await self.session.execute(q.order_by(SignalReview.created_at.desc()).limit(limit))
+        return list(res.scalars().all())
+
     async def reviewer_scorecard(self, days: int = 14) -> dict:
         """
         Was the reviewer right? Graded against what price actually did.

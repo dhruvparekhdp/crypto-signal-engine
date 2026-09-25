@@ -486,6 +486,36 @@ async def _api_audit(runner, request: web.Request) -> web.Response:
     return web.json_response(report)
 
 
+async def _api_reviews(runner, request: web.Request) -> web.Response:
+    """
+    GET /api/reviews?days=7&phase=pre&limit=300 — every AI review with what it
+    saw and said. phase: pre (before a trade), hold (open trade), post (after).
+    """
+    from storage.database import AsyncSessionFactory
+    from storage.repository import Repository
+
+    try:
+        days = max(1, min(int(request.query.get("days", "7")), 90))
+        limit = max(1, min(int(request.query.get("limit", "300")), 2000))
+    except ValueError:
+        days, limit = 7, 300
+    phase = (request.query.get("phase") or "").strip().lower()
+    if phase not in ("", "pre", "hold", "post"):
+        phase = ""
+    async with AsyncSessionFactory() as session:
+        rows = await Repository(session).recent_reviews(days, phase, limit)
+    body = [{
+        "at": _iso(r.created_at), "phase": r.phase, "symbol": r.symbol,
+        "signal_type": r.signal_type, "verdict": r.verdict, "factors": r.factors,
+        "summary": r.summary, "confidence_delta": r.confidence_delta,
+        "outcome": r.outcome, "pnl_pct": r.pnl_pct, "model": r.model,
+        "latency_ms": r.latency_ms, "sentiment_score": getattr(r, "sentiment_score", 0.0),
+        "fear_greed": getattr(r, "fear_greed", 0), "news_context": getattr(r, "news_context", ""),
+    } for r in rows]
+    return web.Response(text=json.dumps({"count": len(body), "reviews": body}),
+                        content_type="application/json")
+
+
 async def _api_reviewer_scorecard(runner, request: web.Request) -> web.Response:
     """
     GET /api/audit/reviewer — was the AI reviewer actually right?
@@ -5206,6 +5236,7 @@ async def make_app(runner) -> web.Application:
     app.router.add_get("/api/audit", _bind(_api_audit))
     app.router.add_get("/api/audit/methods", _bind(_api_audit_methods))
     app.router.add_get("/api/audit/reviewer", _bind(_api_reviewer_scorecard))
+    app.router.add_get("/api/reviews", _bind(_api_reviews))
     app.router.add_get("/api/debug/volume", _bind(_api_debug_volume))
     app.router.add_get("/api/crypto/watchlist", _bind(_api_crypto_watchlist))
     app.router.add_get("/api/binance/symbols", _bind(_api_binance_symbols))
