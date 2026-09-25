@@ -32,6 +32,7 @@ diligence, it is latency and money.
 """
 from __future__ import annotations
 
+import dataclasses
 import math
 from dataclasses import dataclass
 from datetime import datetime
@@ -64,6 +65,8 @@ class Review:
     asked_model: bool = False
     factors: str = ""
     summary: str = ""
+    model: str = ""
+    latency_ms: int = 0
 
     @property
     def verdict(self) -> str:
@@ -229,6 +232,8 @@ HOLD_FACTORS = [
     "trend_intact", "pullback_in_uptrend", "support_nearby", "volume_supports",
     "stop_still_far", "time_remaining", "momentum_faded", "trend_broke",
     "against_higher_timeframe", "no_buyers", "stop_imminent", "out_of_time",
+    "structure_with_trade", "structure_against_trade", "at_resistance", "at_support",
+    "rejection_wick", "range_chop",
 ]
 
 REVIEW_SYSTEM = (
@@ -248,7 +253,13 @@ REVIEW_SYSTEM = (
     "costs a spread; holding one that keeps going costs the trade. 'It might "
     "bounce' is true of every losing position ever opened and is not a "
     "reason.\n\n"
-    "Judge the numbers given. "
+    "Judge the numbers given, and above all the chart section: it is the "
+    "5m/15m candles read the way a discretionary trader reads them (swing "
+    "structure, nearest support and resistance, the last few candles). A "
+    "long whose 15m lows have started stepping down, or a short whose highs "
+    "are stepping up, has lost its reason; one still making its structure "
+    "has not. Pick tags that describe THIS chart, not the same three every "
+    "time. "
     "News is given below when there is any. Use it only where it bears on "
     "this coin over the next few hours; a war or a rate decision can, a "
     "routine headline cannot. Never invent news that is not listed.\n\n"
@@ -282,7 +293,18 @@ def _describe(pos, state, trend: float, now: datetime) -> str:
         + f"RSI {state.rsi_14:.0f}, MACD histogram {getattr(state, 'macd_histogram', 0.0):+.4f}, "
           f"flow {getattr(state, 'cvd_trend', None) or 'n/a'}\n"
         f"Local read of all this: {trend:.2f} out of 1.00"
+        + _chart(state, price, is_long)
     )
+
+
+def _chart(state, price: float, is_long: bool) -> str:
+    """The candle picture, or nothing when the state carries no candles."""
+    try:
+        from analysis.price_action import describe
+        text = describe(state.get_candles("5m"), state.get_candles("15m"), price, is_long)
+    except Exception:
+        return ""
+    return f"\n\nChart (read from the candles):\n{text}" if text else ""
 
 
 async def review_position(pos, state, now: datetime, losing: bool = True,
@@ -350,9 +372,15 @@ async def review_position(pos, state, now: datetime, losing: bool = True,
     if not math.isfinite(delta):
         return _no_answer(trend)
 
+    summary = str(reply.data.get("summary", "")).strip()[:200]
+    why = str(reply.data.get("reasoning", "")).strip()
+    if why:
+        summary = (summary + " | why: " + why)[:400]
     review = decide(trend, delta,
                     factors=_clean_factors(reply.data.get("factors"), HOLD_FACTORS),
-                    summary=str(reply.data.get("summary", "")).strip()[:200])
+                    summary=summary)
+    review = dataclasses.replace(review, model=reply.served_by or "",
+                                 latency_ms=int(reply.latency_ms or 0))
     log.info("position_reviewed", symbol=pos.symbol, verdict=review.verdict,
              trend=round(trend, 3), confidence=round(review.confidence, 3),
              factors=review.factors, served_by=reply.served_by)

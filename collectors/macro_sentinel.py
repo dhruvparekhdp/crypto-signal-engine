@@ -136,8 +136,18 @@ class GroqSentinel:
         impossible and structurally unsound" — and the signal published
         anyway, because 0.04 of confidence was all it was allowed to move.
         """
+        # Reset first: a failed call must not be logged under the previous
+        # call's model (the 22-25 Sep log showed empty answers recorded as
+        # llama-3.3-70b at 0 ms).
+        self.last_model = ""
+        self.last_latency_ms = 0
+        self.last_factors = ""
         if not self.is_available or not getattr(settings, "groq_signal_review_enabled", True):
             return 0.0, "", ""
+
+        from analysis.price_action import describe as chart_text
+        chart = chart_text(state.get_candles("5m"), state.get_candles("15m"),
+                           sig.current_price, is_long=sig.direction.lower() == "long")
 
         # Context payload
         funding_str = (f"{state.funding_rate_per_8h * 100:+.3f}%"
@@ -159,7 +169,8 @@ class GroqSentinel:
             f"Order Flow / CVD: {cvd_str}\n"
             f"Derivatives: Funding {funding_str}, Open Interest {oi_str}\n"
             f"Sentiment: {state.sentiment_score:+.2f}\n"
-            f"\nRest of the book right now:\n{market_context(book, sig.symbol)}\n"
+            + (f"\nChart (read from the candles):\n{chart}\n" if chart else "")
+            + f"\nRest of the book right now:\n{market_context(book, sig.symbol)}\n"
             + (f"\nNews:\n{news}\n" if news else "")
         )
 
@@ -173,6 +184,11 @@ class GroqSentinel:
             "and scored headlines: weigh a war, a tariff or a rate decision "
             "against the direction, ignore routine noise, and never invent "
             "news that is not listed — guessing is worse than saying nothing.\n\n"
+            "Read the chart section the way a discretionary trader reads a "
+            "5m/15m chart: a long into nearby resistance, a short into nearby "
+            "support, or any trade against the 15m structure (lower highs and "
+            "lows for a long, higher ones for a short) is at best CAUTION, and "
+            "REJECT when the target sits beyond the level.\n\n"
             "Most trades are fine; say so and move on. REJECT is for "
             "structurally broken, not merely dull.\n\n"
             f"Tags, use only these: {_FACTOR_HELP}\n\n"

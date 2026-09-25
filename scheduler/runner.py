@@ -450,6 +450,7 @@ class AppRunner:
                     confidence_delta=round(review.confidence - review.trend, 4),
                     pnl_pct=(round(pos.gross_pnl(state.current_price) / margin * 100, 4)
                              if margin else 0.0),
+                    model=review.model, latency_ms=review.latency_ms,
                     briefing_id=briefing_id, news_context=news,
                     **self._review_extras(state))
 
@@ -729,7 +730,7 @@ class AppRunner:
                                     verdict=verdict, summary=ai_summary,
                                     factors=self.groq_sentinel.last_factors,
                                     confidence_delta=delta,
-                                    model=self.groq_sentinel.last_model or scfg.groq_model,
+                                    model=self.groq_sentinel.last_model or "no_answer",
                                     latency_ms=self.groq_sentinel.last_latency_ms,
                                     briefing_id=briefing_id, news_context=news,
                                     **self._review_extras(state))
