@@ -175,6 +175,13 @@ async def main(args) -> int:
     end = datetime.fromtimestamp((int(datetime.now(UTC).timestamp()) // secs) * secs,
                                  UTC).replace(tzinfo=None)
     days = args.days if args.days else int(args.years * 365)
+    # The database keeps one year (settings.db_retention_days); older bars
+    # belong in the Parquet lake (scripts/load_binance_lake.py), not here.
+    from config.settings import settings
+    if settings.db_retention_days > 0 and days > settings.db_retention_days:
+        print(f"Capping at {settings.db_retention_days} days: the database keeps one "
+              f"year. For older history use scripts.load_binance_lake.")
+        days = settings.db_retention_days
     start = end - timedelta(days=days)
 
     symbols = [s.lower() for s in args.symbols.split(",") if s.strip()] \

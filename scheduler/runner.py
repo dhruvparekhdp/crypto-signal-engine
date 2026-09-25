@@ -21,6 +21,7 @@ refetched on boot. Only fired signals, snapshots and paper trades reach the DB.
 import asyncio
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 
 import structlog
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
@@ -626,6 +627,17 @@ class AppRunner:
             repo = Repository(session)
             moved = await repo.archive_old_crypto_data()
         log.info("db_cleanup_done", archived=moved)
+        # Past a year, rows leave the database for JSON files (owner's rule:
+        # at most one year in the DB, nothing deleted).
+        if settings.db_retention_days > 0:
+            from storage.cold_storage import offload
+            try:
+                async with AsyncSessionFactory() as session:
+                    to_files = await offload(session, Path(settings.cold_storage_dir),
+                                             days=settings.db_retention_days)
+                log.info("db_cold_storage_done", moved=to_files)
+            except Exception:
+                log.exception("db_cold_storage_failed")
 
     async def _research_pass_job(self) -> None:
         """

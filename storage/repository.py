@@ -65,9 +65,9 @@ class Repository:
         rows leave the live table only by being copied to the archive first,
         in the same transaction. If the copy fails, nothing is removed.
 
-        The signal log is not touched at all. It is the evaluation record the
-        null test, the accuracy page and the audit read, and at ~30 signals a
-        day a decade of it is smaller than a week of snapshots.
+        The signal log is not touched here. It is the evaluation record the
+        null test, the accuracy page and the audit read. Past a year, it and
+        the archive tables move to JSON files (storage/cold_storage.py).
 
         The copy and the delete use the same predicate — older than the
         cutoff AND no newer than the highest id seen before starting — inside

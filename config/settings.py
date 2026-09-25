@@ -127,6 +127,10 @@ class Settings(BaseSettings):
     # live trading. The biggest moves use web search to find that day's news.
     llm_chain_history: str = "ollama:qwen3:8b, groq:openai/gpt-oss-120b"
     llm_chain_history_search: str = "groq:openai/gpt-oss-120b+search"
+    # The database keeps this many days; older rows go to gzipped JSON files
+    # under cold_storage_dir (storage/cold_storage.py), never deleted outright.
+    db_retention_days: int = 365
+    cold_storage_dir: str = "data/archive"
     move_attribution_minutes: int = 60
     move_attribution_window_hours: int = 12
     # Reviewing what is already open.
