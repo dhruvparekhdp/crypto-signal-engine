@@ -5279,7 +5279,7 @@ async def make_app(runner) -> web.Application:
     app.router.add_get("/api/commodities", _bind(_api_commodities))
     app.router.add_get("/api/debug/binance", _bind(_api_binance_probe))
     from scheduler.v2_pages import register as _register_v2_pages
-    _register_v2_pages(app)
+    _register_v2_pages(app, runner)
     return app
 
 

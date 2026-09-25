@@ -141,6 +141,14 @@ class Settings(BaseSettings):
     # recorded and resolved with the backtest's fill rules, never traded.
     v2_shadow_enabled: bool = True
     v2_shadow_minutes: int = 5
+    # The server downloads the v2 test data from data.binance.vision itself
+    # (it can reach Binance; the owner's laptop is not needed) and re-runs
+    # the v2 backtest daily at this UTC hour. Results on /v2.
+    v2_backtest_enabled: bool = True
+    v2_backtest_years: float = 2.0
+    v2_backtest_hour_utc: int = 2
+    v2_lake_dir: str = "data/lake"
+    v2_reports_dir: str = "data/reports"
     # The database keeps this many days; older rows go to gzipped JSON files
     # under cold_storage_dir (storage/cold_storage.py), never deleted outright.
     db_retention_days: int = 365

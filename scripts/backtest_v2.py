@@ -20,15 +20,12 @@ from __future__ import annotations
 
 import argparse
 import json
-from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
 
-import pandas as pd
-
-from analysis.v2_backtest import ExecConfig, grade, simulate, trades_to_rows
-from analysis.v2_setups import SETUP_NAMES, V2Config, generate
-from collectors.binance_lake import read
+from analysis.v2_backtest import ExecConfig
+from analysis.v2_report import run_backtest
+from analysis.v2_setups import SETUP_NAMES, V2Config
 
 DEFAULT_SYMBOLS = ["BTCUSDT", "ETHUSDT", "SOLUSDT", "XRPUSDT", "BNBUSDT", "LTCUSDT", "BCHUSDT"]
 
@@ -40,9 +37,8 @@ def _line(name: str, g: dict) -> str:
     pf = s["profit_factor"]
     gates = " ".join(f"{k}:{'ok' if v else 'NO'}" for k, v in g["gates"].items())
     return (f"  {name:22} {s['trades']:5} trades  win {s['win_rate'] * 100:5.1f}%  "
-            f"exp {s['expectancy_r']:+.3f}R (after tax: INR-futures "
-            f"{s.get('expectancy_after_tax_business_r', 0):+.3f}R, USDT "
-            f"{s['expectancy_after_tax_vda_r']:+.3f}R)  "
+            f"exp {s['expectancy_r']:+.3f}R  avg win {s['avg_win_r']:+.2f}R  "
+            f"avg loss {s['avg_loss_r']:+.2f}R  "
             f"PF {pf if pf is not None else '-':>5}  "
             f"DD {s['max_drawdown_r']:6.1f}R  windows+ {g['positive_windows'] * 100:4.0f}%"
             f"  | {gates}  => {'PROMOTE' if g['promote_to_paper'] else 'hold'}")
@@ -59,40 +55,23 @@ def main() -> int:
     ap.add_argument("--reports", default="data/reports")
     args = ap.parse_args()
 
-    end = pd.Timestamp.now("UTC").tz_localize(None).normalize()
-    start = end - pd.Timedelta(days=int(args.years * 365))
     cfg = V2Config(setups=tuple(s.strip().upper() for s in args.setups.split(",")),
                    session_filter=not args.no_session)
     ex = ExecConfig()
+    symbols = [s.strip().upper() for s in args.symbols.split(",") if s.strip()]
+    report = run_backtest(symbols, args.years, cfg, ex, root=args.root)
+    report["args"] = vars(args)
 
-    all_trades = []
-    for sym in [s.strip().upper() for s in args.symbols.split(",") if s.strip()]:
-        warm = start - pd.Timedelta(days=40)    # indicators need history before the window
-        frames = {iv: read("klines", sym, warm, end, interval=iv, root=args.root)
-                  for iv in ("5m", "15m", "4h", "1d")}
-        if frames["5m"].empty or frames["15m"].empty:
-            print(f"{sym}: no 5m/15m klines in the lake, run load_binance_lake first")
-            continue
-        funding = read("fundingRate", sym, warm, end, root=args.root)
-        cands = [c for c in generate(sym.lower(), frames["5m"], frames["15m"], frames["4h"],
-                                     frames["1d"], funding, cfg) if c.ts >= start]
-        trades = simulate(cands, frames["5m"], ex)
-        all_trades += trades
-        print(f"{sym}: {len(cands)} candidates, {len(trades)} filled trades")
-
-    print(f"\nv2 backtest {start.date()} -> {end.date()}, costs: maker {ex.maker * 100:.4f}% "
-          f"taker {ex.taker * 100:.4f}% (GST incl.), stop slip {ex.stop_slip * 100:.2f}%")
-    report = {"generated": datetime.now(UTC).isoformat(), "args": vars(args),
-              "config": {k: (list(v) if isinstance(v, tuple) else v)
-                         for k, v in replace(cfg).__dict__.items()},
-              "setups": {}}
-    for code in cfg.setups:
-        sub = [t for t in all_trades if t.setup == code]
-        g = grade(sub)
-        report["setups"][code] = g
+    print(f"\nv2 backtest {report['window'][0]} -> {report['window'][1]}, costs: maker "
+          f"{ex.maker * 100:.4f}% taker {ex.taker * 100:.4f}% (GST incl.), "
+          f"stop slip {ex.stop_slip * 100:.2f}%")
+    for code, g in report["setups"].items():
         print(_line(f"{code} {SETUP_NAMES[code]}", g))
-    g = grade(all_trades)
-    report["overall"] = g
+    for side, g in report["by_side"].items():
+        print(_line(f"  {side}s", g))
+    for sym, g in report["by_symbol"].items():
+        print(_line(f"  {sym}", g))
+    g = report["overall"]
     print(_line("ALL", g))
     if g["monte_carlo"]:
         mc = g["monte_carlo"]
@@ -104,7 +83,6 @@ def main() -> int:
     out.mkdir(parents=True, exist_ok=True)
     runs = len(list(out.glob("backtest_v2_*.json"))) + 1
     report["variants_tried_so_far"] = runs
-    report["trades"] = trades_to_rows(all_trades)
     path = out / f"backtest_v2_{datetime.now(UTC):%Y%m%d_%H%M%S}.json"
     path.write_text(json.dumps(report, default=str))
     print(f"\nrun #{runs} on record; report: {path}")

@@ -92,6 +92,7 @@ class AppRunner:
         self._last_position_review: dict[str, datetime] = {}
         # Why the last event-monitor call fell through its chain, for /moves.
         self._monitor_failures: list[str] = []
+        self._v2_bt_state: dict = {}
         # symbol -> time of an unconfirmed model "close" vote.
         self._close_votes: dict[str, datetime] = {}
         self.oi_collector = BinanceFuturesOICollector(self.crypto_store)
@@ -1125,6 +1126,56 @@ class AppRunner:
         except Exception:
             log.exception("v2_shadow_failed")
 
+    async def _v2_backtest_job(self) -> None:
+        """
+        Download what the v2 backtest needs from data.binance.vision (5m, 15m,
+        4h, 1d klines and funding for the watchlist's crypto, resumable), then
+        run the backtest and save the report for /v2. Both halves run in a
+        worker thread so the paper tick is never held up.
+        """
+        if not settings.v2_backtest_enabled or self._v2_bt_state.get("running"):
+            return
+        import argparse
+        import json
+
+        from analysis.instruments import spec_for
+        from analysis.v2_report import run_backtest
+        from analysis.v2_setups import V2Config
+        from scripts.load_binance_lake import load
+
+        self._v2_bt_state = {"running": True, "started": datetime.now(UTC).isoformat(),
+                             "stage": "downloading"}
+        try:
+            symbols = [s.upper() for s in await self.crypto_store.get_symbols()
+                       if spec_for(s).kind == "crypto"]
+            args = argparse.Namespace(
+                market="um", kinds="klines,fundingRate", intervals="5m,15m,4h,1d",
+                symbols=",".join(symbols), years=settings.v2_backtest_years + 0.15, days=0,
+                since="", root=settings.v2_lake_dir, concurrency=4, dry_run=False)
+            await asyncio.to_thread(asyncio.run, load(args))
+            self._v2_bt_state["stage"] = "testing"
+            cfg = V2Config(session_filter=settings.session_filter_enabled,
+                           session_start_utc=settings.session_start_utc,
+                           session_end_utc=settings.session_end_utc,
+                           weekdays_only=settings.session_weekdays_only)
+            report = await asyncio.to_thread(
+                run_backtest, symbols, settings.v2_backtest_years, cfg,
+                root=settings.v2_lake_dir, log=lambda m: log.info("v2_backtest", msg=m))
+            out = Path(settings.v2_reports_dir)
+            out.mkdir(parents=True, exist_ok=True)
+            text = json.dumps(report, default=str)
+            (out / f"backtest_v2_{datetime.now(UTC):%Y%m%d_%H%M%S}.json").write_text(text)
+            (out / "backtest_v2_latest.json").write_text(text)
+            s = report["overall"]["stats"]
+            log.info("v2_backtest_done", trades=s.get("trades", 0),
+                     win_rate=s.get("win_rate"), expectancy_r=s.get("expectancy_r"),
+                     promote=report["overall"]["promote_to_paper"])
+            self._v2_bt_state = {"running": False, "finished": datetime.now(UTC).isoformat()}
+        except Exception as exc:
+            log.exception("v2_backtest_failed")
+            self._v2_bt_state = {"running": False, "error": str(exc)[:300],
+                                 "finished": datetime.now(UTC).isoformat()}
+
     async def _move_attribution_job(self) -> None:
         """
         Every hour: ask Groq why each watchlist coin moved and whether our
@@ -1457,6 +1508,19 @@ class AppRunner:
             max_instances=1,
             next_run_time=datetime.now(UTC) + timedelta(seconds=30),
         )
+        self.scheduler.add_job(
+            self._v2_backtest_job,
+            "cron",
+            hour=settings.v2_backtest_hour_utc,
+            minute=17,
+            id="v2_backtest",
+            max_instances=1,
+        )
+        if not Path(settings.v2_reports_dir, "backtest_v2_latest.json").exists():
+            # First deploy: do not wait until tomorrow for the first answer.
+            self.scheduler.add_job(
+                self._v2_backtest_job, "date",
+                run_date=datetime.now(UTC) + timedelta(minutes=3), id="v2_backtest_first")
         self.scheduler.add_job(
             self._v2_shadow_job,
             "interval",

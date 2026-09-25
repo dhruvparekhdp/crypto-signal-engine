@@ -64,6 +64,37 @@ async def api_v2_shadow(request: web.Request) -> web.Response:
     return web.Response(text=json.dumps(body), content_type="application/json")
 
 
+def backtest_api(runner):
+    """GET /api/v2/backtest (latest report) and POST .../run (admin: run it now)."""
+    async def get(request: web.Request) -> web.Response:
+        from pathlib import Path
+
+        from config.settings import settings
+        path = Path(settings.v2_reports_dir, "backtest_v2_latest.json")
+        state = dict(getattr(runner, "_v2_bt_state", {}) or {})
+        if not path.exists():
+            return web.json_response({"report": None, "state": state})
+        report = json.loads(path.read_text())
+        trades = report.pop("trades", [])
+        report["recent_trades"] = trades[-60:]
+        for g in [report.get("overall", {}), *report.get("setups", {}).values()]:
+            if isinstance(g, dict):
+                g.pop("windows", None)
+        return web.json_response({"report": report, "state": state})
+
+    async def run(request: web.Request) -> web.Response:
+        import asyncio
+        denied = await _admin(request)
+        if denied is not None:
+            return denied
+        if (getattr(runner, "_v2_bt_state", {}) or {}).get("running"):
+            return web.json_response({"ok": False, "error": "already running"}, status=409)
+        asyncio.create_task(runner._v2_backtest_job())
+        return web.json_response({"ok": True, "started": True})
+
+    return get, run
+
+
 async def _admin(request: web.Request):
     """None when allowed; otherwise the 401 to return."""
     from scheduler.health import _SETTINGS, _verify_admin_session
@@ -197,12 +228,46 @@ function statCard(title,s,g){ if(!s||!s.trades) return '<div class="stat"><span 
   +'<span class="muted">'+s.trades+' trades · win '+Math.round(s.win_rate*100)+'% · PF '
   +(s.profit_factor??'—')+'</span><div style="font-size:11px;margin-top:4px">'+gates(g)
   +'</div></div>'; }
+function row(label,g){ const s=(g||{}).stats||{}; if(!s.trades) return '<tr><td>'+esc(label)
+  +'</td><td colspan="7" class="muted">no trades</td></tr>';
+  return '<tr><td>'+esc(label)+'</td><td>'+s.trades+'</td><td>'+Math.round(s.win_rate*100)+'%</td>'
+  +'<td class="'+(s.expectancy_r>=0?'pos':'neg')+'">'+(s.expectancy_r>=0?'+':'')+s.expectancy_r+'R</td>'
+  +'<td>+'+s.avg_win_r+'R / '+s.avg_loss_r+'R</td><td>'+(s.profit_factor??'—')+'</td>'
+  +'<td>'+Math.round((g.positive_windows||0)*100)+'%</td><td>'
+  +(g.promote_to_paper?'<span class="ok">PROMOTE</span>':'<span class="muted">hold</span>')+'</td></tr>'; }
+async function loadBacktest(){
+  const d=await (await fetch('/api/v2/backtest')).json(); const r=d.report, st=d.state||{};
+  const busy=st.running?' · <b>running now ('+esc(st.stage||'')+')</b>':'';
+  if(!r) return '<section class="card"><h2>Backtest on real Binance data</h2><p class="muted">'
+    +(st.error?'Last run failed: '+esc(st.error):'The server downloads 2 years of data and '
+    +'runs the test a few minutes after deploy, then daily at 02:17 UTC.')+busy
+    +'</p><button class="nav-btn" onclick="runBt()">Run now (admin)</button></section>';
+  let h='<section class="card"><h2>Backtest on real Binance data</h2><p class="muted" '
+    +'style="font-size:12px;margin-bottom:10px">'+esc(r.window[0])+' → '+esc(r.window[1])+' · '
+    +esc(r.symbols.join(', '))+' · all fees, GST, slippage and funding included · run '
+    +esc((r.generated||'').slice(0,16).replace('T',' '))+' UTC'+busy+'</p>'
+    +'<div class="tbl"><table><tr><th></th><th>Trades</th><th>Win</th><th>Per trade</th>'
+    +'<th>Avg win / loss</th><th>PF</th><th>Windows up</th><th>Gate</th></tr>'
+    +row('All setups',r.overall);
+  Object.entries(r.setups).forEach(([k,g])=>{h+=row(k+' · '+NAMES[k],g);});
+  Object.entries(r.by_side||{}).forEach(([k,g])=>{h+=row(k+'s',g);});
+  Object.entries(r.by_setup_side||{}).forEach(([k,g])=>{ if((g.stats||{}).trades)
+    h+=row(k.replace('_',' '),g);});
+  Object.entries(r.by_symbol||{}).forEach(([k,g])=>{h+=row(k,g);});
+  h+='</table></div><p style="margin-top:10px"><button class="nav-btn" onclick="runBt()">'
+    +'Run again now (admin)</button></p></section>';
+  return h; }
+async function runBt(){ const r=await fetch('/api/v2/backtest/run',{method:'POST'});
+  alert(r.ok?'Started. Download plus test takes a few minutes; this page refreshes.'
+    :(r.status===409?'Already running.':'Log in as admin at /settings first.')); }
 async function load(){
+  const bt=await loadBacktest().catch(()=>'');
   const d=await (await fetch('/api/v2/shadow?days=30')).json();
   const c=d.counts; document.getElementById('sub').textContent=
     c.closed+' closed · '+c.open+' open · '+c.pending+' resting · '
     +c.cancelled+' unfilled (30 days)';
-  let h='<section class="card"><h2>Expectancy after all costs, in R</h2><div class="grid">'
+  let h=bt+'<section class="card"><h2>Live shadow · expectancy after all costs, in R</h2>'
+    +'<div class="grid">'
     +statCard('All setups',d.overall&&d.overall.stats,d.overall&&d.overall.gates);
   ['A','B','C','D'].forEach(k=>{const x=d.by_setup[k]||{};
     h+=statCard(k+' · '+NAMES[k],x.stats,x.gates);});
@@ -305,7 +370,10 @@ def _themed(html: str) -> str:
     return html.replace("</head>", _THEME_SNIPPET + "</head>")
 
 
-def register(app: web.Application) -> None:
+def register(app: web.Application, runner=None) -> None:
+    get, run = backtest_api(runner)
+    app.router.add_get("/api/v2/backtest", get)
+    app.router.add_post("/api/v2/backtest/run", run)
     app.router.add_get("/v2", v2_page)
     app.router.add_get("/journal", journal_page)
     app.router.add_get("/api/v2/shadow", api_v2_shadow)

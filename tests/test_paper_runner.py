@@ -29,6 +29,7 @@ async def test_paper_trading_end_to_end():
     # Enable paper trading in settings for this test
     with patch("scheduler.runner.settings.paper_trading_enabled", True), \
          patch("scheduler.runner.settings.paper_alert_telegram", True), \
+         patch("scheduler.runner.settings.session_filter_enabled", False), \
          patch("scheduler.runner.AsyncSessionFactory", session_maker):
 
         # 1. Provide a crypto state in crypto_store
