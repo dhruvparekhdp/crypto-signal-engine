@@ -96,29 +96,32 @@ class Settings(BaseSettings):
     gemini_api_key: SecretStr | None = None
     anthropic_api_key: SecretStr | None = None
 
-    # Groq first, as the owner asked: fast, free tier is generous, and
-    # groq/compound searches the web itself. The reviews it writes are stored
-    # with their news context so the local model can study them later.
+    # Groq first, as the owner asked. Web search is gpt-oss with Groq's
+    # built-in browser_search tool ("+search"): groq/compound and
+    # compound-mini were decommissioned on 21 Sep 2026 and now return errors.
+    # The reviews it writes are stored with their news context so the local
+    # model can study them later.
     llm_chain_pre_trade: str = (
         "groq:openai/gpt-oss-120b, groq:openai/gpt-oss-20b, openrouter:qwen/qwen3-32b")
     llm_chain_post_trade: str = (
-        "groq:groq/compound, groq:openai/gpt-oss-120b, anthropic:claude-sonnet-5")
-    # The 30-minute world-events briefing. Only web-searching models: a model
-    # without search asked for "today's news" invents it.
+        "groq:openai/gpt-oss-120b+search, groq:openai/gpt-oss-120b, anthropic:claude-sonnet-5")
+    # The world-events briefing. Only web-searching models: a model without
+    # search asked for "today's news" invents it.
     llm_chain_briefing: str = (
-        "groq:groq/compound, groq:groq/compound-mini, groq:openai/gpt-oss-120b+search")
+        "groq:openai/gpt-oss-120b+search, groq:openai/gpt-oss-20b+search")
     market_briefing_enabled: bool = True
     market_briefing_minutes: int = 30
     # Hourly: why each watchlist coin moved, and how our signals fared.
     llm_chain_attribution: str = (
-        "groq:groq/compound, groq:openai/gpt-oss-120b+search, groq:openai/gpt-oss-120b")
+        "groq:openai/gpt-oss-120b+search, groq:openai/gpt-oss-120b")
     move_attribution_enabled: bool = True
-    # The event monitor: adaptive, jittered web checks with a daily cap that
-    # keeps Groq's free web-search limit (250/day) intact. Shadow mode only.
+    # The event monitor: adaptive, jittered web checks with a daily cap. The
+    # free tier's daily requests are shared by every role, so the monitor
+    # takes at most 120 of them. Shadow mode only.
     event_monitor_enabled: bool = True
-    event_monitor_daily_cap: int = 200
+    event_monitor_daily_cap: int = 120
     llm_chain_briefing_calm: str = (
-        "groq:groq/compound-mini, groq:groq/compound, groq:openai/gpt-oss-120b+search")
+        "groq:openai/gpt-oss-20b+search, groq:openai/gpt-oss-120b+search")
     move_attribution_minutes: int = 60
     move_attribution_window_hours: int = 12
     # Reviewing what is already open.

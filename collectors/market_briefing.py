@@ -2,7 +2,7 @@
 A 30-minute world briefing, researched on the web by Groq.
 
 The reviewers used to be told "you have no news" — and for most of this
-project that was true. Now Groq's compound model searches the web itself and
+project that was true. Now Groq's gpt-oss with browser_search searches the web itself and
 writes a short briefing: wars, tariffs, central banks, inflation data, big
 crypto events, each with how much it matters for risk.
 

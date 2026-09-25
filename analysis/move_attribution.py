@@ -12,7 +12,7 @@ Fed decision?
 The numbers are computed here, never by the model. It is handed the moves
 (1h, 4h and 12h change, the 12h range, BTC's move for comparison), the
 signals we fired and how they ended, the latest web briefing and the scored
-headlines, and asked to explain them. Groq's compound model can search the
+headlines, and asked to explain them. Groq's gpt-oss with browser_search can search the
 web to check a cause it is unsure of.
 
 Every answer is stored in `move_attributions`, so the local model can later

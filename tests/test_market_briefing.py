@@ -2,12 +2,10 @@
 The web briefing reaches the reviewers, and every review keeps the news it
 saw, so the local model can later relate decisions to what the world did.
 """
-import asyncio
 import unittest
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import patch
 
 from collectors.market_briefing import as_news_items, context_block, parse_briefing
 
@@ -79,39 +77,14 @@ class TestRouting(unittest.TestCase):
         from collectors.llm_client import _parse_chain
         from config.settings import settings
         for _, model in _parse_chain(settings.llm_chain_briefing):
-            self.assertTrue(model.startswith("groq/compound") or model.endswith("+search"), model)
+            self.assertTrue(model.endswith("+search"), model)
 
-    def test_compound_gets_no_structured_output_knobs(self):
-        from collectors import llm_client
-        prov = llm_client.PROVIDERS["groq"]
-        sent = {}
-
-        class Resp:
-            status_code = 200
-            text = ""
-
-            def json(self):
-                return {"choices": [{"message": {"content": "{}"}}]}
-
-        class Client:
-            def __init__(self, *a, **k):
-                pass
-
-            async def __aenter__(self):
-                return self
-
-            async def __aexit__(self, *a):
-                return False
-
-            async def post(self, url, json=None, headers=None):
-                sent.update(json)
-                return Resp()
-
-        with patch.object(llm_client.httpx, "AsyncClient", Client):
-            asyncio.run(llm_client._call_openai_shaped(
-                prov, "groq/compound", "s", "u", 100, 0.0, 5.0))
-        self.assertNotIn("response_format", sent)
-        self.assertNotIn("reasoning_effort", sent)
+    def test_no_chain_names_a_decommissioned_model(self):
+        # groq/compound and compound-mini were shut down on 21 Sep 2026.
+        from config.settings import Settings
+        for name, field in Settings.model_fields.items():
+            if name.startswith("llm_chain_"):
+                self.assertNotIn("groq/compound", str(field.default), name)
 
 
 class TestWiring(unittest.TestCase):

@@ -210,19 +210,15 @@ async def _call_openai_shaped(provider: Provider, model: str, system: str,
     }
     # Gemini's compatibility endpoint rejects response_format; Groq and
     # OpenRouter accept it and it measurably reduces prose around the object.
-    # groq/compound is an agent with its own web-search tool; it rejects the
-    # structured-output and reasoning knobs the plain models take.
-    compound = model.startswith("groq/compound")
     # "openai/gpt-oss-120b+search" turns on Groq's built-in browser_search
-    # tool for gpt-oss: a web-searching fallback when compound is down or out
-    # of quota, so the briefing never silently falls to a model that would
-    # have to invent the news. Tools and json_object do not mix.
+    # tool, the replacement for the decommissioned groq/compound. Tools and
+    # json_object do not mix, so a searching call relies on _extract_json.
     search = model.endswith("+search")
     if search:
         model = model[:-len("+search")]
         payload["model"] = model
         payload["tools"] = [{"type": "browser_search"}]
-    if provider.name != "gemini" and not compound and not search:
+    if provider.name != "gemini" and not search:
         payload["response_format"] = {"type": "json_object"}
     # Reasoning models spend max_tokens on thinking before they write the
     # answer, so a 120-token budget comes back empty and the chain falls
@@ -230,7 +226,7 @@ async def _call_openai_shaped(provider: Provider, model: str, system: str,
     # maps to think:false on /v1); gpt-oss on Groq is kept to "low".
     if provider.name == "ollama":
         payload["reasoning_effort"] = "none"
-    elif provider.name == "groq" and model.startswith("openai/gpt-oss") and not compound:
+    elif provider.name == "groq" and model.startswith("openai/gpt-oss"):
         payload["reasoning_effort"] = "low"
 
     headers = {"Content-Type": "application/json"}
