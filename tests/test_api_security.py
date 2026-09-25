@@ -69,13 +69,22 @@ class TestCheckBearerAuth(unittest.TestCase):
 
 
 class TestClientIP(unittest.TestCase):
-    def test_uses_the_first_forwarded_address(self):
+    def test_uses_the_first_forwarded_address_behind_a_trusted_proxy(self):
         """
         Each proxy hop appends its own address, so the client's own address
         is the FIRST entry, not the last.
         """
-        req = FakeRequest({"X-Forwarded-For": "198.51.100.1, 10.0.0.5, 10.0.0.6"})
-        self.assertEqual(client_ip(req), "198.51.100.1")
+        req = FakeRequest({"X-Forwarded-For": "198.51.100.1, 10.0.0.5, 10.0.0.6"},
+                          remote="10.0.0.6")
+        self.assertEqual(client_ip(req, frozenset({"10.0.0.6"})), "198.51.100.1")
+
+    def test_a_client_cannot_choose_its_own_rate_limit_key(self):
+        """
+        With no proxy in front, the header is whatever the attacker typed:
+        rotating it must not buy a fresh login budget.
+        """
+        req = FakeRequest({"X-Forwarded-For": "203.0.113.99"}, remote="192.0.2.4")
+        self.assertEqual(client_ip(req, frozenset()), "192.0.2.4")
 
     def test_falls_back_to_remote_without_the_header(self):
         req = FakeRequest({}, remote="192.0.2.4")

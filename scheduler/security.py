@@ -48,13 +48,27 @@ from aiohttp import web
 # end), so that is the one this trusts.
 
 
-def client_ip(request: web.Request) -> str:
-    forwarded = request.headers.get("X-Forwarded-For", "")
-    if forwarded:
+def client_ip(request: web.Request, trusted_proxies: frozenset[str] | None = None) -> str:
+    """
+    The address rate limits are keyed on.
+
+    X-Forwarded-For is written by whoever sends the request, so it is only
+    believed when the connection itself comes from a proxy we run. The engine
+    listens on :8080 with no proxy in front, so by default the header is
+    ignored — otherwise every guess at the login can carry a fresh made-up
+    address and never meet the limit.
+    """
+    remote = request.remote or "unknown"
+    if trusted_proxies is None:
+        from config.settings import settings
+        trusted_proxies = frozenset(
+            p.strip() for p in settings.trusted_proxy_ips.split(",") if p.strip())
+    if remote in trusted_proxies:
+        forwarded = request.headers.get("X-Forwarded-For", "")
         first = forwarded.split(",")[0].strip()
         if first:
             return first
-    return request.remote or "unknown"
+    return remote
 
 
 # ── Bearer auth ─────────────────────────────────────────────────────────────

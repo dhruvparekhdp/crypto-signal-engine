@@ -2798,6 +2798,7 @@ async def _api_tables(runner, request: web.Request) -> web.Response:
     from sqlalchemy import text
 
     from storage.database import engine
+    from storage.models import SECRET_COLUMNS
 
     try:
         limit = max(1, min(int(request.query.get("limit", "100")), 2000))
@@ -2836,6 +2837,16 @@ async def _api_tables(runner, request: web.Request) -> web.Response:
                     text(f'SELECT * FROM "{name}"{order} LIMIT :lim'), {"lim": limit})
                 cols = list(result.keys())
                 rows = [list(r) for r in result.fetchall()]
+                # This endpoint is unauthenticated, and admin_auth holds a live
+                # session token: returning it handed anyone the operator's
+                # login. Secrets are blanked here rather than trusted to a
+                # caller check, so a future route change cannot re-expose them.
+                secret = SECRET_COLUMNS.get(name, frozenset())
+                if secret:
+                    hide = [i for i, c in enumerate(cols) if c in secret]
+                    for row in rows:
+                        for i in hide:
+                            row[i] = "[redacted]"
             except Exception as exc:
                 error = str(exc)
 

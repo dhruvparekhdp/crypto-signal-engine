@@ -244,6 +244,14 @@ class PaperTradingConfig(Base):
     alert_telegram: Mapped[bool] = mapped_column(Boolean, default=True)
 
 
+# Columns that must never leave the database: not in a backup, not in the
+# /data table viewer, not anywhere. One list, so a new secret column is
+# redacted everywhere by adding it here once.
+SECRET_COLUMNS: dict[str, frozenset[str]] = {
+    "admin_auth": frozenset({"password_hash", "salt", "session_token"}),
+}
+
+
 class AdminAuth(Base):
     """
     Administrator authentication hash and active session token.

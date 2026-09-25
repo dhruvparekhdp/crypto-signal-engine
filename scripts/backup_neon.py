@@ -20,6 +20,7 @@ from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from storage.database import _make_url
+from storage.models import SECRET_COLUMNS
 from storage.models import (
     AdminAuth, CommoditySnapshot, CryptoSignalLog, CryptoSnapshot,
     CryptoWatchlistEntry, NewsSentiment, PaperCycle, PaperPosition,
@@ -43,9 +44,7 @@ ALL_MODELS = [
 #
 # Redacted at the dump, not at commit time: a rule you have to remember to
 # apply is a rule that gets forgotten exactly once, and once is enough.
-REDACTED_COLUMNS = {
-    "admin_auth": {"password_hash", "salt", "session_token"},
-}
+REDACTED_COLUMNS = SECRET_COLUMNS
 
 
 def default_json_serializer(obj):

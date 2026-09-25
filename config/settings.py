@@ -244,6 +244,9 @@ class Settings(BaseSettings):
     api_auth_rate_limit_requests: int = 10
     api_auth_rate_limit_window_seconds: int = 300
     sentiment_ingest_token: str = ""
+    # Comma-separated proxy addresses whose X-Forwarded-For is believed.
+    # Empty = none, which is right while nothing sits in front of :8080.
+    trusted_proxy_ips: str = ""
     sentiment_feeds_enabled: bool = True
     fear_greed_refresh_minutes: int = 60
     crypto_max_stake_pct: float = 0.02
