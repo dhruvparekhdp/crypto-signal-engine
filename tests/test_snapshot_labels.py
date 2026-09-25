@@ -160,15 +160,17 @@ class TestRetention(unittest.TestCase):
     engine ran.
     """
 
-    def test_the_signal_log_outlives_every_window_that_reads_it(self):
+    def test_the_signal_log_is_never_trimmed(self):
         """
-        The null test reads 120 days of signals and the accuracy page 365. A
-        shorter retention silently shrinks both, and deletes a restore of
-        older signals at the next cleanup.
+        Every signal is kept: it is the evaluation record, and old signals are
+        what later AI analysis runs on. The cleanup must not name the table.
         """
-        from config.settings import settings
+        import inspect
 
-        self.assertGreaterEqual(settings.signal_log_retention_days, 365)
+        from storage.repository import Repository
+
+        source = inspect.getsource(Repository.archive_old_crypto_data)
+        self.assertNotIn("delete(CryptoSignalLog", source)
 
     def test_retention_covers_the_longest_label_horizon_many_times_over(self):
         """A window barely longer than the horizon yields almost no usable rows."""
@@ -177,15 +179,70 @@ class TestRetention(unittest.TestCase):
         longest_days = max(HORIZONS.values()).total_seconds() / 86400
         self.assertGreater(settings.snapshot_retention_days, longest_days * 30)
 
-    def test_the_two_retentions_are_applied_separately(self):
-        """One shared cutoff is how the training set got deleted with the logs."""
-        import inspect
+    def test_old_snapshots_are_moved_not_deleted(self):
+        """A row leaves the live table only by landing in the archive."""
+        import asyncio
+        import os
+        import tempfile
+        from datetime import UTC, datetime, timedelta
 
-        from storage.repository import Repository
+        db = tempfile.mktemp(suffix=".db")
+        os.environ["DATABASE_URL"] = f"sqlite+aiosqlite:///{db}"
 
-        source = inspect.getsource(Repository.delete_old_crypto_data)
-        self.assertIn("snap_cutoff", source)
-        self.assertIn("log_cutoff", source)
+        async def run():
+            from sqlalchemy import func, select
+
+            import storage.database as database
+            from storage.database import AsyncSessionFactory, init_db
+            from storage.models import (
+                CryptoSignalLog,
+                CryptoSnapshot,
+                CryptoSnapshotArchive,
+            )
+            from storage.repository import Repository
+
+            await init_db()
+
+            def n(model):
+                return select(func.count()).select_from(model).where(
+                    model.symbol == "archive-test")
+
+            async with AsyncSessionFactory() as s:
+                live_before = (await s.execute(n(CryptoSnapshot))).scalar()
+                arch_before = (await s.execute(n(CryptoSnapshotArchive))).scalar()
+                sigs_before = (await s.execute(n(CryptoSignalLog))).scalar()
+            now = datetime.now(UTC).replace(tzinfo=None)
+            async with AsyncSessionFactory() as s:
+                for age in (1, 200, 300):
+                    s.add(CryptoSnapshot(symbol="archive-test", price=100.0,
+                                         timestamp=now - timedelta(days=age)))
+                s.add(CryptoSignalLog(
+                    symbol="archive-test", signal_type="x", direction="long",
+                    trigger_description="", confidence=0.5, current_price=1.0,
+                    edge_pct=0.0, stake_pct=0.0, timeframe="1h",
+                    timestamp=now - timedelta(days=900)))
+                await s.commit()
+
+            async with AsyncSessionFactory() as s:
+                moved = await Repository(s).archive_old_crypto_data(snapshot_days=120)
+            self.assertGreaterEqual(moved["crypto_snapshots"], 2)
+
+            async with AsyncSessionFactory() as s:
+                again = await Repository(s).archive_old_crypto_data(snapshot_days=120)
+            self.assertEqual(again["crypto_snapshots"], 0)
+
+            async with AsyncSessionFactory() as s:
+                live = (await s.execute(n(CryptoSnapshot))).scalar()
+                arch = (await s.execute(n(CryptoSnapshotArchive))).scalar()
+                sigs = (await s.execute(n(CryptoSignalLog))).scalar()
+            # Earlier runs may have left rows in a shared database, so check
+            # this run's movement rather than absolute totals.
+            self.assertEqual(arch - arch_before, 2)
+            self.assertEqual(live - live_before, 1)
+            self.assertEqual(sigs - sigs_before, 1)
+            await database.engine.dispose()
+
+        asyncio.run(run())
 
 
 class TestTheRoutinePassIsBounded(unittest.TestCase):

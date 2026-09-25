@@ -11,8 +11,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from storage.models import (
     AdminAuth,
     CommoditySnapshot,
+    CommoditySnapshotArchive,
     CryptoSignalLog,
     CryptoSnapshot,
+    CryptoSnapshotArchive,
     CryptoWatchlistEntry,
     MarketCandle,
     NewsSentiment,
@@ -35,35 +37,54 @@ class Repository:
 
     # ── Maintenance ────────────────────────────────────────────
 
-    async def delete_old_crypto_data(
-        self,
-        snapshot_days: int | None = None,
-        signal_log_days: int | None = None,
-    ) -> None:
+    async def archive_old_crypto_data(self, snapshot_days: int | None = None) -> dict[str, int]:
         """
-        Bound the growth of snapshots and the signal log.
+        Move snapshots older than the live window into the archive tables.
 
-        Two retentions, not one. They had shared a single `days=3`, which read
-        as a sensible cap on a log and was in fact deleting the training set:
-        crypto_snapshots is the only table carrying features together with
-        forward-looking labels, and nothing could ever be fitted on more than
-        three days of it. The signal log is a record you read when something
-        breaks and can stay short; the snapshots are the dataset and cannot.
+        Nothing is deleted outright. The owner's rule is to keep every row —
+        old signals and snapshots are what later AI analysis runs on — so
+        rows leave the live table only by being copied to the archive first,
+        in the same transaction. If the copy fails, nothing is removed.
+
+        The signal log is not touched at all. It is the evaluation record the
+        null test, the accuracy page and the audit read, and at ~30 signals a
+        day a decade of it is smaller than a week of snapshots.
+
+        The copy and the delete use the same predicate — older than the
+        cutoff AND no newer than the highest id seen before starting — inside
+        one transaction. A row written meanwhile has a higher id and is left
+        alone; a row that was copied is exactly a row that is deleted. Because
+        both halves commit together, a re-run never finds an archived row
+        still in the live table, so nothing is copied twice.
         """
+        from sqlalchemy import insert
+
         from config.settings import settings
 
-        snap = snapshot_days if snapshot_days is not None else settings.snapshot_retention_days
-        logs = signal_log_days if signal_log_days is not None else settings.signal_log_retention_days
+        days = snapshot_days if snapshot_days is not None else settings.snapshot_retention_days
+        moved = {"crypto_snapshots": 0, "commodity_snapshots": 0}
+        if not days or days <= 0:
+            return moved
 
-        snap_cutoff = _now_utc() - timedelta(days=snap)
-        log_cutoff = _now_utc() - timedelta(days=logs)
-        await self.session.execute(
-            delete(CryptoSnapshot).where(CryptoSnapshot.timestamp < snap_cutoff))
-        await self.session.execute(
-            delete(CommoditySnapshot).where(CommoditySnapshot.timestamp < snap_cutoff))
-        await self.session.execute(
-            delete(CryptoSignalLog).where(CryptoSignalLog.timestamp < log_cutoff))
+        cutoff = _now_utc() - timedelta(days=days)
+        dialect = self.session.bind.dialect.name if self.session.bind else ""
+        for live, archive, key in (
+            (CryptoSnapshot, CryptoSnapshotArchive, "crypto_snapshots"),
+            (CommoditySnapshot, CommoditySnapshotArchive, "commodity_snapshots"),
+        ):
+            ceiling = (await self.session.execute(select(func.max(live.id)))).scalar()
+            if ceiling is None:
+                continue
+            which = (live.timestamp < cutoff, live.id <= ceiling)
+            data_cols = [c.name for c in live.__table__.columns if c.name != "id"]
+            source = select(live.id, *[live.__table__.c[c] for c in data_cols]).where(*which)
+            await self.session.execute(
+                insert(archive.__table__).from_select(["source_id", *data_cols], source))
+            result = await self.session.execute(
+                delete(live).where(*which).execution_options(synchronize_session=False))
+            moved[key] = result.rowcount or 0
         await self.session.commit()
+        return moved
 
     # ── Historical candles ──────────────────────────────────────
 

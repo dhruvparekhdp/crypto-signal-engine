@@ -554,8 +554,8 @@ class AppRunner:
     async def _cleanup_job(self) -> None:
         async with AsyncSessionFactory() as session:
             repo = Repository(session)
-            await repo.delete_old_crypto_data()
-        log.info("db_cleanup_done")
+            moved = await repo.archive_old_crypto_data()
+        log.info("db_cleanup_done", archived=moved)
 
     async def _research_pass_job(self) -> None:
         """

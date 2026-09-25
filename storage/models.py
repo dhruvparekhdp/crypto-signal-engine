@@ -120,6 +120,57 @@ class CryptoSnapshot(Base):
     timestamp: Mapped[datetime] = mapped_column(DateTime, index=True)
 
 
+class CryptoSnapshotArchive(Base):
+    """
+    Snapshots older than the live window, moved rather than deleted.
+
+    Nothing is thrown away: the owner wants every row kept for AI analysis
+    later. The live table stays small because the labeller, the research
+    pass and the dashboard scan it constantly; this one is read on demand.
+
+    The archive has its own id. The live id is kept as `source_id` for
+    tracing only, never as a key: ids can be reused (SQLite reuses the max
+    after a delete, and a restore resets the Postgres sequence), so keying
+    on it would one day skip a new row and delete it.
+    """
+
+    __tablename__ = "crypto_snapshots_archive"
+    __table_args__ = (Index("ix_csa_symbol_ts", "symbol", "timestamp"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    source_id: Mapped[int] = mapped_column(Integer, default=0)
+    symbol: Mapped[str] = mapped_column(String)
+    price: Mapped[float] = mapped_column(Float)
+    volume_24h: Mapped[float] = mapped_column(Float, default=0.0)
+    rsi_14: Mapped[float] = mapped_column(Float, default=50.0)
+    macd_line: Mapped[float] = mapped_column(Float, default=0.0)
+    macd_signal: Mapped[float] = mapped_column(Float, default=0.0)
+    bollinger_upper: Mapped[float] = mapped_column(Float, default=0.0)
+    bollinger_lower: Mapped[float] = mapped_column(Float, default=0.0)
+    atr_14: Mapped[float] = mapped_column(Float, default=0.0)
+    sentiment_score: Mapped[float] = mapped_column(Float, default=0.0)
+    price_30m_later: Mapped[float] = mapped_column(Float, default=0.0)
+    price_1h_later: Mapped[float] = mapped_column(Float, default=0.0)
+    price_4h_later: Mapped[float] = mapped_column(Float, default=0.0)
+    price_1d_later: Mapped[float] = mapped_column(Float, default=0.0)
+    timestamp: Mapped[datetime] = mapped_column(DateTime)
+
+
+class CommoditySnapshotArchive(Base):
+    """Commodity snapshots older than the live window. See CryptoSnapshotArchive."""
+
+    __tablename__ = "commodity_snapshots_archive"
+    __table_args__ = (Index("ix_comsa_symbol_ts", "symbol", "timestamp"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    source_id: Mapped[int] = mapped_column(Integer, default=0)
+    symbol: Mapped[str] = mapped_column(String)
+    price: Mapped[float] = mapped_column(Float)
+    rsi_14: Mapped[float] = mapped_column(Float, default=50.0)
+    atr_14: Mapped[float] = mapped_column(Float, default=0.0)
+    timestamp: Mapped[datetime] = mapped_column(DateTime)
+
+
 class CommoditySnapshot(Base):
     """Periodic snapshot of commodity spot prices (Gold, Silver, Oil)."""
 

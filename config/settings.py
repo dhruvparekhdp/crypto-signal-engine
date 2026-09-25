@@ -35,12 +35,11 @@ class Settings(BaseSettings):
     # The cost of keeping it is small. Seven symbols at one snapshot every two
     # minutes is ~5,000 rows a day; at roughly 150 bytes a row, 120 days is
     # about 90 MB — well inside a free managed-Postgres tier.
+    # How long a snapshot stays in the LIVE table. Older rows are moved to
+    # crypto_snapshots_archive / commodity_snapshots_archive, never deleted:
+    # all history is kept for later analysis. 0 = never move.
+    # The signal log is never trimmed at all — it is the evaluation record.
     snapshot_retention_days: int = 120
-    # The signal log is the evaluation record: the null test reads 120 days
-    # of it and the accuracy page 365. At ~30 signals a day it is ~11,000
-    # rows a year, so keeping a year costs nothing; keeping 30 days meant a
-    # restore of older signals was deleted at the next six-hourly cleanup.
-    signal_log_retention_days: int = 365
     port: int = 8080
 
     # Telegram Notifications (optional in dev, required in prod)

@@ -22,7 +22,8 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from storage.database import _make_url
 from storage.models import SECRET_COLUMNS
 from storage.models import (
-    AdminAuth, CommoditySnapshot, CryptoSignalLog, CryptoSnapshot,
+    AdminAuth, CommoditySnapshot, CommoditySnapshotArchive, CryptoSignalLog,
+    CryptoSnapshot, CryptoSnapshotArchive,
     CryptoWatchlistEntry, NewsSentiment, PaperCycle, PaperPosition,
     PaperTrade, PaperTradingConfig, StrategyConfig,
 )
@@ -30,7 +31,8 @@ from storage.models import (
 ALL_MODELS = [
     AdminAuth, StrategyConfig, PaperTradingConfig, CryptoWatchlistEntry,
     PaperCycle, PaperPosition, PaperTrade, CryptoSignalLog, NewsSentiment,
-    CommoditySnapshot, CryptoSnapshot,
+    CommoditySnapshot, CryptoSnapshot, CommoditySnapshotArchive,
+    CryptoSnapshotArchive,
 ]
 
 
