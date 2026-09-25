@@ -96,6 +96,11 @@ class AppRunner:
         self._news_events: tuple = ()
         # Latest web-searched world briefing (a MarketBriefing row).
         self.latest_briefing = None
+        # Event monitor bookkeeping: calls today (for the free-tier cap) and
+        # when it last ran (so a fast-move trigger cannot fire it twice).
+        self._monitor_day = None
+        self._monitor_calls = 0
+        self._monitor_last_run = None
         self.multi_horizon = MultiHorizonPredictor()
         self._ws_tasks: list[asyncio.Task] = []
         # Binance-only leaves klines as the single source of candles, depth
@@ -686,6 +691,7 @@ class AppRunner:
                 pcfg = await repo.get_paper_config()
 
             states = await self.crypto_store.get_all()
+            self._maybe_trigger_monitor(states)
             for state in states:
                 if state.current_price <= 0:
                     continue
@@ -800,6 +806,183 @@ class AppRunner:
                      high_impact=len(self._news_events))
         except Exception:
             log.exception("news_sentiment_job_failed")
+
+    _CATEGORY_TO_EVENT_TYPE = {
+        "central_bank": "rate_decision", "inflation": "inflation_data", "jobs": "jobs_data",
+        "geopolitics_war": "war", "sanctions": "war", "trade_tariffs": "tariff",
+        "crypto_regulation": "regulation", "crypto_etf_flows": "etf_flow",
+        "liquidations_funding": "liquidation", "exchange_hack_insolvency": "hack",
+        "stablecoin": "hack", "corporate_treasury": "adoption",
+    }
+
+    def _schedule_monitor(self, minutes: float) -> None:
+        """Book the next event-monitor run, replacing any already booked."""
+        self.scheduler.add_job(
+            self._event_monitor_job, "date",
+            run_date=datetime.now(UTC) + timedelta(minutes=max(1.0, minutes)),
+            id="event_monitor", replace_existing=True, max_instances=1)
+
+    async def _event_monitor_job(self) -> None:
+        """
+        Adaptive world watch. Replaces the fixed 30-minute briefing.
+
+        Each run: calendar context + the events already tracked go to Groq's
+        web-search model, which reports new events (graded 1-5), updates and
+        resolutions. The next run is booked from the biggest live event —
+        about 45 minutes when calm, 5 during a level-5 shock, with jitter —
+        and pulled forward to just after any scheduled release. A daily cap
+        keeps it inside Groq's free tier. Shadow mode: nothing here changes a
+        paper trade.
+        """
+        import hashlib
+
+        from analysis.event_calendar import EVENTS_2026, calendar_text
+        from analysis.event_monitor import (
+            MONITOR_SYSTEM,
+            ActiveEvent,
+            active_window,
+            monitor_model_role,
+            monitor_prompt,
+            next_delay_minutes,
+            parse_monitor,
+        )
+        from collectors.llm_client import ask_json, chain_for
+        from collectors.market_briefing import as_news_items
+
+        now = datetime.now(UTC).replace(tzinfo=None)
+        max_level = 0
+        try:
+            if not settings.event_monitor_enabled or not chain_for("briefing"):
+                return
+            if self._monitor_day != now.date():
+                self._monitor_day, self._monitor_calls = now.date(), 0
+            if self._monitor_calls >= settings.event_monitor_daily_cap:
+                log.info("event_monitor_daily_cap_reached", calls=self._monitor_calls)
+                return
+            async with AsyncSessionFactory() as session:
+                rows = await Repository(session).recent_events(14)
+            active = active_window([
+                ActiveEvent(r.id, r.title, r.category, r.level_current, r.happened_at, r.direction)
+                for r in rows if r.status == "active"], now)
+            max_level = max((e.level for e in active), default=0)
+            self._monitor_calls += 1
+            self._monitor_last_run = now
+            reply = await ask_json(monitor_model_role(max_level), MONITOR_SYSTEM,
+                                   monitor_prompt(calendar_text(now), active),
+                                   max_tokens=1800, temperature=0.2, timeout=90.0)
+            if not reply or not isinstance(reply.data, dict):
+                return
+            got = parse_monitor(reply.data, {e.id for e in active})
+            news = []
+            async with AsyncSessionFactory() as session:
+                repo = Repository(session)
+                for e in got["new"]:
+                    key = "news:" + hashlib.sha256(e["title"].lower().encode()).hexdigest()[:24]
+                    try:
+                        when = datetime.fromisoformat(e["when"].replace("Z", "+00:00"))
+                        when = when.astimezone(UTC).replace(tzinfo=None) if when.tzinfo else when
+                    except ValueError:
+                        when = now
+                    await repo.upsert_event(key, title=e["title"], category=e["category"],
+                                            level=e["level"], direction=e["direction"],
+                                            source=e["source"], happened_at=when)
+                    max_level = max(max_level, e["level"])
+                    news.append({"headline": e["title"], "score": e["score"],
+                                 "confidence": e["confidence"], "when": e["when"],
+                                 "source": e["source"],
+                                 "event_type": self._CATEGORY_TO_EVENT_TYPE.get(
+                                     e["category"], "macro_other")})
+                for u in got["updates"]:
+                    await repo.update_event(u["id"], level=u["level"], note=u["note"])
+                    if u["level"]:
+                        max_level = max(max_level, u["level"])
+                for rid in got["resolved"]:
+                    await repo.update_event(rid, resolved=True)
+                await repo.save_briefing(got["risk_tone"], got["summary"], news,
+                                         reply.served_by, reply.latency_ms)
+                if news:
+                    await repo.ingest_news_sentiment(as_news_items(news, reply.served_by))
+                self.latest_briefing = await repo.latest_briefing()
+            log.info("event_monitor_ran", new=len(got["new"]), updates=len(got["updates"]),
+                     resolved=len(got["resolved"]), max_level=max_level,
+                     served_by=reply.served_by, calls_today=self._monitor_calls)
+        except Exception:
+            log.exception("event_monitor_failed")
+        finally:
+            delay = next_delay_minutes(max_level)
+            # Just after a scheduled release, look at what it did.
+            for ev in EVENTS_2026:
+                for after in (2, 15):
+                    mins = (ev.at + timedelta(minutes=after) - now).total_seconds() / 60
+                    if 0 < mins < delay:
+                        delay = mins
+            try:
+                self._schedule_monitor(delay)
+            except Exception:
+                log.exception("event_monitor_reschedule_failed")
+
+    def _maybe_trigger_monitor(self, states) -> None:
+        """A fast BTC move means something probably just happened: check now."""
+        btc = next((s for s in states if s.symbol == "btcusdt"), None)
+        if btc is None or len(btc.candles_1m) < 6:
+            return
+        a, b = btc.candles_1m[-6].close, btc.candles_1m[-1].close
+        if a <= 0 or abs(b - a) / a < 0.012:
+            return
+        last = self._monitor_last_run
+        now = datetime.now(UTC).replace(tzinfo=None)
+        if last is not None and (now - last).total_seconds() < 300:
+            return
+        log.info("event_monitor_triggered_by_move", move_pct=round((b - a) / a * 100, 2))
+        self._schedule_monitor(0)
+
+    async def _event_evaluation_job(self) -> None:
+        """
+        Every 30 minutes: file scheduled releases as events, confirm each
+        event's level from how far BTC actually moved in the 2 hours after it,
+        and run the four shadow books on level 4-5 events once 6 hours of
+        prices have followed.
+        """
+        from analysis.event_calendar import EVENTS_2026
+        from analysis.event_monitor import (
+            confirmed_level,
+            max_abs_move,
+            simulate_books,
+        )
+
+        now = datetime.now(UTC).replace(tzinfo=None)
+        try:
+            async with AsyncSessionFactory() as session:
+                repo = Repository(session)
+                for ev in EVENTS_2026:
+                    if now - timedelta(days=14) <= ev.at <= now:
+                        level = {"fomc": 5 if "projections" in ev.name else 4,
+                                 "cpi": 4, "nfp": 4}.get(ev.kind, 3)
+                        await repo.upsert_event(
+                            f"sched:{ev.kind}:{ev.at.isoformat()}", title=ev.name,
+                            category={"fomc": "central_bank", "cpi": "inflation",
+                                      "nfp": "jobs"}.get(ev.kind, "inflation"),
+                            level=level, source="scheduled", happened_at=ev.at)
+                events = await repo.recent_events(14)
+                if not events:
+                    return
+                points = await repo.price_points(["btcusdt", "ethusdt", "solusdt"], 14 * 24)
+                btc = sorted(points.get("btcusdt", []))
+                for e in events:
+                    if e.level_confirmed is None and now - e.happened_at >= timedelta(hours=2):
+                        move = max_abs_move(btc, e.happened_at)
+                        if move is not None:
+                            e.btc_move_2h_pct = round(move, 3)
+                            e.level_confirmed = confirmed_level(move)
+                    big = max(e.level_current or 0, e.level_confirmed or 0) >= 4
+                    if big and not e.shadow_done and now - e.happened_at >= timedelta(hours=6):
+                        level = max(e.level_current or 0, e.level_confirmed or 0)
+                        paths = {s: sorted(p) for s, p in points.items()}
+                        await repo.save_shadow(e.id, simulate_books(e.happened_at, level, paths))
+                        log.info("event_shadow_books_saved", event=e.title[:60])
+                await session.commit()
+        except Exception:
+            log.exception("event_evaluation_failed")
 
     async def _market_briefing_job(self) -> None:
         """
@@ -1115,13 +1298,25 @@ class AppRunner:
             max_instances=1,
             next_run_time=datetime.now(UTC) + timedelta(minutes=5),
         )
+        if settings.event_monitor_enabled:
+            # Self-scheduling: each run books the next one (adaptive timing).
+            self._schedule_monitor(1)
+        else:
+            self.scheduler.add_job(
+                self._market_briefing_job,
+                "interval",
+                minutes=settings.market_briefing_minutes,
+                id="market_briefing",
+                max_instances=1,
+                next_run_time=datetime.now(UTC),
+            )
         self.scheduler.add_job(
-            self._market_briefing_job,
+            self._event_evaluation_job,
             "interval",
-            minutes=settings.market_briefing_minutes,
-            id="market_briefing",
+            minutes=30,
+            id="event_evaluation",
             max_instances=1,
-            next_run_time=datetime.now(UTC),
+            next_run_time=datetime.now(UTC) + timedelta(minutes=3),
         )
         self.scheduler.add_job(
             self._news_sentiment_job,

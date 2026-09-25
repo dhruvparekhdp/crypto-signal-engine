@@ -411,6 +411,52 @@ class MarketBriefing(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_now_utc, index=True)
 
 
+class MarketEvent(Base):
+    """
+    One world event, tracked from first sighting until it stops mattering.
+
+    Two levels on the 1-5 scale: the model's when it first saw the event, and
+    the market's afterwards, from how far BTC actually moved. Two weeks of both
+    say whether the model's levels mean anything.
+    """
+
+    __tablename__ = "market_events"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    key: Mapped[str] = mapped_column(String, unique=True, index=True)   # dedup
+    title: Mapped[str] = mapped_column(Text)
+    category: Mapped[str] = mapped_column(String, default="other", index=True)
+    level_initial: Mapped[int] = mapped_column(Integer, default=2)
+    level_current: Mapped[int] = mapped_column(Integer, default=2)
+    level_confirmed: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    btc_move_2h_pct: Mapped[float | None] = mapped_column(Float, nullable=True)
+    direction: Mapped[str] = mapped_column(String, default="mixed")
+    source: Mapped[str] = mapped_column(String, default="")      # "scheduled" or a site
+    notes: Mapped[str] = mapped_column(Text, default="")
+    status: Mapped[str] = mapped_column(String, default="active")  # active | resolved
+    happened_at: Mapped[datetime] = mapped_column(DateTime, index=True)
+    first_seen: Mapped[datetime] = mapped_column(DateTime, default=_now_utc)
+    last_seen: Mapped[datetime] = mapped_column(DateTime, default=_now_utc)
+    shadow_done: Mapped[bool] = mapped_column(Boolean, default=False)
+
+
+class EventShadowTrade(Base):
+    """What each shadow book would have done around one level 4-5 event."""
+
+    __tablename__ = "event_shadow_trades"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    event_id: Mapped[int] = mapped_column(Integer, index=True)
+    book: Mapped[str] = mapped_column(String, index=True)
+    symbol: Mapped[str] = mapped_column(String, default="")
+    side: Mapped[str] = mapped_column(String, default="")
+    entry: Mapped[float] = mapped_column(Float, default=0.0)
+    exit: Mapped[float] = mapped_column(Float, default=0.0)
+    wallet_pct: Mapped[float] = mapped_column(Float, default=0.0)
+    note: Mapped[str] = mapped_column(Text, default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=_now_utc)
+
+
 class MoveAttribution(Base):
     """
     One hourly answer to "why did the watchlist move, and were our signals right".

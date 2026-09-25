@@ -697,6 +697,70 @@ class Repository:
         await self.session.commit()
         return row.id
 
+    # ── World events (the event monitor) ─────────────────────────────────
+
+    async def recent_events(self, days: float = 14) -> list:
+        from storage.models import MarketEvent
+        cutoff = _now_utc() - timedelta(days=days)
+        res = await self.session.execute(
+            select(MarketEvent).where(MarketEvent.happened_at >= cutoff)
+            .order_by(MarketEvent.happened_at.desc()))
+        return list(res.scalars().all())
+
+    async def upsert_event(self, key: str, **fields):
+        """Insert an event, or refresh last_seen if the key is already known."""
+        from storage.models import MarketEvent
+        res = await self.session.execute(select(MarketEvent).where(MarketEvent.key == key))
+        row = res.scalar_one_or_none()
+        if row is None:
+            level = fields.get("level", 2)
+            row = MarketEvent(key=key, title=fields.get("title", "")[:1000],
+                              category=fields.get("category", "other"),
+                              level_initial=level, level_current=level,
+                              direction=fields.get("direction", "mixed"),
+                              source=fields.get("source", ""),
+                              happened_at=fields.get("happened_at") or _now_utc(),
+                              first_seen=_now_utc(), last_seen=_now_utc())
+            self.session.add(row)
+        else:
+            row.last_seen = _now_utc()
+        await self.session.commit()
+        return row
+
+    async def update_event(self, event_id: int, level: int | None = None,
+                           note: str = "", resolved: bool = False) -> None:
+        from storage.models import MarketEvent
+        row = await self.session.get(MarketEvent, event_id)
+        if row is None:
+            return
+        if level:
+            row.level_current = level
+        if note:
+            row.notes = ((row.notes + " | ") if row.notes else "") + note[:300]
+        if resolved:
+            row.status = "resolved"
+        row.last_seen = _now_utc()
+        await self.session.commit()
+
+    async def save_shadow(self, event_id: int, results) -> None:
+        from storage.models import EventShadowTrade, MarketEvent
+        for r in results:
+            self.session.add(EventShadowTrade(
+                event_id=event_id, book=r.book, symbol=r.symbol, side=r.side,
+                entry=r.entry, exit=r.exit, wallet_pct=r.wallet_pct, note=r.note[:500]))
+        row = await self.session.get(MarketEvent, event_id)
+        if row is not None:
+            row.shadow_done = True
+        await self.session.commit()
+
+    async def shadow_trades(self, days: float = 30) -> list:
+        from storage.models import EventShadowTrade
+        cutoff = _now_utc() - timedelta(days=days)
+        res = await self.session.execute(
+            select(EventShadowTrade).where(EventShadowTrade.created_at >= cutoff)
+            .order_by(EventShadowTrade.created_at.desc()))
+        return list(res.scalars().all())
+
     async def price_points(self, symbols: list[str], hours: int = 13) -> dict:
         """symbol -> [(timestamp, price)] from the live snapshots."""
         cutoff = _now_utc() - timedelta(hours=hours)

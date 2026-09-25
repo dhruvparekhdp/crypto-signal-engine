@@ -95,3 +95,122 @@ def upcoming(now: datetime, days: int = 14,
     """Scheduled releases in the next `days`, soonest first, for the dashboard."""
     horizon = now + timedelta(days=days)
     return sorted((e for e in events if now <= e.at <= horizon), key=lambda e: e.at)
+
+
+# ── The recurring calendar ────────────────────────────────────────────────
+#
+# What kind of hour, day, week, month and quarter it is, before anyone asks
+# a model anything. Every prompt the event monitor sends starts with this, so
+# it asks about options expiry in expiry week, about the fiscal year when one
+# turns over, and on a quiet weekend only about surprises. Levels are 1-5,
+# the same scale the monitor uses for news.
+
+@dataclass(frozen=True)
+class CalendarItem:
+    name: str
+    level: int
+    when: str          # human text, e.g. "today 08:00 UTC", "this week"
+
+
+def _nth_weekday(year: int, month: int, weekday: int, n: int) -> datetime:
+    """The n-th given weekday of a month (weekday: Mon=0). n=-1 is the last."""
+    if n > 0:
+        d = datetime(year, month, 1)
+        d += timedelta(days=(weekday - d.weekday()) % 7)
+        return d + timedelta(weeks=n - 1)
+    nxt = datetime(year + (month == 12), month % 12 + 1, 1)
+    d = nxt - timedelta(days=1)
+    return d - timedelta(days=(d.weekday() - weekday) % 7)
+
+
+def _last_business_day(year: int, month: int) -> datetime:
+    nxt = datetime(year + (month == 12), month % 12 + 1, 1)
+    d = nxt - timedelta(days=1)
+    while d.weekday() >= 5:
+        d -= timedelta(days=1)
+    return d
+
+
+def calendar_context(now: datetime) -> list[CalendarItem]:
+    """Recurring structure active or close at `now` (naive UTC), highest level first."""
+    out: list[CalendarItem] = []
+    d = now.date()
+    wd = now.weekday()           # Mon=0 .. Sun=6
+    y, m = now.year, now.month
+
+    # Intraday
+    for hh in (0, 8, 16):
+        mins = (now.hour * 60 + now.minute) - hh * 60
+        if -30 <= mins <= 15:
+            out.append(CalendarItem("Binance perpetual funding settlement", 1, f"{hh:02d}:00 UTC"))
+    if wd < 5:
+        us_open = 13 if now.month in (11, 12, 1, 2) or (now.month == 3 and now.day < 9) else 12
+        if us_open * 60 <= now.hour * 60 + now.minute + 30 <= us_open * 60 + 90:
+            out.append(CalendarItem("US stock market open", 2, f"{us_open}:30 UTC"))
+    # Weekly
+    if wd == 4:
+        out.append(CalendarItem("Deribit weekly options expiry", 2, "today 08:00 UTC"))
+    if wd == 3:
+        out.append(CalendarItem("US weekly jobless claims", 2, "today 12:30/13:30 UTC"))
+    if wd >= 5 or (wd == 4 and now.hour >= 21):
+        out.append(CalendarItem("Weekend: thin liquidity, CME Bitcoin futures closed "
+                                "(gap risk at Sunday open)", 2, "until Sun 22:00 UTC"))
+    # Monthly
+    last_fri = _nth_weekday(y, m, 4, -1).date()
+    if 0 <= (last_fri - d).days <= 4:
+        lvl = 4 if m in (3, 6, 9, 12) else 3
+        out.append(CalendarItem(("Quarterly" if lvl == 4 else "Monthly")
+                                + " Deribit and CME Bitcoin options/futures expiry", lvl,
+                                f"{last_fri:%a %d %b} 08:00 UTC"))
+    lbd = _last_business_day(y, m).date()
+    if 0 <= (lbd - d).days <= 2:
+        out.append(CalendarItem("Month-end fund rebalancing", 2, f"through {lbd:%d %b}"))
+    first_fri = _nth_weekday(y, m, 4, 1).date()
+    if 0 <= (first_fri - d).days <= 2:
+        out.append(CalendarItem("US jobs report (NFP), first Friday", 4, f"{first_fri:%a %d %b}"))
+    # Quarterly
+    if m in (3, 6, 9, 12):
+        third_fri = _nth_weekday(y, m, 4, 3).date()
+        if 0 <= (third_fri - d).days <= 5:
+            out.append(CalendarItem("Triple witching: US stock index options and futures expiry",
+                                    3, f"{third_fri:%a %d %b}"))
+        if (lbd - d).days <= 5 and lbd >= d:
+            out.append(CalendarItem("Quarter-end window dressing and rebalancing", 2,
+                                    f"through {lbd:%d %b}"))
+    if m in (1, 4, 7, 10) and d.day <= 31 and 10 <= d.day <= 31:
+        out.append(CalendarItem("Earnings season: Coinbase, MicroStrategy, big tech, Nvidia",
+                                2, "this month"))
+    # Yearly
+    yearly = [
+        ((2, 1), "India Union Budget (crypto tax changes land here)", 3),
+        ((4, 1), "India and Japan financial years start", 3),
+        ((4, 15), "US tax day", 2),
+        ((10, 1), "US federal fiscal year starts (shutdown risk if no funding bill)", 3),
+    ]
+    for (mm, dd), name, lvl in yearly:
+        try:
+            day = datetime(y, mm, dd).date()
+        except ValueError:
+            continue
+        if -1 <= (day - d).days <= 7:
+            out.append(CalendarItem(name, lvl, f"{day:%d %b}"))
+    if m == 8 and d.day >= 18:
+        out.append(CalendarItem("Jackson Hole central bank symposium (late August)", 4, "late Aug"))
+    if (m == 12 and d.day >= 20) or (m == 1 and d.day <= 2):
+        out.append(CalendarItem("Year-end holidays: thin liquidity", 2, "20 Dec - 2 Jan"))
+    # Scheduled releases in the dated list, next 3 days
+    for ev in EVENTS_2026:
+        gap = (ev.at - now).total_seconds() / 3600
+        if -2 <= gap <= 72:
+            lvl = {"fomc": 5 if "projections" in ev.name else 4, "cpi": 4, "nfp": 4}.get(ev.kind, 3)
+            out.append(CalendarItem(ev.name, lvl, f"{ev.at:%a %d %b %H:%M} UTC"))
+    return sorted(out, key=lambda c: -c.level)
+
+
+def calendar_text(now: datetime) -> str:
+    """The calendar block a prompt starts with."""
+    items = calendar_context(now)
+    head = f"Now: {now:%A %d %B %Y, %H:%M} UTC."
+    if not items:
+        return head + " No scheduled market events nearby."
+    return head + "\n" + "\n".join(f"- [L{c.level}] {c.name} ({c.when})" for c in items)

@@ -894,6 +894,8 @@ async def _api_moves(runner, request: web.Request) -> web.Response:
         repo = Repository(session)
         rows = await repo.recent_move_attributions(limit)
         briefing = await repo.latest_briefing()
+        events = await repo.recent_events(14)
+        shadow = await repo.shadow_trades(30)
     now = datetime.now(UTC).replace(tzinfo=None)
     body = {
         "runs": [{
@@ -909,6 +911,16 @@ async def _api_moves(runner, request: web.Request) -> web.Response:
         },
         "upcoming": [{"at": _iso(e.at), "kind": e.kind, "name": e.name}
                      for e in upcoming(now, days=7)],
+        "events": [{
+            "id": e.id, "title": e.title, "category": e.category, "at": _iso(e.happened_at),
+            "level": e.level_current, "level_initial": e.level_initial,
+            "level_confirmed": e.level_confirmed, "btc_move_2h_pct": e.btc_move_2h_pct,
+            "direction": e.direction, "status": e.status, "source": e.source,
+        } for e in events],
+        "shadow": [{
+            "event_id": s.event_id, "book": s.book, "symbol": s.symbol, "side": s.side,
+            "wallet_pct": s.wallet_pct, "note": s.note, "at": _iso(s.created_at),
+        } for s in shadow],
     }
     return web.Response(text=json.dumps(body), content_type="application/json")
 
@@ -4604,7 +4616,24 @@ h2{font-size:15px;color:var(--text-strong);margin-bottom:10px}
 .hist time{color:var(--muted);font-variant-numeric:tabular-nums}
 .hist .txt{color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .empty{color:var(--muted);padding:20px;text-align:center}
+.lv{display:inline-grid;place-items:center;width:26px;height:26px;border-radius:7px;font-weight:800;font-size:13px}
+.lv.l5{background:var(--neg);color:var(--bg)} .lv.l4{background:var(--neg-t);color:var(--neg)}
+.lv.l3{background:var(--acc-t);color:var(--accent)} .lv.l2,.lv.l1{background:var(--mut-t);color:var(--muted)}
+.evt{display:grid;grid-template-columns:34px 1fr auto;gap:10px;align-items:center;padding:9px 0;border-bottom:1px solid var(--line2)}
+.evt:last-child{border-bottom:none}
+.evt .t{color:var(--text-strong)} .evt .s{font-size:12px;color:var(--muted)}
+.books{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:12px}
+.book{background:var(--panel2);border-radius:10px;padding:10px 12px}
+.book .n{font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.06em}
+.book .v{font-size:20px;font-weight:700;font-variant-numeric:tabular-nums}
+.book .d{font-size:12px;color:var(--muted)}
+table.sb{width:100%;border-collapse:collapse;font-size:13px}
+table.sb td,table.sb th{padding:7px 8px;border-bottom:1px solid var(--line2);text-align:left}
+table.sb th{font-size:10.5px;color:var(--muted2);text-transform:uppercase;letter-spacing:.06em}
+table.sb td.n{text-align:right;font-variant-numeric:tabular-nums}
+.sbwrap{overflow-x:auto}
 @media(max-width:760px){
+  .books{grid-template-columns:repeat(2,1fr)}
   main{padding:12px}
   .hero,.verdict{grid-template-columns:1fr}
   .tone{border-left:none;padding-left:0;border-top:1px solid var(--line);padding-top:12px}
@@ -4637,7 +4666,7 @@ function render(){
   const main=document.getElementById('main');
   if(!DATA || !DATA.runs.length){
     main.innerHTML='<div class="card empty">No analysis yet. It runs every hour once the engine has an hour of prices and a Groq key; press <b>Run analysis now</b> to start one.</div>'
-      + briefingCard();
+      + eventsCard() + shadowCard() + briefingCard();
     return;
   }
   const run=DATA.runs[SEL], r=run.result||{};
@@ -4688,6 +4717,7 @@ function render(){
   h+='<section class="card verdict"><div><h2>How our signals did</h2><p>'+esc(r.signals_verdict||'No verdict.')+'</p></div>'
     +'<div>'+(r.lesson?'<div class="lesson"><b>One change to make:</b> '+esc(r.lesson)+'</div>':'')
     +upcomingBlock()+'</div></section>';
+  h+=eventsCard()+shadowCard();
   h+=briefingCard();
   // history
   h+='<section class="card"><h2>Earlier analyses</h2><div class="hist">'
@@ -4708,6 +4738,33 @@ function briefingCard(){
     +((b.events||[]).length?'<div class="events" style="margin-top:12px">'+b.events.map(e=>'<div><span class="badge">'+esc(e.event_type)+'</span><span>'+esc(e.headline)
       +(e.source?' <span class="muted">· '+esc(e.source)+'</span>':'')+'</span></div>').join('')+'</div>':'')
     +'<div class="meta">'+stamp(b.at)+' · '+esc(b.model)+'</div></section>';
+}
+const BOOKS={A_pause:'A · Pause (no trade)',B_double_at_release:'B · Your idea: 2x at release, 0.3% trail',
+  C_confirmed_breakout:'C · Wait, trade the breakout, 2x size',D_basket:'D · Basket BTC+ETH+SOL'};
+function eventsCard(){
+  const ev=(DATA&&DATA.events)||[];
+  let h='<section class="card"><h2>World events, last 14 days <span class="muted" style="font-weight:400;font-size:12px">· level 1-5 · shadow mode</span></h2>';
+  if(!ev.length) return h+'<div class="empty">No events tracked yet. The monitor checks every 5-45 minutes depending on what is happening.</div></section>';
+  h+=ev.slice(0,40).map(e=>{ const c=e.level_confirmed;
+    return '<div class="evt"><span class="lv l'+e.level+'">'+e.level+'</span><div><div class="t">'+esc(e.title)+'</div>'
+      +'<div class="s">'+stamp(e.at)+' · '+esc(e.category.replace(/_/g,' '))+(e.source?' · '+esc(e.source):'')+(e.status!=='active'?' · '+esc(e.status):'')+'</div></div>'
+      +'<div class="s" style="text-align:right">'+(c!=null?'market said <b>L'+c+'</b><br>BTC '+(e.btc_move_2h_pct!=null?e.btc_move_2h_pct.toFixed(2)+'% in 2h':''):'waiting for<br>2h of prices')+'</div></div>'; }).join('');
+  return h+'</section>';
+}
+function shadowCard(){
+  const rows=(DATA&&DATA.shadow)||[]; const ev={}; ((DATA&&DATA.events)||[]).forEach(e=>ev[e.id]=e);
+  let h='<section class="card"><h2>Event trading, shadow books</h2><p class="meta" style="margin:0 0 12px">Every level 4-5 event is replayed four ways on the prices that followed it. P&amp;L is % of wallet after fees. Nothing here was traded; it decides which rule goes live after two weeks.</p>';
+  if(!rows.length) return h+'<div class="empty">No level 4-5 event has 6 hours of prices after it yet. Next scheduled: '+esc(((DATA.upcoming||[])[0]||{}).name||'see the list above')+'.</div></section>';
+  const tot={}, n={}, wins={};
+  rows.forEach(r=>{ tot[r.book]=(tot[r.book]||0)+r.wallet_pct; n[r.book]=(n[r.book]||0)+1; if(r.wallet_pct>0) wins[r.book]=(wins[r.book]||0)+1; });
+  h+='<div class="books">'+Object.keys(BOOKS).map(b=>{ const v=tot[b]||0;
+    return '<div class="book"><div class="n">'+esc(BOOKS[b])+'</div><div class="v '+(v>0?'pos':v<0?'neg':'muted')+'">'+(v>=0?'+':'')+v.toFixed(2)+'%</div>'
+      +'<div class="d">'+(n[b]||0)+' events · '+(wins[b]||0)+' won</div></div>'; }).join('')+'</div>';
+  h+='<div class="sbwrap"><table class="sb"><tr><th>Event</th><th>Book</th><th>Side</th><th class="n">P&amp;L</th><th>What happened</th></tr>'
+    +rows.slice(0,60).map(r=>'<tr><td>'+esc(((ev[r.event_id]||{}).title||'#'+r.event_id).slice(0,60))+'</td><td>'+esc(BOOKS[r.book]||r.book)+'</td><td>'+esc(r.side||'—')+'</td>'
+      +'<td class="n '+(r.wallet_pct>0?'pos':r.wallet_pct<0?'neg':'muted')+'">'+(r.wallet_pct>=0?'+':'')+r.wallet_pct.toFixed(2)+'%</td><td class="muted">'+esc(r.note)+'</td></tr>').join('')
+    +'</table></div>';
+  return h+'</section>';
 }
 function pick(i){ SEL=i; render(); window.scrollTo({top:0,behavior:'smooth'}); }
 async function load(){

@@ -111,6 +111,11 @@ class Settings(BaseSettings):
     # Hourly: why each watchlist coin moved, and how our signals fared.
     llm_chain_attribution: str = "groq:groq/compound, groq:openai/gpt-oss-120b"
     move_attribution_enabled: bool = True
+    # The event monitor: adaptive, jittered web checks with a daily cap that
+    # keeps Groq's free web-search limit (250/day) intact. Shadow mode only.
+    event_monitor_enabled: bool = True
+    event_monitor_daily_cap: int = 200
+    llm_chain_briefing_calm: str = "groq:groq/compound-mini, groq:groq/compound"
     move_attribution_minutes: int = 60
     move_attribution_window_hours: int = 12
     # Reviewing what is already open.
