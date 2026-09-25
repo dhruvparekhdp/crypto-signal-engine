@@ -595,7 +595,7 @@ class Repository:
                 confidence=max(0.0, min(1.0, float(item.get("confidence") or 0.5))),
                 event_type=str(item.get("event_type") or "other")[:40],
                 model=str(item.get("model") or "")[:80],
-                published_at=_parse_dt(item.get("published_at")),
+                published_at=_parse_dt(item.get("published_at")) or _now_utc(),
             ))
             accepted += 1
         if accepted:

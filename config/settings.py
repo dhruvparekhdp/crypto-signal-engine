@@ -96,7 +96,7 @@ class Settings(BaseSettings):
     llm_chain_pre_trade: str = (
         "groq:openai/gpt-oss-20b, openrouter:qwen/qwen3-32b")
     llm_chain_post_trade: str = (
-        "anthropic:claude-sonnet-5, gemini:gemini-2.5-flash, groq:openai/gpt-oss-120b")
+        "anthropic:claude-sonnet-5, groq:openai/gpt-oss-120b, gemini:gemini-3.6-flash")
     # Reviewing what is already open.
     #
     # A losing position has to keep earning the right to stay open: the local
@@ -155,13 +155,16 @@ class Settings(BaseSettings):
     # a few hundred headlines a day it is also the one that would cost the
     # most through a metered API. Local first, and the free tiers behind it.
     llm_chain_news_scoring: str = (
-        "ollama:qwen3:1.7b, groq:openai/gpt-oss-20b, gemini:gemini-2.5-flash")
+        "ollama:qwen3:1.7b, groq:openai/gpt-oss-20b, gemini:gemini-3.1-flash-lite")
 
+    # Groq leads, not the laptop: this call sits inside the 30-second paper
+    # tick with a 12-second budget, and an 8B model on the i5 needs 10-25 s
+    # just to read the prompt. gemini-2.5-* is being shut down in October.
     llm_chain_position_review: str = (
-        "ollama:qwen3:8b, gemini:gemini-2.5-flash, groq:openai/gpt-oss-120b")
+        "groq:openai/gpt-oss-120b, gemini:gemini-3.1-flash-lite, gemini:gemini-3.6-flash")
 
     llm_chain_research: str = (
-        "anthropic:claude-opus-5, gemini:gemini-2.5-pro")
+        "anthropic:claude-opus-5-5, anthropic:claude-opus-5, gemini:gemini-3.1-pro-preview")
 
     # Market Data & External APIs
     twelvedata_api_key: str | None = None

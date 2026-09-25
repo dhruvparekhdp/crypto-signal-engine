@@ -180,12 +180,16 @@ def _extract_json(text: str) -> dict[str, Any]:
         if text.startswith("json"):
             text = text[4:]
     try:
-        return json.loads(text)
+        parsed = json.loads(text)
+        # Callers index the reply as a dict; a bare list or number from a
+        # confused model must read as "no answer", not raise downstream.
+        return parsed if isinstance(parsed, dict) else {}
     except Exception:
         start, end = text.find("{"), text.rfind("}")
         if 0 <= start < end:
             try:
-                return json.loads(text[start:end + 1])
+                parsed = json.loads(text[start:end + 1])
+                return parsed if isinstance(parsed, dict) else {}
             except Exception:
                 return {}
         return {}
@@ -205,6 +209,14 @@ async def _call_openai_shaped(provider: Provider, model: str, system: str,
     # OpenRouter accept it and it measurably reduces prose around the object.
     if provider.name != "gemini":
         payload["response_format"] = {"type": "json_object"}
+    # Reasoning models spend max_tokens on thinking before they write the
+    # answer, so a 120-token budget comes back empty and the chain falls
+    # through silently. qwen3 on Ollama thinks unless told not to ("none"
+    # maps to think:false on /v1); gpt-oss on Groq is kept to "low".
+    if provider.name == "ollama":
+        payload["reasoning_effort"] = "none"
+    elif provider.name == "groq" and model.startswith("openai/gpt-oss"):
+        payload["reasoning_effort"] = "low"
 
     headers = {"Content-Type": "application/json"}
     if provider.needs_key:

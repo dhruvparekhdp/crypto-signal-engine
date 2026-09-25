@@ -132,10 +132,21 @@ class TestAModelOnHardwareYouOwn(unittest.TestCase):
             self.assertEqual(PROVIDERS["ollama"].url,
                              "http://dhruv-ai:11434/v1/chat/completions")
 
-    def test_it_leads_the_position_review_chain(self):
+    def test_it_leads_the_news_chain(self):
+        """News scoring has no deadline, which is the work a slow CPU suits."""
         from config.settings import settings as real
 
-        self.assertEqual(_parse_chain(real.llm_chain_position_review)[0][0], "ollama")
+        self.assertEqual(_parse_chain(real.llm_chain_news_scoring)[0][0], "ollama")
+
+    def test_it_stays_out_of_the_paper_tick(self):
+        """
+        Position review runs inside the 30-second tick on a 12-second budget;
+        an 8B model on the i5 needs longer than that to read the prompt.
+        """
+        from config.settings import settings as real
+
+        chain = _parse_chain(real.llm_chain_position_review)
+        self.assertNotIn("ollama", [p for p, _ in chain])
 
     def test_the_cloud_still_sits_behind_it(self):
         """
@@ -145,7 +156,7 @@ class TestAModelOnHardwareYouOwn(unittest.TestCase):
         """
         from config.settings import settings as real
 
-        chain = _parse_chain(real.llm_chain_position_review)
+        chain = _parse_chain(real.llm_chain_news_scoring)
         self.assertGreater(len(chain), 1)
         self.assertNotIn("ollama", [p for p, _ in chain[1:]])
 

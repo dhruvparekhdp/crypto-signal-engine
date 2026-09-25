@@ -157,7 +157,9 @@ def _parse_date(raw: str) -> datetime | None:
     except (TypeError, ValueError):
         pass
     try:
-        return datetime.fromisoformat(raw.replace("Z", "+00:00")).replace(tzinfo=None)
+        dt = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+        # Convert, don't strip: an Atom time of 09:00+05:30 is 03:30 UTC.
+        return (dt.astimezone(UTC) if dt.tzinfo else dt).replace(tzinfo=None)
     except ValueError:
         return None
 
@@ -183,7 +185,7 @@ def parse_feed(xml: str, source: str, limit: int = 25) -> list[Headline]:
         link = _text(item, "link")
         if title and link:
             out.append(Headline(stable_id(link, title), title, source, link,
-                                _parse_date(_text(item, "pubDate", "date"))))
+                                _parse_date(_text(item, "pubDate", "{http://purl.org/dc/elements/1.1/}date"))))
         if len(out) >= limit:
             return out
 
@@ -282,7 +284,7 @@ async def score_headline(headline: Headline) -> Headline:
     try:
         reply = await ask_json("news_scoring", SCORING_SYSTEM,
                                f"{headline.source}: {headline.headline}",
-                               max_tokens=120, temperature=0.0, timeout=30.0)
+                               max_tokens=300, temperature=0.0, timeout=30.0)
     except Exception as exc:
         log.warning("hermes_score_failed", error=str(exc)[:140])
         return headline

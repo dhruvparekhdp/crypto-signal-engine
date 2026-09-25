@@ -32,6 +32,8 @@ diligence, it is latency and money.
 """
 from __future__ import annotations
 
+import math
+
 from dataclasses import dataclass
 from datetime import datetime
 
@@ -325,10 +327,17 @@ async def review_position(pos, state, now: datetime, losing: bool = True) -> Rev
 
     from collectors.macro_sentinel import _clean_factors
 
+    if not isinstance(reply.data, dict):
+        return _no_answer(trend)
     try:
         delta = float(reply.data.get("delta", 0.0) or 0.0)
     except (TypeError, ValueError):
         delta = 0.0
+    # float("nan") parses, and the clamp in decide() turns NaN into the
+    # maximum hold nudge — a garbage answer must not be the strongest
+    # argument for keeping a loser open.
+    if not math.isfinite(delta):
+        return _no_answer(trend)
 
     review = decide(trend, delta,
                     factors=_clean_factors(reply.data.get("factors"), HOLD_FACTORS),
