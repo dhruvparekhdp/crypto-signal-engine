@@ -147,6 +147,7 @@ def fees_for(symbol: str) -> FeeModel:
     spec = spec_for(symbol)
     return FeeModel(
         taker_pct=spec.taker_pct,
+        maker_pct=spec.maker_pct,
         maintenance_margin_pct=spec.maintenance_margin_pct,
         funding_rate_per_8h=spec.funding_rate_per_8h,
     )

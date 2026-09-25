@@ -155,9 +155,23 @@ class TestFuturesMaths(unittest.TestCase):
         t = close_position(p, 104.0, ExitReason.TARGET, T0, self.f, wallet_before=800.0)
         eff = self.f.effective_taker_pct
         self.assertAlmostEqual(t.gross_pnl, (104 - 100) * 20.0, places=9)
-        # closed instantly, so no funding accrues
-        self.assertAlmostEqual(t.fees_paid, 2000 * eff + 104 * 20 * eff, places=9)
+        # closed instantly, so no funding accrues; the target is a limit
+        # order, so the exit pays maker (0.02% + GST), the entry taker
+        maker = self.f.effective_maker_pct
+        self.assertAlmostEqual(maker, 0.0002 * 1.18, places=12)
+        self.assertAlmostEqual(t.fees_paid, 2000 * eff + 104 * 20 * maker, places=9)
         self.assertAlmostEqual(t.wallet_after, 800 + 200 + t.net_pnl, places=9)
+
+    def test_only_the_target_exit_pays_maker(self):
+        for reason, rate in ((ExitReason.STOP, self.f.effective_taker_pct),
+                             (ExitReason.EXPIRY, self.f.effective_taker_pct),
+                             (ExitReason.TARGET, self.f.effective_maker_pct)):
+            p = open_position("X", Side.LONG, 100.0, 200.0, 10, self.f, 0.20, 2.0, T0)
+            t = close_position(p, 101.0, reason, T0, self.f, wallet_before=800.0)
+            self.assertAlmostEqual(t.fees_paid, 2000 * self.f.effective_taker_pct
+                                   + 101 * 20 * rate, places=9, msg=reason)
+        self.assertAlmostEqual(self.f.round_trip_pct(), 0.00118, places=9)
+        self.assertAlmostEqual(self.f.target_round_trip_pct(), 0.000826, places=9)
 
     def test_funding_accrues_with_time_held(self):
         """A position held for hours costs funding on top of the trading fees."""

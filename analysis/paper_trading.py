@@ -62,7 +62,11 @@ class FeeModel:
         roughly 0.0066% of notional per window.
     """
 
-    taker_pct: float = 0.0005         # 0.05% base brokerage
+    taker_pct: float = 0.0005         # 0.05% base brokerage, market orders
+    # Resting limit orders pay maker: 0.02% on both CoinDCX INR futures and
+    # Binance USD-M (checked 26 Sep 2026). Only target exits are limit orders
+    # here; entries, stops, trails and shocks are market orders and pay taker.
+    maker_pct: float = 0.0002
     gst_pct: float = 0.18             # 18% GST on the brokerage, unavoidable
     maintenance_margin_pct: float = 0.0053   # measured, not the quoted 1.5%
 
@@ -83,11 +87,16 @@ class FeeModel:
         """What actually leaves the wallet, GST included."""
         return self.taker_pct * (1 + self.gst_pct)
 
+    @property
+    def effective_maker_pct(self) -> float:
+        return min(self.maker_pct, self.taker_pct) * (1 + self.gst_pct)
+
     def entry_fee(self, notional: float) -> float:
         return notional * self.effective_taker_pct
 
-    def exit_fee(self, notional: float) -> float:
-        return notional * self.effective_taker_pct
+    def exit_fee(self, notional: float, maker: bool = False) -> float:
+        """A limit exit (the target) pays maker; everything else pays taker."""
+        return notional * (self.effective_maker_pct if maker else self.effective_taker_pct)
 
     def funding_cost(self, notional: float, hours_held: float) -> float:
         """
@@ -100,8 +109,19 @@ class FeeModel:
         return notional * self.funding_rate_per_8h * periods
 
     def round_trip_pct(self) -> float:
-        """Price move required just to break even, as a fraction (leverage-independent)."""
+        """
+        Price move required just to break even, as a fraction (leverage-independent).
+
+        Taker both ways: the cost of a trade that ends on a stop or a trail,
+        which is how most trades end. Deliberately the dearer figure for
+        sizing and break-even; `target_round_trip_pct` is the cost of the
+        trade that reaches its limit target.
+        """
         return 2 * self.effective_taker_pct
+
+    def target_round_trip_pct(self) -> float:
+        """Taker in, maker out: the cost of a trade that fills its target."""
+        return self.effective_taker_pct + self.effective_maker_pct
 
 
 @dataclass(frozen=True)
@@ -744,7 +764,7 @@ def close_position(
     the entire margin — you cannot lose more than you posted.
     """
     gross = pos.gross_pnl(exit_price)
-    exit_fee = fees.exit_fee(exit_price * pos.quantity)
+    exit_fee = fees.exit_fee(exit_price * pos.quantity, maker=reason is ExitReason.TARGET)
     hours_held = max(0.0, (closed_at - pos.opened_at).total_seconds() / 3600.0)
     funding = fees.funding_cost(pos.notional, hours_held)
     total_fees = pos.entry_fee + exit_fee + funding

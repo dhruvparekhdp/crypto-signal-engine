@@ -44,6 +44,7 @@ class InstrumentSpec:
     lot_step: float
     funding_rate_per_8h: float = 0.0000655
     kind: str = "crypto"
+    maker_pct: float = 0.0002        # limit orders; capped at taker_pct when used
 
     @property
     def effective_taker_pct(self) -> float:
