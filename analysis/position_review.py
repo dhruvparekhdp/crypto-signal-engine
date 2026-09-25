@@ -33,7 +33,6 @@ diligence, it is latency and money.
 from __future__ import annotations
 
 import math
-
 from dataclasses import dataclass
 from datetime import datetime
 
@@ -249,7 +248,10 @@ REVIEW_SYSTEM = (
     "costs a spread; holding one that keeps going costs the trade. 'It might "
     "bounce' is true of every losing position ever opened and is not a "
     "reason.\n\n"
-    "Judge only the numbers given. You have no news and no order book.\n\n"
+    "Judge the numbers given. "
+    "News is given below when there is any. Use it only where it bears on "
+    "this coin over the next few hours; a war or a rate decision can, a "
+    "routine headline cannot. Never invent news that is not listed.\n\n"
     f"Tags, use only these: {', '.join(HOLD_FACTORS)}\n\n"
     "JSON only:\n"
     '{"reasoning": "what decides it, under 140 chars", '
@@ -283,7 +285,8 @@ def _describe(pos, state, trend: float, now: datetime) -> str:
     )
 
 
-async def review_position(pos, state, now: datetime, losing: bool = True) -> Review:
+async def review_position(pos, state, now: datetime, losing: bool = True,
+                          news: str = "") -> Review:
     """
     The full decision for a position at a loss: local read, then the model
     only if its answer could change the outcome.
@@ -316,7 +319,8 @@ async def review_position(pos, state, now: datetime, losing: bool = True) -> Rev
         from collectors.llm_client import ask_json
 
         reply = await ask_json("position_review", REVIEW_SYSTEM,
-                               _describe(pos, state, trend, now),
+                               _describe(pos, state, trend, now)
+                               + (f"\n\nNews:\n{news}" if news else ""),
                                max_tokens=400, temperature=0.2, timeout=12.0)
     except Exception as exc:
         log.warning("position_review_failed", symbol=pos.symbol, error=str(exc)[:160])

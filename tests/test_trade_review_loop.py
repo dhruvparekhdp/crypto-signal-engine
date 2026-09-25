@@ -84,9 +84,10 @@ class TestPromptVoice(unittest.TestCase):
         """
         Asked to weigh crude and yields it does not have, a model supplies
         them from training data months stale — and that invented number then
-        moves a real confidence score.
+        moves a real confidence score. It now gets real news, and must still
+        never add any that is not listed.
         """
-        self.assertIn("no news and no macro", self._prompt())
+        self.assertIn("Never invent news", self._prompt())
 
 
 @pytest.mark.asyncio

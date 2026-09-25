@@ -644,6 +644,25 @@ class Repository:
             await self.session.commit()
         return accepted, duplicates
 
+    async def save_briefing(self, risk_tone: float, summary: str, events: list,
+                            model: str, latency_ms: int) -> int:
+        """Store a market briefing and return its id."""
+        import json
+
+        from storage.models import MarketBriefing
+        row = MarketBriefing(risk_tone=risk_tone, summary=summary[:4000],
+                             events=json.dumps(events)[:20000], model=model,
+                             latency_ms=latency_ms, created_at=_now_utc())
+        self.session.add(row)
+        await self.session.commit()
+        return row.id
+
+    async def latest_briefing(self):
+        from storage.models import MarketBriefing
+        res = await self.session.execute(
+            select(MarketBriefing).order_by(MarketBriefing.created_at.desc()).limit(1))
+        return res.scalar_one_or_none()
+
     async def news_sentiment_since(self, hours: int = 12, limit: int = 2000) -> list[NewsSentiment]:
         """Every scored headline in the window, all symbols, newest first."""
         cutoff = _now_utc() - timedelta(hours=hours)
@@ -748,6 +767,10 @@ class Repository:
                 pnl_pct=kw.get("pnl_pct", 0.0) or 0.0,
                 model=kw.get("model", "") or "",
                 latency_ms=kw.get("latency_ms", 0) or 0,
+                briefing_id=kw.get("briefing_id", 0) or 0,
+                news_context=(kw.get("news_context", "") or "")[:4000],
+                sentiment_score=kw.get("sentiment_score", 0.0) or 0.0,
+                fear_greed=kw.get("fear_greed", 0) or 0,
             ))
             await self.session.commit()
         except Exception:

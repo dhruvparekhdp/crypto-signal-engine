@@ -94,6 +94,8 @@ class AppRunner:
         self.fear_greed = None
         # High-impact headlines seen by the news job, as blackout events.
         self._news_events: tuple = ()
+        # Latest web-searched world briefing (a MarketBriefing row).
+        self.latest_briefing = None
         self.multi_horizon = MultiHorizonPredictor()
         self._ws_tasks: list[asyncio.Task] = []
         # Binance-only leaves klines as the single source of candles, depth
@@ -420,7 +422,23 @@ class AppRunner:
             return None
         self._last_position_review[pos.symbol] = now
 
-        review = await review_position(pos, state, now, losing=losing)
+        news, briefing_id = await self._news_context(pos.symbol)
+        review = await review_position(pos, state, now, losing=losing, news=news)
+        if review.asked_model:
+            # Every model-backed hold/close decision is kept with the news it
+            # saw, so the local model can later relate it to what happened.
+            # Its own session: the tick's session must only commit what the
+            # tick itself decided.
+            margin = getattr(pos, "margin", 0) or 0
+            async with AsyncSessionFactory() as s2:
+                await Repository(s2).save_review(
+                    "hold", pos.symbol, signal_type=pos.signal_type or "",
+                    verdict=review.verdict, factors=review.factors, summary=review.summary,
+                    confidence_delta=round(review.confidence - review.trend, 4),
+                    pnl_pct=(round(pos.gross_pnl(state.current_price) / margin * 100, 4)
+                             if margin else 0.0),
+                    briefing_id=briefing_id, news_context=news,
+                    **self._review_extras(state))
 
         if not losing:
             # A winner is never closed on a score — the trail does that, and
@@ -450,10 +468,12 @@ class AppRunner:
         """
         try:
             pre = ""
+            news, briefing_id = await self._news_context(row.symbol)
+            state = await self.crypto_store.get(row.symbol)
             async with AsyncSessionFactory() as session:
                 repo = Repository(session)
                 review = await self.groq_sentinel.review_closed_trade(
-                    ClosedTradeView(trade, row), pre_review=pre)
+                    ClosedTradeView(trade, row), pre_review=pre, news=news)
                 if not review:
                     return
                 await repo.save_review(
@@ -466,6 +486,8 @@ class AppRunner:
                     pnl_pct=round(trade.return_on_margin * 100, 4),
                     model=review.get("model", ""),
                     latency_ms=review.get("latency_ms", 0),
+                    briefing_id=briefing_id, news_context=news,
+                    **self._review_extras(state),
                 )
         except Exception:
             log.debug("post_review_failed", symbol=getattr(row, "symbol", "?"))
@@ -669,9 +691,10 @@ class AppRunner:
                     # the ordinary threshold decides, which keeps every
                     # decision in one place and visible in the logs.
                     if self.groq_sentinel.is_available and scfg.groq_signal_review_enabled:
+                        news, briefing_id = await self._news_context(sig.symbol)
                         delta, ai_summary, verdict = (
                             await self.groq_sentinel.review_signal_candidate(
-                                sig, state, model=scfg.groq_model, book=states)
+                                sig, state, model=scfg.groq_model, book=states, news=news)
                         )
                         if verdict == "REJECT":
                             delta = -abs(settings.groq_reject_penalty)
@@ -683,7 +706,11 @@ class AppRunner:
                                     "pre", sig.symbol, signal_type=sig.signal_type,
                                     verdict=verdict, summary=ai_summary,
                                     factors=self.groq_sentinel.last_factors,
-                                    confidence_delta=delta, model=scfg.groq_model)
+                                    confidence_delta=delta,
+                                    model=self.groq_sentinel.last_model or scfg.groq_model,
+                                    latency_ms=self.groq_sentinel.last_latency_ms,
+                                    briefing_id=briefing_id, news_context=news,
+                                    **self._review_extras(state))
                         except Exception:
                             log.debug("pre_review_not_saved", symbol=sig.symbol)
                         before = sig.confidence
@@ -756,6 +783,53 @@ class AppRunner:
                      high_impact=len(self._news_events))
         except Exception:
             log.exception("news_sentiment_job_failed")
+
+    async def _market_briefing_job(self) -> None:
+        """
+        Every 30 minutes: a web-searched briefing on world events from Groq.
+
+        Stored, fed into news_sentiment as macro headlines (so it reaches the
+        sentiment score and the trading pause), and handed to every reviewer.
+        """
+        from collectors.llm_client import chain_for
+        from collectors.market_briefing import as_news_items, fetch_briefing
+
+        if not settings.market_briefing_enabled or not chain_for("briefing"):
+            return
+        try:
+            got = await fetch_briefing()
+            if got is None:
+                return
+            tone, summary, events, model, latency = got
+            async with AsyncSessionFactory() as session:
+                repo = Repository(session)
+                await repo.save_briefing(tone, summary, events, model, latency)
+                if events:
+                    await repo.ingest_news_sentiment(as_news_items(events, model))
+                self.latest_briefing = await repo.latest_briefing()
+        except Exception:
+            log.exception("market_briefing_job_failed")
+
+    async def _news_context(self, symbol: str) -> tuple[str, int]:
+        """(news paragraph for a reviewer, id of the briefing in it). Never raises."""
+        from collectors.market_briefing import context_block
+        try:
+            async with AsyncSessionFactory() as session:
+                repo = Repository(session)
+                if self.latest_briefing is None:
+                    self.latest_briefing = await repo.latest_briefing()
+                headlines = await repo.news_sentiment_since(12, limit=200)
+            b = self.latest_briefing
+            return context_block(b, headlines, symbol), (b.id if b is not None else 0)
+        except Exception:
+            return "", 0
+
+    def _review_extras(self, state) -> dict:
+        """Market mood at review time, stored beside the verdict."""
+        return {
+            "sentiment_score": round(float(getattr(state, "sentiment_score", 0.0) or 0.0), 4),
+            "fear_greed": int(self.fear_greed.value) if self.fear_greed else 0,
+        }
 
     def _blackout(self, now: datetime):
         """The event that forbids opening a trade right now, or None."""
@@ -960,6 +1034,14 @@ class AppRunner:
             "interval",
             seconds=60,
             id="crypto_analysis",
+            max_instances=1,
+            next_run_time=datetime.now(UTC),
+        )
+        self.scheduler.add_job(
+            self._market_briefing_job,
+            "interval",
+            minutes=settings.market_briefing_minutes,
+            id="market_briefing",
             max_instances=1,
             next_run_time=datetime.now(UTC),
         )

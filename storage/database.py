@@ -171,6 +171,18 @@ async def _migrate_columns(conn) -> None:
         )""",
         "CREATE INDEX IF NOT EXISTS ix_review_symbol_phase ON signal_reviews (symbol, phase)",
         "CREATE INDEX IF NOT EXISTS ix_review_created ON signal_reviews (created_at)",
+        # News context stored with every review. Postgres form first; the
+        # plain form is for an existing SQLite file, and whichever does not
+        # apply fails harmlessly.
+        "ALTER TABLE signal_reviews ADD COLUMN IF NOT EXISTS briefing_id INTEGER DEFAULT 0",
+        "ALTER TABLE signal_reviews ADD COLUMN IF NOT EXISTS news_context TEXT DEFAULT ''",
+        "ALTER TABLE signal_reviews ADD COLUMN IF NOT EXISTS sentiment_score FLOAT DEFAULT 0.0",
+        "ALTER TABLE signal_reviews ADD COLUMN IF NOT EXISTS fear_greed INTEGER DEFAULT 0",
+        "ALTER TABLE signal_reviews ADD COLUMN briefing_id INTEGER DEFAULT 0",
+        "ALTER TABLE signal_reviews ADD COLUMN news_context TEXT DEFAULT ''",
+        "ALTER TABLE signal_reviews ADD COLUMN sentiment_score FLOAT DEFAULT 0.0",
+        "ALTER TABLE signal_reviews ADD COLUMN fear_greed INTEGER DEFAULT 0",
+        "CREATE INDEX IF NOT EXISTS ix_signal_reviews_briefing_id ON signal_reviews (briefing_id)",
         "INSERT INTO paper_trading_config (id) VALUES (1) ON CONFLICT (id) DO NOTHING",
         "ALTER TABLE paper_trading_config ADD COLUMN IF NOT EXISTS enabled BOOLEAN DEFAULT TRUE",
         # admin_auth table — password hash + salt + active session

@@ -207,7 +207,10 @@ async def _call_openai_shaped(provider: Provider, model: str, system: str,
     }
     # Gemini's compatibility endpoint rejects response_format; Groq and
     # OpenRouter accept it and it measurably reduces prose around the object.
-    if provider.name != "gemini":
+    # groq/compound is an agent with its own web-search tool; it rejects the
+    # structured-output and reasoning knobs the plain models take.
+    compound = model.startswith("groq/compound")
+    if provider.name != "gemini" and not compound:
         payload["response_format"] = {"type": "json_object"}
     # Reasoning models spend max_tokens on thinking before they write the
     # answer, so a 120-token budget comes back empty and the chain falls
@@ -215,7 +218,7 @@ async def _call_openai_shaped(provider: Provider, model: str, system: str,
     # maps to think:false on /v1); gpt-oss on Groq is kept to "low".
     if provider.name == "ollama":
         payload["reasoning_effort"] = "none"
-    elif provider.name == "groq" and model.startswith("openai/gpt-oss"):
+    elif provider.name == "groq" and model.startswith("openai/gpt-oss") and not compound:
         payload["reasoning_effort"] = "low"
 
     headers = {"Content-Type": "application/json"}

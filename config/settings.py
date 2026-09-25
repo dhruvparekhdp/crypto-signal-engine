@@ -96,10 +96,18 @@ class Settings(BaseSettings):
     gemini_api_key: SecretStr | None = None
     anthropic_api_key: SecretStr | None = None
 
+    # Groq first, as the owner asked: fast, free tier is generous, and
+    # groq/compound searches the web itself. The reviews it writes are stored
+    # with their news context so the local model can study them later.
     llm_chain_pre_trade: str = (
-        "groq:openai/gpt-oss-20b, openrouter:qwen/qwen3-32b")
+        "groq:openai/gpt-oss-120b, groq:openai/gpt-oss-20b, openrouter:qwen/qwen3-32b")
     llm_chain_post_trade: str = (
-        "anthropic:claude-sonnet-5, groq:openai/gpt-oss-120b, gemini:gemini-3.6-flash")
+        "groq:groq/compound, groq:openai/gpt-oss-120b, anthropic:claude-sonnet-5")
+    # The 30-minute world-events briefing. Only web-searching models: a model
+    # without search asked for "today's news" invents it.
+    llm_chain_briefing: str = "groq:groq/compound, groq:groq/compound-mini"
+    market_briefing_enabled: bool = True
+    market_briefing_minutes: int = 30
     # Reviewing what is already open.
     #
     # A losing position has to keep earning the right to stay open: the local

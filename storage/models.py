@@ -378,6 +378,36 @@ class SignalReview(Base):
 
     model: Mapped[str] = mapped_column(String, default="")
     latency_ms: Mapped[int] = mapped_column(Integer, default=0)
+
+    # What the world looked like when the reviewer decided, stored with the
+    # decision so a later pass (the local model on the laptop) can relate
+    # each verdict and each outcome to the news behind it.
+    briefing_id: Mapped[int] = mapped_column(Integer, default=0, index=True)
+    news_context: Mapped[str] = mapped_column(Text, default="")
+    sentiment_score: Mapped[float] = mapped_column(Float, default=0.0)
+    fear_greed: Mapped[int] = mapped_column(Integer, default=0)
+
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=_now_utc, index=True)
+
+
+class MarketBriefing(Base):
+    """
+    A web-searched summary of world events that move crypto, every 30 minutes.
+
+    Written by a Groq model with built-in web search, so it reads today's
+    news rather than guessing from its training data. Each review stores the
+    id of the briefing it saw, which is what lets a later analysis ask "what
+    was going on when this trade was approved, and when it lost".
+    """
+
+    __tablename__ = "market_briefings"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    risk_tone: Mapped[float] = mapped_column(Float, default=0.0)   # -1 risk-off .. +1 risk-on
+    summary: Mapped[str] = mapped_column(Text, default="")
+    events: Mapped[str] = mapped_column(Text, default="[]")        # JSON list
+    model: Mapped[str] = mapped_column(String, default="")
+    latency_ms: Mapped[int] = mapped_column(Integer, default=0)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_now_utc, index=True)
 
 

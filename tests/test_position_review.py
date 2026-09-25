@@ -210,7 +210,7 @@ class TestEveryTradeGetsTheModelsRead(unittest.TestCase):
         from pathlib import Path
 
         runner = (Path(__file__).resolve().parent.parent / "scheduler/runner.py").read_text()
-        self.assertIn("review_position(pos, state, now, losing=losing)", runner)
+        self.assertIn("review_position(pos, state, now, losing=losing, news=news)", runner)
         # And not by returning early for winners before the review runs.
         block = runner[runner.index("async def _review_open_position"):
                        runner.index("async def _review_closed_trade")]

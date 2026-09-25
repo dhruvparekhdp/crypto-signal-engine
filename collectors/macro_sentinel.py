@@ -93,6 +93,11 @@ class GroqSentinel:
     def __init__(self, timeout: float = 4.0) -> None:
         self.timeout = timeout
         self.last_factors = ""
+        # Who actually answered the last pre-trade review, and how fast —
+        # stored with the review instead of the admin's model setting, which
+        # the router never read.
+        self.last_model = ""
+        self.last_latency_ms = 0
 
     @property
     def is_available(self) -> bool:
@@ -113,7 +118,7 @@ class GroqSentinel:
 
     async def review_signal_candidate(
         self, sig: CryptoSignal, state: CryptoState, model: str | None = None,
-        book: list | None = None,
+        book: list | None = None, news: str = "",
     ) -> tuple[float, str, str]:
         """
         Pre-signal second opinion.
@@ -152,6 +157,7 @@ class GroqSentinel:
             f"Derivatives: Funding {funding_str}, Open Interest {oi_str}\n"
             f"Sentiment: {state.sentiment_score:+.2f}\n"
             f"\nRest of the book right now:\n{market_context(book, sig.symbol)}\n"
+            + (f"\nNews:\n{news}\n" if news else "")
         )
 
         system_prompt = (
@@ -160,9 +166,10 @@ class GroqSentinel:
             "Work it out before you answer. Check the levels against the "
             "market's own volatility, check the flow and funding against the "
             "direction, check whether the rest of the book agrees. Then decide.\n\n"
-            "Judge only what is below. You have no news, no crude, no dollar "
-            "index and no yields — if it is not in the data, you do not know "
-            "it, and guessing is worse than saying nothing.\n\n"
+            "Judge what is below. The news section is a web-searched briefing "
+            "and scored headlines: weigh a war, a tariff or a rate decision "
+            "against the direction, ignore routine noise, and never invent "
+            "news that is not listed — guessing is worse than saying nothing.\n\n"
             "Most trades are fine; say so and move on. REJECT is for "
             "structurally broken, not merely dull.\n\n"
             f"Tags, use only these: {_FACTOR_HELP}\n\n"
@@ -191,6 +198,8 @@ class GroqSentinel:
         summary = str(parsed.get("summary", "")).strip()
         verdict = str(parsed.get("verdict", "")).strip().upper()
         self.last_factors = _clean_factors(parsed.get("factors"), PRE_FACTORS)
+        self.last_model = reply.served_by
+        self.last_latency_ms = reply.latency_ms
 
         log.info("signal_reviewed", symbol=sig.symbol, verdict=verdict,
                  delta=clamped_delta, factors=self.last_factors, summary=summary,
@@ -198,7 +207,7 @@ class GroqSentinel:
         return clamped_delta, summary, verdict
 
     async def review_closed_trade(self, trade, pre_review: str = "",
-                                  model: str | None = None) -> dict:
+                                  model: str | None = None, news: str = "") -> dict:
         """
         The post-mortem, once the trade is done and the answer is known.
 
@@ -230,6 +239,7 @@ class GroqSentinel:
             f"funding {trade.funding_paid:.2f}, net {trade.net_pnl:+.2f} "
             f"({trade.return_on_margin * 100:+.1f}% on margin)\n"
             + (f"What you said before the trade: \"{pre_review}\"\n" if pre_review else "")
+            + (f"\nNews around the trade:\n{news}\n" if news else "")
         )
 
         system_prompt = (
@@ -240,7 +250,9 @@ class GroqSentinel:
             "price did, then against what it cost. A winner that needed a gap "
             "is not an edge. A loss with no lesson is allowed — inventing one "
             "teaches the wrong thing.\n\n"
-            "Judge only the numbers below. You have no news and no macro.\n\n"
+            "Use the news listed below, from around the time of the trade, "
+            "to judge whether the world moved against it; if it did not, say "
+            "the trade stood on its numbers. Never invent news.\n\n"
             f"Tags, use only these: {_POST_FACTOR_HELP}\n\n"
             "JSON only:\n"
             '{"reasoning": "what actually decided it, under 150 chars", '
