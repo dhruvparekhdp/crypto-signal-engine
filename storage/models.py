@@ -411,6 +411,27 @@ class MarketBriefing(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_now_utc, index=True)
 
 
+class MoveAttribution(Base):
+    """
+    One hourly answer to "why did the watchlist move, and were our signals right".
+
+    The moves and signals are stored as they were handed to the model, beside
+    what it said, so the explanation can always be checked against its input.
+    """
+
+    __tablename__ = "move_attributions"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    window_hours: Mapped[int] = mapped_column(Integer, default=12)
+    briefing_id: Mapped[int] = mapped_column(Integer, default=0)
+    moves: Mapped[str] = mapped_column(Text, default="[]")        # JSON
+    signals: Mapped[str] = mapped_column(Text, default="[]")      # JSON
+    result: Mapped[str] = mapped_column(Text, default="{}")       # JSON, parsed reply
+    model: Mapped[str] = mapped_column(String, default="")
+    latency_ms: Mapped[int] = mapped_column(Integer, default=0)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=_now_utc, index=True)
+
+
 class PaperPosition(Base):
     """
     An open paper position. Deleted on close — the record lives on as a

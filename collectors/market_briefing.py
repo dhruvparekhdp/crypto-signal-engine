@@ -132,8 +132,10 @@ def context_block(briefing, headlines, symbol: str, limit: int = 6) -> str:
                               - briefing.created_at).total_seconds() // 60))
         lines.append(f"World briefing ({age_min} min old, risk tone {briefing.risk_tone:+.2f}): "
                      f"{briefing.summary}")
+    # "*" takes every coin's headlines, for the hourly move attribution.
     picked = [h for h in headlines
-              if (h.symbol or "all").lower() in (symbol.lower(), "all") and h.event_type != "noise"]
+              if (symbol == "*" or (h.symbol or "all").lower() in (symbol.lower(), "all"))
+              and h.event_type != "noise"]
     for h in picked[:limit]:
         lines.append(f"- [{h.event_type}, {h.score:+.1f}] {h.headline[:140]}")
     return "\n".join(lines) if lines else "No news in the last 12 hours."

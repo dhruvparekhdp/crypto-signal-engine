@@ -810,6 +810,59 @@ class AppRunner:
         except Exception:
             log.exception("market_briefing_job_failed")
 
+    async def _move_attribution_job(self) -> None:
+        """
+        Every hour: ask Groq why each watchlist coin moved and whether our
+        signals were on the right side of it. Moves are computed here from
+        stored prices; the model only explains them.
+        """
+        from analysis.move_attribution import (
+            ATTRIBUTION_SYSTEM,
+            build_prompt,
+            parse_attribution,
+            signals_digest,
+            summarise_moves,
+        )
+        from collectors.llm_client import ask_json, chain_for
+        from collectors.market_briefing import context_block
+
+        if not settings.move_attribution_enabled or not chain_for("attribution"):
+            return
+        hours = settings.move_attribution_window_hours
+        try:
+            symbols = await self.crypto_store.get_symbols()
+            async with AsyncSessionFactory() as session:
+                repo = Repository(session)
+                points = await repo.price_points(symbols, hours + 1)
+                sigs = [s for s in await repo.crypto_signals_between(
+                            1, include_suppressed=True, limit=200)
+                        if s.timestamp and (datetime.now(UTC).replace(tzinfo=None)
+                                            - s.timestamp).total_seconds() <= hours * 3600]
+                headlines = await repo.news_sentiment_since(hours, limit=200)
+                briefing = self.latest_briefing or await repo.latest_briefing()
+            now = datetime.now(UTC).replace(tzinfo=None)
+            moves = summarise_moves(points, now)
+            if not moves:
+                log.info("move_attribution_skipped", reason="no stored prices yet")
+                return
+            digest = signals_digest(sigs)
+            news = context_block(briefing, headlines, "*", limit=20)
+            reply = await ask_json("attribution", ATTRIBUTION_SYSTEM,
+                                   build_prompt(moves, digest, news, hours),
+                                   max_tokens=2500, temperature=0.2, timeout=120.0)
+            if not reply or not isinstance(reply.data, dict):
+                return
+            result = parse_attribution(reply.data, {m.symbol for m in moves})
+            async with AsyncSessionFactory() as session:
+                await Repository(session).save_move_attribution(
+                    window_hours=hours, briefing_id=briefing.id if briefing else 0,
+                    moves=[m.as_dict() for m in moves], signals=digest, result=result,
+                    model=reply.served_by, latency_ms=reply.latency_ms)
+            log.info("move_attribution_saved", coins=len(result["coins"]),
+                     drivers=len(result["drivers"]), served_by=reply.served_by)
+        except Exception:
+            log.exception("move_attribution_job_failed")
+
     async def _news_context(self, symbol: str) -> tuple[str, int]:
         """(news paragraph for a reviewer, id of the briefing in it). Never raises."""
         from collectors.market_briefing import context_block
@@ -1036,6 +1089,14 @@ class AppRunner:
             id="crypto_analysis",
             max_instances=1,
             next_run_time=datetime.now(UTC),
+        )
+        self.scheduler.add_job(
+            self._move_attribution_job,
+            "interval",
+            minutes=settings.move_attribution_minutes,
+            id="move_attribution",
+            max_instances=1,
+            next_run_time=datetime.now(UTC) + timedelta(minutes=5),
         )
         self.scheduler.add_job(
             self._market_briefing_job,

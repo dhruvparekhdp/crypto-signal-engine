@@ -877,6 +877,63 @@ async def _api_crypto_watchlist(runner, request: web.Request) -> web.Response:
                         content_type="application/json")
 
 
+async def _api_moves(runner, request: web.Request) -> web.Response:
+    """
+    GET /api/moves?limit=24 — the hourly "why did it move" analyses, newest first,
+    with the latest world briefing and the next scheduled releases.
+    """
+    from analysis.event_calendar import upcoming
+    from storage.database import AsyncSessionFactory
+    from storage.repository import Repository
+
+    try:
+        limit = max(1, min(int(request.query.get("limit", "24")), 200))
+    except ValueError:
+        limit = 24
+    async with AsyncSessionFactory() as session:
+        repo = Repository(session)
+        rows = await repo.recent_move_attributions(limit)
+        briefing = await repo.latest_briefing()
+    now = datetime.now(UTC).replace(tzinfo=None)
+    body = {
+        "runs": [{
+            "id": r.id, "at": _iso(r.created_at), "window_hours": r.window_hours,
+            "model": r.model, "latency_ms": r.latency_ms,
+            "moves": json.loads(r.moves or "[]"), "signals": json.loads(r.signals or "[]"),
+            "result": json.loads(r.result or "{}"),
+        } for r in rows],
+        "briefing": None if briefing is None else {
+            "at": _iso(briefing.created_at), "risk_tone": briefing.risk_tone,
+            "summary": briefing.summary, "events": json.loads(briefing.events or "[]"),
+            "model": briefing.model,
+        },
+        "upcoming": [{"at": _iso(e.at), "kind": e.kind, "name": e.name}
+                     for e in upcoming(now, days=7)],
+    }
+    return web.Response(text=json.dumps(body), content_type="application/json")
+
+
+async def _api_moves_run(runner, request: web.Request) -> web.Response:
+    """POST /api/moves/run — run the analysis now instead of waiting for the hour."""
+    import asyncio
+
+    from scheduler.security import check_bearer_auth
+    if not await _verify_admin_session(request):
+        denied = check_bearer_auth(request, _SETTINGS.api_auth_token)
+        if denied is not None:
+            return denied
+    if not hasattr(runner, "_move_attribution_job"):
+        return web.Response(text=json.dumps({"error": "not available"}),
+                            content_type="application/json", status=503)
+    asyncio.create_task(runner._move_attribution_job())
+    return web.Response(text=json.dumps({"ok": True, "started": True}),
+                        content_type="application/json")
+
+
+async def _moves_page(request: web.Request) -> web.Response:
+    return web.Response(text=_MOVES_HTML, content_type="text/html")
+
+
 async def _api_events(runner, request: web.Request) -> web.Response:
     """
     GET /api/events — is trading paused right now, and what is coming up.
@@ -1577,6 +1634,7 @@ section h2{color:var(--accent-soft)}
   <div class="side-item side-secondary" data-tab="historic" onclick="switchTab('historic')"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 5a9 3 0 1018 0 9 3 0 10-18 0M3 5v14a9 3 0 0018 0V5"/></svg><span>Historic Data</span></div>
   <div class="side-item side-secondary" data-tab="watchlist" onclick="switchTab('watchlist')"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l2.6 5.3 5.9.9-4.3 4.1 1 5.8-5.2-2.7-5.2 2.7 1-5.8L3.5 9.2l5.9-.9z"/></svg><span>Watchlist</span></div>
   <div class="side-group">Other</div>
+  <a class="side-item side-secondary" data-tab="moves" href="/moves"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 17l6-6 4 4 8-8"/><path d="M14 7h7v7"/></svg><span>Market Moves</span></a>
   <a class="side-item side-secondary" data-tab="audit" href="/audit"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 3h6v5l4 9a2 2 0 01-1.8 3H6.8A2 2 0 015 16l4-9z"/><path d="M9 8h6"/></svg><span>Signal Audit</span></a>
   <a class="side-item side-secondary" data-tab="diag" href="/api/debug/collectors"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2v4M12 18v4M4.9 4.9l2.8 2.8M16.3 16.3l2.8 2.8M2 12h4M18 12h4"/></svg><span>Diagnostics</span></a>
   <a class="side-item side-secondary" data-tab="settings" href="/settings"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19 12a7 7 0 00-.1-1l2-1.6-2-3.4-2.4 1a7 7 0 00-1.7-1L14.5 3h-4l-.4 2.6a7 7 0 00-1.7 1l-2.4-1-2 3.4L6 11a7 7 0 000 2l-2 1.6 2 3.4 2.4-1a7 7 0 001.7 1l.4 2.6h4l.4-2.6a7 7 0 001.7-1l2.4 1 2-3.4-2-1.6a7 7 0 00.1-1z"/></svg><span>Settings</span></a>
@@ -4466,6 +4524,213 @@ load(); setInterval(load, 20000);
 """
 
 
+_MOVES_HTML = r"""<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Market Moves</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:var(--bg);color:var(--text);
+  min-height:100vh;padding-bottom:60px;font-size:14px;line-height:1.5}
+header{background:var(--panel);border-bottom:1px solid var(--line);padding:11px 18px;display:flex;align-items:center;
+  gap:10px;flex-wrap:wrap;position:sticky;top:0;z-index:30}
+header h1{font-size:16px;font-weight:700;color:var(--text-strong)}
+.spacer{margin-left:auto}
+.tick{font-size:12px;color:var(--muted)}
+a.nav-btn,button.nav-btn{background:var(--acc-t);border:1px solid var(--acc-t2);color:var(--accent);font-size:12px;
+  font-weight:600;padding:6px 12px;border-radius:8px;text-decoration:none;white-space:nowrap;cursor:pointer;font-family:inherit}
+button.nav-btn:disabled{opacity:.6;cursor:default}
+main{padding:18px;max-width:1180px;margin:0 auto;display:grid;gap:18px}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:16px 18px}
+.eyebrow{font-size:10.5px;letter-spacing:.1em;text-transform:uppercase;font-weight:700;color:var(--muted2);margin-bottom:8px}
+h2{font-size:15px;color:var(--text-strong);margin-bottom:10px}
+.hero{display:grid;grid-template-columns:1fr 220px;gap:18px}
+.hero p{font-size:15px;color:var(--text-strong);max-width:75ch}
+.meta{font-size:12px;color:var(--muted);margin-top:10px}
+.tone{border-left:1px solid var(--line);padding-left:18px}
+.tone .val{font-size:26px;font-weight:700;font-variant-numeric:tabular-nums}
+.gauge{position:relative;height:8px;border-radius:4px;margin:10px 0 6px;
+  background:linear-gradient(90deg,var(--neg) 0%,var(--mut-t) 50%,var(--pos) 100%)}
+.gauge i{position:absolute;top:-4px;width:3px;height:16px;border-radius:2px;background:var(--text-strong)}
+.gauge-l{display:flex;justify-content:space-between;font-size:11px;color:var(--muted2)}
+.drivers{display:grid;gap:10px}
+.driver{display:grid;grid-template-columns:28px 1fr auto;gap:10px;align-items:start;padding:10px 12px;
+  border:1px solid var(--line2);border-radius:10px;background:var(--panel2)}
+.arrow{width:28px;height:28px;border-radius:8px;display:grid;place-items:center;font-weight:700}
+.arrow.up{background:var(--pos-t);color:var(--pos)} .arrow.down{background:var(--neg-t);color:var(--neg)}
+.arrow.mixed{background:var(--mut-t);color:var(--muted)}
+.driver .ev{color:var(--text-strong);font-weight:600}
+.driver .sub{font-size:12px;color:var(--muted)}
+.conf{width:90px;font-size:11px;color:var(--muted);text-align:right}
+.conf .bar{height:5px;border-radius:3px;background:var(--sunk);margin-top:4px;overflow:hidden}
+.conf .bar b{display:block;height:100%;background:var(--accent)}
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(330px,1fr));gap:14px}
+.coin{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:14px 16px;display:grid;gap:10px;
+  border-top:3px solid var(--line)}
+.coin.news{border-top-color:var(--accent)} .coin.market_wide{border-top-color:var(--muted2)}
+.coin.coin_specific{border-top-color:var(--pos)} .coin.no_clear_cause{border-top-color:var(--neg)}
+.coin-head{display:flex;align-items:baseline;gap:10px;flex-wrap:wrap}
+.sym{font-size:17px;font-weight:700;color:var(--text-strong)}
+.px{font-size:13px;color:var(--muted);font-variant-numeric:tabular-nums}
+.chg{display:grid;grid-template-columns:repeat(4,1fr);gap:6px}
+.chg div{background:var(--panel2);border-radius:8px;padding:6px 8px;text-align:center}
+.chg span{display:block;font-size:10px;color:var(--muted2);text-transform:uppercase;letter-spacing:.06em}
+.chg b{font-size:14px;font-variant-numeric:tabular-nums}
+.pos{color:var(--pos)} .neg{color:var(--neg)} .muted{color:var(--muted)}
+.badge{display:inline-block;font-size:10.5px;font-weight:700;letter-spacing:.05em;text-transform:uppercase;
+  padding:3px 8px;border-radius:6px;background:var(--mut-t);color:var(--muted)}
+.badge.news{background:var(--acc-t);color:var(--accent)} .badge.coin_specific{background:var(--pos-t);color:var(--pos)}
+.badge.no_clear_cause{background:var(--neg-t);color:var(--neg)}
+.cause{font-weight:600;color:var(--text-strong)}
+.reason{font-size:13.5px;color:var(--text)}
+.sigs{border-top:1px dashed var(--line);padding-top:8px;display:grid;gap:6px}
+.sigs .lbl{font-size:10.5px;letter-spacing:.08em;text-transform:uppercase;color:var(--muted2);font-weight:700}
+.sig{display:flex;gap:6px;flex-wrap:wrap;align-items:center;font-size:12px;color:var(--muted)}
+.pill{padding:2px 7px;border-radius:999px;font-size:10.5px;font-weight:700;background:var(--mut-t);color:var(--muted)}
+.pill.won,.pill.long{background:var(--pos-t);color:var(--pos)} .pill.lost,.pill.short{background:var(--neg-t);color:var(--neg)}
+.review{font-size:13px;color:var(--text);font-style:italic}
+.verdict{display:grid;grid-template-columns:1fr 1fr;gap:18px}
+.lesson{background:var(--acc-t);border:1px solid var(--acc-t2);border-radius:10px;padding:12px 14px}
+.lesson b{color:var(--accent)}
+.events{display:grid;gap:6px;font-size:13px}
+.events div{display:flex;gap:10px} .events time{color:var(--muted);white-space:nowrap;font-variant-numeric:tabular-nums}
+.hist{display:grid;gap:6px}
+.hist button{all:unset;cursor:pointer;display:grid;grid-template-columns:150px 1fr auto;gap:12px;padding:9px 12px;
+  border-radius:9px;border:1px solid var(--line2);font-size:13px}
+.hist button:hover,.hist button:focus-visible{border-color:var(--accent)}
+.hist button.on{background:var(--acc-t);border-color:var(--acc-t2)}
+.hist time{color:var(--muted);font-variant-numeric:tabular-nums}
+.hist .txt{color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.empty{color:var(--muted);padding:20px;text-align:center}
+@media(max-width:760px){
+  main{padding:12px}
+  .hero,.verdict{grid-template-columns:1fr}
+  .tone{border-left:none;padding-left:0;border-top:1px solid var(--line);padding-top:12px}
+  .hist button{grid-template-columns:1fr;gap:2px}
+  .grid{grid-template-columns:1fr}
+}
+</style>
+</head>
+<body>
+<header>
+  <h1>Market Moves</h1>
+  <span class="tick" id="tick">loading&hellip;</span>
+  <span class="spacer"></span>
+  <button class="nav-btn" id="run" type="button" onclick="runNow()">Run analysis now</button>
+  <a class="nav-btn" href="/">&larr; Dashboard</a>
+  <a class="nav-btn" href="/predict">Outlook</a>
+  <a class="nav-btn" href="/audit">Audit</a>
+</header>
+<main id="main"><div class="card empty">Loading&hellip;</div></main>
+<script>
+function esc(s){return String(s==null?'':s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));}
+function pct(v){ if(v==null||!isFinite(v)) return '<b class="muted">—</b>';
+  return '<b class="'+(v>=0?'pos':'neg')+'">'+(v>=0?'+':'')+v.toFixed(2)+'%</b>'; }
+function stamp(iso){ return window.fmtStamp? window.fmtStamp(iso) : esc(iso); }
+function ago(iso){ return window.fmtAgo? window.fmtAgo(iso) : ''; }
+const CAUSE={news:'News event',market_wide:'Whole market',coin_specific:'Coin-specific',no_clear_cause:'No clear cause'};
+let DATA=null, SEL=0;
+
+function render(){
+  const main=document.getElementById('main');
+  if(!DATA || !DATA.runs.length){
+    main.innerHTML='<div class="card empty">No analysis yet. It runs every hour once the engine has an hour of prices and a Groq key; press <b>Run analysis now</b> to start one.</div>'
+      + briefingCard();
+    return;
+  }
+  const run=DATA.runs[SEL], r=run.result||{};
+  const moves={}; (run.moves||[]).forEach(m=>moves[m.symbol]=m);
+  const btc=moves['btcusdt'];
+  let h='';
+  // hero
+  h+='<section class="card hero"><div><div class="eyebrow">What moved the market · last '+run.window_hours+'h</div>'
+    +'<p>'+esc(r.overall||'No summary.')+'</p>'
+    +'<div class="meta">'+stamp(run.at)+' · '+ago(run.at)+' · '+esc(run.model)+' · '+Math.round((run.latency_ms||0)/1000)+'s</div></div>';
+  const b=DATA.briefing;
+  if(b){ const t=Math.max(-1,Math.min(1,b.risk_tone||0));
+    h+='<div class="tone"><div class="eyebrow">World risk tone</div><div class="val '+(t>=0?'pos':'neg')+'">'+(t>=0?'+':'')+t.toFixed(2)+'</div>'
+      +'<div class="gauge"><i style="left:calc('+((t+1)/2*100)+'% - 1px)"></i></div><div class="gauge-l"><span>risk-off</span><span>risk-on</span></div>'
+      +'<div class="meta">briefing '+ago(b.at)+'</div></div>'; }
+  else h+='<div class="tone"><div class="eyebrow">World risk tone</div><div class="meta">No briefing yet.</div></div>';
+  h+='</section>';
+  // drivers
+  const drivers=r.drivers||[];
+  h+='<section class="card"><h2>What drove it</h2><div class="drivers">';
+  if(!drivers.length) h+='<div class="empty">No single event stood out in this window.</div>';
+  drivers.forEach(d=>{ const a=d.direction==='up'?'↑':d.direction==='down'?'↓':'↕';
+    h+='<div class="driver"><div class="arrow '+esc(d.direction)+'">'+a+'</div><div><div class="ev">'+esc(d.event)+'</div>'
+      +'<div class="sub">'+(d.when?esc(d.when)+' · ':'')+(d.coins||[]).map(c=>esc(c.toUpperCase())).join(', ')+'</div></div>'
+      +'<div class="conf">'+Math.round((d.confidence||0)*100)+'% sure<div class="bar"><b style="width:'+Math.round((d.confidence||0)*100)+'%"></b></div></div></div>'; });
+  h+='</div></section>';
+  // coins
+  const sigBy={}; (run.signals||[]).forEach(s=>(sigBy[s.symbol]=sigBy[s.symbol]||[]).push(s));
+  h+='<section><div class="eyebrow" style="margin:0 2px 10px">Coin by coin, compared with BTC'+(btc&&btc.change_4h!=null?' ('+(btc.change_4h>=0?'+':'')+btc.change_4h.toFixed(2)+'% in 4h)':'')+'</div><div class="grid">';
+  const coins=(r.coins||[]).slice().sort((a,b)=>Math.abs((moves[b.symbol]||{}).change_4h||0)-Math.abs((moves[a.symbol]||{}).change_4h||0));
+  coins.forEach(c=>{ const m=moves[c.symbol]||{}; const sigs=sigBy[c.symbol]||[];
+    h+='<article class="coin '+esc(c.cause_type)+'"><div class="coin-head"><span class="sym">'+esc(c.symbol.toUpperCase())+'</span>'
+      +'<span class="px">'+(m.price!=null&&window.fmtPrice?'$'+fmtPrice(m.price):(m.price||''))+'</span><span class="spacer"></span>'
+      +'<span class="badge '+esc(c.cause_type)+'">'+esc(CAUSE[c.cause_type]||c.cause_type)+'</span></div>'
+      +'<div class="chg"><div><span>1h</span>'+pct(m.change_1h)+'</div><div><span>4h</span>'+pct(m.change_4h)+'</div>'
+      +'<div><span>12h</span>'+pct(m.change_12h)+'</div><div><span>range</span>'+(m.range_12h!=null?'<b>'+m.range_12h.toFixed(2)+'%</b>':'<b class="muted">—</b>')+'</div></div>'
+      +(c.cause?'<div class="cause">'+esc(c.cause)+' <span class="muted" style="font-weight:400;font-size:12px">· '+Math.round((c.confidence||0)*100)+'% sure</span></div>':'')
+      +'<div class="reason">'+esc(c.reasoning)+'</div>'
+      +'<div class="sigs"><div class="lbl">Our signals ('+sigs.length+')</div>'
+      +(sigs.length? sigs.slice(0,6).map(s=>'<div class="sig"><span class="pill '+esc(s.direction)+'">'+esc(s.direction)+'</span>'+esc(s.type)
+          +' · '+esc(s.at.slice(11))+' UTC · <span class="pill '+esc(s.outcome)+'">'+esc(s.outcome)+'</span>'
+          +(s.outcome!=='pending'?' '+(s.pnl_pct>=0?'+':'')+s.pnl_pct.toFixed(2)+'%':'')
+          +(s.blocked_by?' · <span class="muted">blocked by '+esc(s.blocked_by)+'</span>':'')+'</div>').join('')
+        : '<div class="sig">None fired on this coin.</div>')
+      +(c.signals_review?'<div class="review">'+esc(c.signals_review)+'</div>':'')+'</div></article>'; });
+  h+='</div></section>';
+  // verdict
+  h+='<section class="card verdict"><div><h2>How our signals did</h2><p>'+esc(r.signals_verdict||'No verdict.')+'</p></div>'
+    +'<div>'+(r.lesson?'<div class="lesson"><b>One change to make:</b> '+esc(r.lesson)+'</div>':'')
+    +upcomingBlock()+'</div></section>';
+  h+=briefingCard();
+  // history
+  h+='<section class="card"><h2>Earlier analyses</h2><div class="hist">'
+    +DATA.runs.map((x,i)=>'<button type="button" class="'+(i===SEL?'on':'')+'" onclick="pick('+i+')"><time>'+stamp(x.at)+'</time>'
+      +'<span class="txt">'+esc(((x.result||{}).overall||'').split('. ')[0])+'</span>'
+      +'<span class="muted">'+((x.result||{}).coins||[]).filter(c=>c.cause_type==='news').length+' news-driven</span></button>').join('')
+    +'</div></section>';
+  main.innerHTML=h;
+}
+function upcomingBlock(){
+  const u=(DATA&&DATA.upcoming)||[]; if(!u.length) return '';
+  return '<div style="margin-top:14px"><div class="eyebrow">Next scheduled releases (trading pauses around these)</div><div class="events">'
+    +u.map(e=>'<div><time>'+stamp(e.at)+'</time><span>'+esc(e.name)+'</span></div>').join('')+'</div></div>';
+}
+function briefingCard(){
+  const b=DATA&&DATA.briefing; if(!b) return '';
+  return '<section class="card"><h2>Latest world briefing</h2><p>'+esc(b.summary)+'</p>'
+    +((b.events||[]).length?'<div class="events" style="margin-top:12px">'+b.events.map(e=>'<div><span class="badge">'+esc(e.event_type)+'</span><span>'+esc(e.headline)
+      +(e.source?' <span class="muted">· '+esc(e.source)+'</span>':'')+'</span></div>').join('')+'</div>':'')
+    +'<div class="meta">'+stamp(b.at)+' · '+esc(b.model)+'</div></section>';
+}
+function pick(i){ SEL=i; render(); window.scrollTo({top:0,behavior:'smooth'}); }
+async function load(){
+  try{ const r=await fetch('/api/moves?limit=48'); DATA=await r.json(); }catch(e){ DATA={runs:[],upcoming:[]}; }
+  document.getElementById('tick').textContent=DATA.runs.length?('updated '+(window.fmtAgo?fmtAgo(DATA.runs[0].at):'')):'no analysis yet';
+  render();
+}
+async function runNow(){
+  const btn=document.getElementById('run'); btn.disabled=true; btn.textContent='Running… (about a minute)';
+  const f=window.apiFetch||fetch;
+  const res=await f('/api/moves/run',{method:'POST'});
+  if(!res.ok){ btn.disabled=false; btn.textContent='Run analysis now'; return; }
+  setTimeout(async()=>{ await load(); btn.disabled=false; btn.textContent='Run analysis now'; },75000);
+}
+function fmtPrice(p){ if(p==null) return '—'; const a=Math.abs(p);
+  return a>=1000?p.toLocaleString('en-US',{maximumFractionDigits:2}):a>=1?p.toFixed(4):p.toPrecision(4); }
+load(); setInterval(load,300000);
+</script>
+</body>
+</html>
+"""
+
+
 _THEME_SNIPPET = """
 <style>
 /* Theme palettes */
@@ -4828,6 +5093,7 @@ _DATA_HTML = _DATA_HTML.replace("</head>", _THEME_SNIPPET + "</head>")
 _SETTINGS_HTML = _SETTINGS_HTML.replace("</head>", _THEME_SNIPPET + "</head>")
 _AUDIT_HTML = _AUDIT_HTML.replace("</head>", _THEME_SNIPPET + "</head>")
 _PREDICT_HTML = _PREDICT_HTML.replace("</head>", _THEME_SNIPPET + "</head>")
+_MOVES_HTML = _MOVES_HTML.replace("</head>", _THEME_SNIPPET + "</head>")
 
 
 async def make_app(runner) -> web.Application:
@@ -4887,6 +5153,9 @@ async def make_app(runner) -> web.Application:
     app.router.add_get("/api/crypto/watchlist", _bind(_api_crypto_watchlist))
     app.router.add_get("/api/binance/symbols", _bind(_api_binance_symbols))
     app.router.add_get("/api/events", _bind(_api_events))
+    app.router.add_get("/api/moves", _bind(_api_moves))
+    app.router.add_post("/api/moves/run", _bind(_api_moves_run))
+    app.router.add_get("/moves", _moves_page)
     app.router.add_post("/api/crypto/watchlist/add", _bind(_api_crypto_watchlist_add))
     app.router.add_post("/api/crypto/watchlist/remove", _bind(_api_crypto_watchlist_remove))
     app.router.add_get("/api/commodities", _bind(_api_commodities))

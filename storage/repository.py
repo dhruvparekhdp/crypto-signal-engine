@@ -657,6 +657,37 @@ class Repository:
         await self.session.commit()
         return row.id
 
+    async def price_points(self, symbols: list[str], hours: int = 13) -> dict:
+        """symbol -> [(timestamp, price)] from the live snapshots."""
+        cutoff = _now_utc() - timedelta(hours=hours)
+        res = await self.session.execute(
+            select(CryptoSnapshot.symbol, CryptoSnapshot.timestamp, CryptoSnapshot.price)
+            .where(CryptoSnapshot.timestamp >= cutoff)
+            .where(CryptoSnapshot.symbol.in_([s.lower() for s in symbols])))
+        out: dict = {}
+        for sym, ts, price in res.all():
+            out.setdefault(sym, []).append((ts, price))
+        return out
+
+    async def save_move_attribution(self, **kw) -> int:
+        import json
+
+        from storage.models import MoveAttribution
+        row = MoveAttribution(
+            window_hours=kw.get("window_hours", 12), briefing_id=kw.get("briefing_id", 0) or 0,
+            moves=json.dumps(kw.get("moves", [])), signals=json.dumps(kw.get("signals", [])),
+            result=json.dumps(kw.get("result", {})), model=kw.get("model", ""),
+            latency_ms=kw.get("latency_ms", 0) or 0, created_at=_now_utc())
+        self.session.add(row)
+        await self.session.commit()
+        return row.id
+
+    async def recent_move_attributions(self, limit: int = 24) -> list:
+        from storage.models import MoveAttribution
+        res = await self.session.execute(
+            select(MoveAttribution).order_by(MoveAttribution.created_at.desc()).limit(limit))
+        return list(res.scalars().all())
+
     async def latest_briefing(self):
         from storage.models import MarketBriefing
         res = await self.session.execute(

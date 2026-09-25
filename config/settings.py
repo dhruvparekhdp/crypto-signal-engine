@@ -108,6 +108,11 @@ class Settings(BaseSettings):
     llm_chain_briefing: str = "groq:groq/compound, groq:groq/compound-mini"
     market_briefing_enabled: bool = True
     market_briefing_minutes: int = 30
+    # Hourly: why each watchlist coin moved, and how our signals fared.
+    llm_chain_attribution: str = "groq:groq/compound, groq:openai/gpt-oss-120b"
+    move_attribution_enabled: bool = True
+    move_attribution_minutes: int = 60
+    move_attribution_window_hours: int = 12
     # Reviewing what is already open.
     #
     # A losing position has to keep earning the right to stay open: the local
