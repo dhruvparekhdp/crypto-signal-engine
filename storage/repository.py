@@ -899,6 +899,33 @@ class Repository:
             select(TradeJournal).order_by(TradeJournal.opened_at.desc()).limit(limit))
         return list(res.scalars().all())
 
+    # ── Settings edited on /settings ───────────────────────────
+
+    async def get_app_settings(self) -> dict:
+        import json
+
+        from storage.models import AppSetting
+        rows = (await self.session.execute(select(AppSetting))).scalars().all()
+        out = {}
+        for r in rows:
+            try:
+                out[r.key] = json.loads(r.value)
+            except ValueError:
+                continue
+        return out
+
+    async def save_app_settings(self, values: dict) -> None:
+        import json
+
+        from storage.models import AppSetting
+        for key, value in values.items():
+            row = await self.session.get(AppSetting, key)
+            if row is None:
+                self.session.add(AppSetting(key=key, value=json.dumps(value)))
+            else:
+                row.value, row.updated_at = json.dumps(value), _now_utc()
+        await self.session.commit()
+
     async def latest_briefing(self):
         from storage.models import MarketBriefing
         res = await self.session.execute(

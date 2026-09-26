@@ -564,6 +564,16 @@ class TradeJournal(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_now_utc)
 
 
+class AppSetting(Base):
+    """One setting changed on /settings. Wins over .env and the code default."""
+
+    __tablename__ = "app_settings"
+
+    key: Mapped[str] = mapped_column(String, primary_key=True)
+    value: Mapped[str] = mapped_column(Text)                      # JSON
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=_now_utc)
+
+
 class PaperPosition(Base):
     """
     An open paper position. Deleted on close — the record lives on as a

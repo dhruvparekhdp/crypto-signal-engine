@@ -252,6 +252,11 @@ class Settings(BaseSettings):
     crypto_kline_interval: str = "1m"
     crypto_timeframes: str = "15m,30m,1h,4h,1d"
     binance_ws_enabled: bool = False
+    # Per-collector switches, editable on /settings (config/overrides.py).
+    # binance_only_mode overrides all three to off.
+    coindcx_enabled: bool = True
+    coingecko_enabled: bool = True
+    twelvedata_enabled: bool = True
     binance_klines_enabled: bool = True
     binance_klines_seconds: int = 60
 

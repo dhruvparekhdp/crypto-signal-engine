@@ -1698,6 +1698,8 @@ section h2{color:var(--accent-soft)}
     <span class="dot" data-t="emerald" style="background:#34d399" onclick="setSiteTheme('emerald')" title="Emerald Court"></span>
     <span class="dot" data-t="navy"    style="background:#0ea5e9" onclick="setSiteTheme('navy')"    title="Deep Navy"></span>
     <span class="dot" data-t="light"   style="background:#f4f1ea" onclick="setSiteTheme('light')"   title="Polar White"></span>
+    <span class="dot" data-t="neu"     style="background:#e0a84a;box-shadow:inset 2px 2px 4px #0006" onclick="setSiteTheme('neu')" title="Soft UI (dark)"></span>
+    <span class="dot" data-t="neu-light" style="background:#e6e9ef;box-shadow:inset 2px 2px 4px #0003" onclick="setSiteTheme('neu-light')" title="Soft UI (light)"></span>
   </div>
   <div class="side-foot">
     <div style="display:flex;align-items:center;gap:6px">
@@ -3289,6 +3291,16 @@ async def _api_strategy_config_post(runner, request: web.Request) -> web.Respons
                 bank_size=float(body["bank_size"]) if "bank_size" in body else None,
                 min_confidence=float(body["min_confidence"]) if "min_confidence" in body else None,
             )
+            # The engine reads these from settings, not from this table: write
+            # them through to the settings store so saving here takes effect.
+            from config.overrides import LEGACY_STRATEGY
+            from config.overrides import apply as _apply
+            through = {k: body[k] for k in LEGACY_STRATEGY if k in body}
+            if through:
+                await repo.save_app_settings(through)
+                _apply(_SETTINGS, through)
+                if hasattr(runner, "on_settings_changed"):
+                    runner.on_settings_changed(list(through))
             return web.json_response({"ok": True, "groq_model": cfg.groq_model})
     except Exception as exc:
         return web.json_response({"error": str(exc)}, status=400)
@@ -3311,7 +3323,24 @@ async def _api_collector_toggle(runner, request: web.Request) -> web.Response:
                 text=json.dumps({"error": f"unknown collector: {collector}"}),
                 content_type="application/json", status=400,
             )
-        runner.collector_enabled[collector] = enabled
+        # Saved, not just set in memory: the switches used to reset to their
+        # defaults on every restart.
+        key = {"coindcx": "coindcx_enabled", "coingecko": "coingecko_enabled",
+               "binance_ws": "binance_ws_enabled",
+               "twelvedata_ws": "twelvedata_enabled"}.get(collector)
+        if key is None:
+            runner.collector_enabled[collector] = enabled      # no stored setting
+        else:
+            from config.overrides import apply as _apply
+            from storage.database import AsyncSessionFactory
+            from storage.repository import Repository
+            async with AsyncSessionFactory() as session:
+                await Repository(session).save_app_settings({key: enabled})
+            _apply(_SETTINGS, {key: enabled})
+            if hasattr(runner, "on_settings_changed"):
+                runner.on_settings_changed([key])
+            else:
+                runner.collector_enabled[collector] = enabled
         import structlog as _slog
         _slog.get_logger().info("collector_toggled", collector=collector, enabled=enabled)
         return web.Response(
@@ -4941,6 +4970,45 @@ html[data-theme="emerald"]{
   --text:#dcefe6; --text-strong:#f0fdf4; --muted:#6b9080; --muted2:#4d6b5d;
   --accent:#34d399; --accent2:#6ee7b7; --accent-soft:#a7f3d0;
 }
+/* Neumorphism ("soft UI"): surfaces share the page colour and are shaped
+   by a light and a dark shadow instead of borders. Two variants, on the
+   same amber accent: dark and light. */
+html[data-theme="neu"]{
+  --bg:#23201c; --panel:#23201c; --panel2:#23201c; --sunk:#1c1a17;
+  --line:#2e2a25; --line2:#2a2622;
+  --text:#e6ddcf; --text-strong:#fbf5ea; --muted:#a39580; --muted2:#7d705f;
+  --accent:#e0a84a; --accent2:#f0bf6a; --accent-soft:#f6d59a;
+  --neu-d:#171512; --neu-l:#2f2b26;
+}
+html[data-theme="neu-light"]{
+  --bg:#e6e9ef; --panel:#e6e9ef; --panel2:#e6e9ef; --sunk:#dde1e8;
+  --line:#d3d8e0; --line2:#dde1e8;
+  --text:#3b4150; --text-strong:#1f2430; --muted:#6b7385; --muted2:#8a93a5;
+  --accent:#b8741a; --accent2:#cf8a2a; --accent-soft:#8c5510;
+  --pos:#15803d; --pos-strong:#16a34a; --pos-btn:#15803d;
+  --neg:#b91c1c; --neg-strong:#dc2626; --neg-btn:#b91c1c;
+  --neu-d:#c3c8d2; --neu-l:#ffffff;
+}
+html[data-theme^="neu"] body{background:var(--bg)!important}
+html[data-theme^="neu"] .card,html[data-theme^="neu"] .pnl,html[data-theme^="neu"] .cr-coin,
+html[data-theme^="neu"] .stat,html[data-theme^="neu"] article,html[data-theme^="neu"] .tbl tr,
+html[data-theme^="neu"] .pt-cell,html[data-theme^="neu"] .driver,html[data-theme^="neu"] .sidebar{
+  background:var(--bg)!important;border-color:transparent!important;border-radius:16px!important;
+  box-shadow:6px 6px 14px var(--neu-d),-6px -6px 14px var(--neu-l)!important}
+html[data-theme^="neu"] .sidebar{border-radius:0 18px 18px 0!important}
+html[data-theme^="neu"] button,html[data-theme^="neu"] .nav-btn,html[data-theme^="neu"] .side-item,
+html[data-theme^="neu"] .cr-page-btn,html[data-theme^="neu"] .pill,html[data-theme^="neu"] .pt-chip{
+  background:var(--bg)!important;border-color:transparent!important;border-radius:12px!important;
+  box-shadow:4px 4px 9px var(--neu-d),-4px -4px 9px var(--neu-l)!important}
+html[data-theme^="neu"] button:active,html[data-theme^="neu"] .nav-btn:active,
+html[data-theme^="neu"] .side-item.active,html[data-theme^="neu"] .side-item.on,
+html[data-theme^="neu"] .side-item[aria-current]{
+  box-shadow:inset 3px 3px 7px var(--neu-d),inset -3px -3px 7px var(--neu-l)!important}
+html[data-theme^="neu"] input,html[data-theme^="neu"] select,html[data-theme^="neu"] textarea,
+html[data-theme^="neu"] .cr-input{background:var(--bg)!important;border-color:transparent!important;
+  border-radius:12px!important;
+  box-shadow:inset 3px 3px 7px var(--neu-d),inset -3px -3px 7px var(--neu-l)!important}
+html[data-theme^="neu"] table td,html[data-theme^="neu"] table th{border-color:var(--line2)!important}
 html[data-theme="light"]{
   --bg:#f4f1ea; --panel:#ffffff; --panel2:#faf8f4; --sunk:#ece7dd;
   --line:#ded7c9; --line2:#eee9df;
@@ -5263,7 +5331,10 @@ async def make_app(runner) -> web.Application:
     app.router.add_get("/health", _bind(_health))
     app.router.add_get("/api/status", _bind(_api_status))
     app.router.add_get("/api/debug", _bind(_api_debug))
-    app.router.add_get("/settings", _settings_page)
+    from scheduler.settings_page import register as _register_settings, settings_page
+    app.router.add_get("/settings", settings_page)
+    app.router.add_get("/settings/classic", _settings_page)
+    _register_settings(app, runner)
     app.router.add_get("/api/settings", _bind(_api_collector_states))
     app.router.add_post("/api/auth/verify", _bind(_api_auth_verify))
     app.router.add_post("/api/settings/auth/login", _bind(_api_settings_auth_login))

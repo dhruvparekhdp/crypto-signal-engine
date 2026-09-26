@@ -299,9 +299,9 @@ async function loadBacktest(){
   h+='<p style="margin-top:10px"><button class="nav-btn" onclick="runBt()">'
     +'Run again now (admin)</button></p></section>';
   return h; }
-async function runBt(){ const r=await fetch('/api/v2/backtest/run',{method:'POST'});
+async function runBt(){ const r=await fetch('/api/v2/backtest/run',{method:'POST',headers:{'X-Settings-Token':sessionStorage.getItem('settings_token')||''}});
   alert(r.ok?'Started. Download plus test takes a few minutes; this page refreshes.'
-    :(r.status===409?'Already running.':'Log in as admin at /settings first.')); }
+    :(r.status===409?'Already running.':'Log in at /settings in this tab first.')); }
 async function load(){
   const bt=await loadBacktest().catch(()=>'');
   const d=await (await fetch('/api/v2/shadow?days=30')).json();
@@ -375,14 +375,14 @@ document.getElementById('f').onsubmit=async e=>{e.preventDefault();
   body.took=body.took==='1'; body.opened_at=iso(body.opened_at); body.closed_at=iso(body.closed_at);
   body.tags=[...document.querySelectorAll('#tags input:checked')].map(x=>x.value).join(',');
   msg.textContent='Saving and reading the chart at that time…';
-  const r=await fetch('/api/journal',{method:'POST',headers:{'Content-Type':'application/json'},
+  const r=await fetch('/api/journal',{method:'POST',headers:{'Content-Type':'application/json','X-Settings-Token':sessionStorage.getItem('settings_token')||''},
     body:JSON.stringify(body)});
   const d=await r.json();
   msg.textContent=r.ok?'Saved #'+d.id+' with '+Object.keys(d.features||{}).length+' chart facts'
-    :(d.error||'Not saved — log in as admin first');
+    :(d.error||'Not saved — log in at /settings in this tab first');
   if(r.ok){e.target.reset(); list();}};
 async function list(){
-  const r=await fetch('/api/journal'); const el=document.getElementById('list');
+  const r=await fetch('/api/journal',{headers:{'X-Settings-Token':sessionStorage.getItem('settings_token')||''}}); const el=document.getElementById('list');
   if(!r.ok){el.innerHTML='<span class="muted">Log in as admin to see the journal.</span>';return;}
   const d=await r.json();
   if(!d.rows.length){el.innerHTML='<span class="muted">Nothing yet. Twenty trades with a line '

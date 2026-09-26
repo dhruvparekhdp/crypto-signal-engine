@@ -130,14 +130,52 @@ class AppRunner:
         self._ws_tasks: list[asyncio.Task] = []
         # Binance-only leaves klines as the single source of candles, depth
         # and price, so the three of them cannot disagree with each other.
-        binance_only = settings.binance_only_mode
-        self.collector_enabled: dict[str, bool] = {
-            "coindcx": not binance_only,
-            "coingecko": not binance_only,
-            "binance_ws": settings.binance_ws_enabled,
-            "twelvedata_ws": not binance_only,
-        }
+        self.collector_enabled: dict[str, bool] = {}
+        self._binance_ws_task: asyncio.Task | None = None
+        self.sync_collectors()
 
+
+    def sync_collectors(self) -> None:
+        """Collector switches from settings. Binance-only turns the others off."""
+        only = settings.binance_only_mode
+        self.collector_enabled.update({
+            "coindcx": settings.coindcx_enabled and not only,
+            "coingecko": settings.coingecko_enabled and not only,
+            "binance_ws": settings.binance_ws_enabled,
+            "twelvedata_ws": settings.twelvedata_enabled and not only,
+        })
+
+    def _sync_binance_ws(self) -> None:
+        """Start or stop the Binance stream now, not at the next restart."""
+        running = self._binance_ws_task is not None and not self._binance_ws_task.done()
+        if self.collector_enabled.get("binance_ws") and not running:
+            self._binance_ws_task = asyncio.create_task(self.binance_ws.run_forever(),
+                                                        name="binance_ws")
+            self._ws_tasks.append(self._binance_ws_task)
+            log.info("binance_ws_task_spawned")
+        elif not self.collector_enabled.get("binance_ws") and running:
+            self._binance_ws_task.cancel()
+            log.info("binance_ws_task_stopped")
+
+    async def load_settings_overrides(self) -> list[str]:
+        """Apply the settings saved on /settings (database beats .env)."""
+        from config.overrides import apply
+        try:
+            async with AsyncSessionFactory() as session:
+                stored = await Repository(session).get_app_settings()
+        except Exception:
+            log.exception("settings_overrides_load_failed")
+            return []
+        applied = apply(settings, stored)
+        self.sync_collectors()
+        log.info("settings_overrides_applied", keys=applied)
+        return applied
+
+    def on_settings_changed(self, keys: list[str]) -> None:
+        """React to a save on /settings without a restart where possible."""
+        self.sync_collectors()
+        self._sync_binance_ws()
+        log.info("settings_changed", keys=keys)
 
     async def _coindcx_job(self) -> None:
         if not self.collector_enabled.get("coindcx", True):
@@ -775,7 +813,7 @@ class AppRunner:
 
                 signals = self.crypto_engine.process(state)
                 for sig in signals:
-                    if scfg.crypto_min_confidence > 0 and sig.confidence < scfg.crypto_min_confidence:
+                    if settings.crypto_min_confidence > 0 and sig.confidence < settings.crypto_min_confidence:
                         self.crypto_engine.forget(sig)
                         continue
 
@@ -789,7 +827,7 @@ class AppRunner:
                     # in the numbers. So a REJECT costs real confidence and
                     # the ordinary threshold decides, which keeps every
                     # decision in one place and visible in the logs.
-                    if self.groq_sentinel.is_available and scfg.groq_signal_review_enabled:
+                    if self.groq_sentinel.is_available and settings.groq_signal_review_enabled:
                         news, briefing_id = await self._news_context(sig.symbol)
                         delta, ai_summary, verdict = (
                             await self.groq_sentinel.review_signal_candidate(
@@ -814,13 +852,13 @@ class AppRunner:
                             log.debug("pre_review_not_saved", symbol=sig.symbol)
                         before = sig.confidence
                         sig.confidence = max(0.50, min(0.95, round(before + delta, 4)))
-                        if (scfg.crypto_min_confidence > 0
-                                and sig.confidence < scfg.crypto_min_confidence):
+                        if (settings.crypto_min_confidence > 0
+                                and sig.confidence < settings.crypto_min_confidence):
                             log.info("crypto_signal_dropped_after_ai_review",
                                      symbol=sig.symbol, type=sig.signal_type,
                                      verdict=verdict, confidence_before=before,
                                      confidence_after=sig.confidence,
-                                     threshold=scfg.crypto_min_confidence,
+                                     threshold=settings.crypto_min_confidence,
                                      reason=ai_summary)
                             # Logged as a shadow, not discarded. The resolver
                             # scores it like any other signal, so the cost of
@@ -1627,6 +1665,8 @@ class AppRunner:
         # Crypto watchlist lives in the DB — load/seed it before the WS collector
         # picks up symbols, so the very first connection already has the right set.
         await self._load_crypto_watchlist()
+        # Settings saved on /settings, before anything is scheduled or started.
+        await self.load_settings_overrides()
 
         # Measure before anything is scheduled, so every job is timed and a
         # stalled event loop can be traced to the job that stalled it.
@@ -1638,10 +1678,7 @@ class AppRunner:
         self.scheduler.start()
 
         # Launch continuous WebSocket tasks concurrently (non-blocking)
-        if self.collector_enabled.get("binance_ws", True):
-            task = asyncio.create_task(self.binance_ws.run_forever(), name="binance_ws")
-            self._ws_tasks.append(task)
-            log.info("binance_ws_task_spawned")
+        self._sync_binance_ws()
 
         if self.collector_enabled.get("twelvedata_ws", True) and settings.twelvedata_api_key:
             task = asyncio.create_task(self.twelvedata_ws.run_forever(), name="twelvedata_ws")
