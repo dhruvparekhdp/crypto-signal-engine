@@ -5365,7 +5365,8 @@ async def make_app(runner) -> web.Application:
     app.router.add_get("/health", _bind(_health))
     app.router.add_get("/api/status", _bind(_api_status))
     app.router.add_get("/api/debug", _bind(_api_debug))
-    from scheduler.settings_page import register as _register_settings, settings_page
+    from scheduler.settings_page import register as _register_settings
+    from scheduler.settings_page import settings_page
     app.router.add_get("/settings", settings_page)
     app.router.add_get("/settings/classic", _settings_page)
     _register_settings(app, runner)
