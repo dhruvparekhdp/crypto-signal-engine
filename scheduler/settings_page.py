@@ -81,6 +81,56 @@ def settings_api(runner):
     return get, post
 
 
+def pipeline_api(runner):
+    """GET /api/pipeline — the signal funnel, and the live state of every time-based gate."""
+    async def get(request: web.Request) -> web.Response:
+        from datetime import UTC, datetime
+
+        from sqlalchemy import select
+
+        from analysis.deal_scanner import book_full
+        from analysis.protections import in_session
+        from config.settings import settings
+        from scheduler.pipeline import funnel
+        from storage.database import AsyncSessionFactory
+        from storage.models import PaperPosition
+        from storage.repository import Repository
+
+        now = datetime.now(UTC)
+        async with AsyncSessionFactory() as session:
+            pcfg = await Repository(session).get_paper_config()
+            open_rows = (await session.execute(select(PaperPosition))).scalars().all()
+        protect = runner._protection_config() if hasattr(runner, "_protection_config") else None
+        blackout = runner._blackout(now) if hasattr(runner, "_blackout") else None
+        full = (book_full(open_rows, settings.premium_roe_pct)
+                if settings.premium_fills_book else None)
+        feeds = []
+        store = getattr(runner, "crypto_store", None)
+        for st in (await store.get_all() if store else []):
+            last = st.candles_1m[-1].timestamp if getattr(st, "candles_1m", None) else None
+            age = (now - (last if last.tzinfo else last.replace(tzinfo=UTC))).total_seconds() \
+                if last else None
+            feeds.append({"symbol": st.symbol.upper(), "price": st.current_price,
+                          "candle_age_s": round(age) if age is not None else None})
+        gates = {
+            "paper_enabled": bool(pcfg.enabled),
+            "protections_enabled": settings.protections_enabled,
+            "session_filter": settings.session_filter_enabled,
+            "weekdays_only": settings.session_weekdays_only,
+            "session_hours_utc": [settings.session_start_utc, settings.session_end_utc],
+            "in_session_now": (in_session(now.replace(tzinfo=None), protect)
+                               if protect and protect.session_filter else True),
+            "weekday": now.strftime("%A"),
+            "blackout": ({"name": blackout.name, "kind": blackout.kind}
+                         if blackout is not None else None),
+            "book_full_with": full.symbol.upper() if full is not None else None,
+            "open_positions": len(open_rows),
+        }
+        return web.json_response({"day": funnel(24), "hour": funnel(1), "gates": gates,
+                                  "feeds": feeds})
+    return get
+
+
 async def settings_page(request: web.Request) -> web.Response:
     from scheduler.health import _THEME_SNIPPET
     return web.Response(text=PAGE.replace("</head>", _THEME_SNIPPET + "</head>"),
@@ -167,6 +217,8 @@ th{color:var(--muted2);font-weight:600}
 </header>
 <main>
 <section class="card raise" id="auth"></section>
+<section class="card raise" id="why"><h2>🔎 Why no trades?</h2><div id="funnel">
+<p class="small muted">Loading…</p></div></section>
 <section class="card raise"><h2>Data in use right now</h2>
 <div class="chips" id="sources"></div>
 <p class="small muted" style="margin-top:10px">Every switch below is saved in the database and read
@@ -282,7 +334,36 @@ async function perf(){
     +'</table></div><div class="inset" style="padding:10px 12px;overflow-x:auto"><table><tr><th>Slowest jobs</th><th>typical</th><th>worst</th></tr>'
     +d.jobs.slice(0,10).map(j=>'<tr><td>'+esc(j.job)+'</td><td>'+j.p50_ms+' ms</td><td>'+j.max_ms+' ms</td></tr>').join('')
     +'</table></div>';}
-themes(); auth(); load();
+async function funnel(){
+  const d=await fetch('/api/pipeline').then(r=>r.json()).catch(()=>null);
+  const el=document.getElementById('funnel'); if(!d){el.innerHTML='<p class="small muted">Not available.</p>';return;}
+  const g=d.gates, st=d.day.stages||{}, last=d.day.last||{};
+  const stop=[];
+  if(!g.paper_enabled) stop.push('Paper trading is switched off (Paper trading section below).');
+  if(g.session_filter && !g.in_session_now) stop.push('Outside trading hours: new trades only '
+    +(g.weekdays_only?'Mon–Fri ':'')+istHour(g.session_hours_utc[0])+'–'+istHour(g.session_hours_utc[1])
+    +' IST. Today is '+g.weekday+'. Change it under Protections below.');
+  if(g.blackout) stop.push('Paused for '+esc(g.blackout.name)+'.');
+  if(g.book_full_with) stop.push('Book full: premium trade open in '+esc(g.book_full_with)+'.');
+  const stale=(d.feeds||[]).filter(f=>f.candle_age_s==null||f.candle_age_s>300);
+  if(stale.length) stop.push('No fresh price for '+stale.map(f=>esc(f.symbol)).join(', ')+' (over 5 min old).');
+  const n=k=>st[k]||0, ago=k=>last[k]?fmtAgo(last[k]):'not since restart';
+  const reasons=(list)=>list.length?list.map(r=>'<div class="h">'+r.count+' × '+esc(r.reason)+'</div>').join('')
+    :'<div class="h">none</div>';
+  el.innerHTML=(stop.length?'<div class="row inset"><div><div class="l" style="color:var(--accent)">Blocking new trades right now</div>'
+      +stop.map(x=>'<div class="h">• '+x+'</div>').join('')+'</div><div></div></div>'
+      :'<div class="row inset"><div><div class="l" style="color:var(--pos)">Nothing is blocking new trades right now</div>'
+      +'<div class="h">Trades open when a setup passes every filter.</div></div><div></div></div>')
+    +'<div class="row inset"><div><div class="l">Last 24 hours</div><div class="h">'
+    +n('fired')+' signals fired (last '+ago('fired')+') · '+n('blocked')+' blocked by filters · '
+    +n('paper_skipped')+' skipped by paper rules · '+n('paper_opened')+' trades opened (last '
+    +ago('paper_opened')+')</div></div><div></div></div>'
+    +'<div class="row inset"><div><div class="l">Filters that stopped signals</div>'+reasons(d.day.reasons.blocked)+'</div><div></div></div>'
+    +'<div class="row inset"><div><div class="l">Paper rules that skipped signals</div>'+reasons(d.day.reasons.paper_skipped)+'</div><div></div></div>'
+    +(d.day.tracking_since?'<p class="small muted">Counting since '+fmtWhen(d.day.tracking_since)+' (restarts reset it).</p>'
+      :'<p class="small muted">Counting started at the last restart; nothing recorded yet.</p>');
+}
+themes(); auth(); load(); funnel(); setInterval(funnel, 60000);
 </script></body></html>"""
 
 
@@ -290,3 +371,4 @@ def register(app: web.Application, runner) -> None:
     get, post = settings_api(runner)
     app.router.add_get("/api/app-settings", get)
     app.router.add_post("/api/app-settings", post)
+    app.router.add_get("/api/pipeline", pipeline_api(runner))

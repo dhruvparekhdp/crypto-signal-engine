@@ -916,6 +916,9 @@ class AppRunner:
                 signals = self.crypto_engine.process(state)
                 for sig in signals:
                     if settings.crypto_min_confidence > 0 and sig.confidence < settings.crypto_min_confidence:
+                        log.info("crypto_signal_below_min_confidence", symbol=sig.symbol,
+                                 type=sig.signal_type, confidence=sig.confidence,
+                                 threshold=settings.crypto_min_confidence)
                         self.crypto_engine.forget(sig)
                         continue
 
