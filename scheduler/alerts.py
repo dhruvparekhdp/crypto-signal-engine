@@ -26,6 +26,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 COOLDOWN_S = 30 * 60
+_NOT_DETAIL = {"event", "level", "timestamp", "logger", "exc_info", "stack_info"}
 _queue: asyncio.Queue | None = None
 _last_sent: dict[str, float] = {}
 _state_dir = Path("data")
@@ -55,8 +56,14 @@ def _summary(event_dict: dict) -> tuple[str, str]:
         exc = (type(exc), exc, exc.__traceback__)
     if isinstance(exc, tuple) and exc[0] is not None:
         return f"{exc[0].__name__}: {str(exc[1])[:300]}", _where(exc[2])
-    detail = event_dict.get("error") or event_dict.get("reason") or ""
-    return str(detail)[:300], ""
+    detail = event_dict.get("error") or event_dict.get("reason")
+    if detail:
+        return str(detail)[:300], ""
+    # No exception and no error text: show the event's own fields, so an alert
+    # like price_tick_rejected says which coin and which prices.
+    extra = [f"{k}={v}" for k, v in event_dict.items()
+             if k not in _NOT_DETAIL and not k.startswith("_")]
+    return ", ".join(extra)[:300], ""
 
 
 def processor(logger, method_name, event_dict):

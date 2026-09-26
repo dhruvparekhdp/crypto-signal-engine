@@ -467,7 +467,7 @@ class AppRunner:
                 blackout = self._blackout(now)
                 event_bias = None
                 if blackout is not None and pending and not settings.event_bias_mode:
-                    log.info("paper_trades_blackout", event=blackout.name,
+                    log.info("paper_trades_blackout", event_name=blackout.name,
                              kind=blackout.kind, skipped=len(pending))
                     pending = []
                 elif blackout is not None:
@@ -513,7 +513,7 @@ class AppRunner:
                         if not allows(sig.direction, event_bias):
                             log.info("paper_trade_skipped", symbol=sig.symbol,
                                      reason="against_news_bias", bias=event_bias["bias"],
-                                     event=blackout.name)
+                                     event_name=blackout.name)
                             continue
                     full = (book_full(cstate.positions, settings.premium_roe_pct)
                             if settings.premium_fills_book else None)
@@ -1264,7 +1264,7 @@ class AppRunner:
                         level = max(e.level_current or 0, e.level_confirmed or 0)
                         paths = {s: sorted(p) for s, p in points.items()}
                         await repo.save_shadow(e.id, simulate_books(e.happened_at, level, paths))
-                        log.info("event_shadow_books_saved", event=e.title[:60])
+                        log.info("event_shadow_books_saved", event_name=e.title[:60])
                 await session.commit()
         except Exception:
             log.exception("event_evaluation_failed")
@@ -1549,7 +1549,7 @@ class AppRunner:
             if got is not None:
                 got["model"] = reply.served_by
                 self._event_biases[key] = got
-                log.info("event_bias", event=event.name, bias=got["bias"],
+                log.info("event_bias", event_name=event.name, bias=got["bias"],
                          confidence=got["confidence"], reason=got["reason"][:160])
         except Exception:
             log.exception("event_bias_failed")
