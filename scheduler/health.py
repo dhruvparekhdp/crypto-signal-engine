@@ -5213,6 +5213,29 @@ _PREDICT_HTML = _PREDICT_HTML.replace("</head>", _THEME_SNIPPET + "</head>")
 _MOVES_HTML = _MOVES_HTML.replace("</head>", _THEME_SNIPPET + "</head>")
 
 
+@web.middleware
+async def _compress_middleware(request: web.Request, handler):
+    """gzip text responses over 1 KB: the dashboard is 115 KB raw, 33 KB gzipped."""
+    resp = await handler(request)
+    if (isinstance(resp, web.Response) and not isinstance(resp, web.FileResponse)
+            and "gzip" in request.headers.get("Accept-Encoding", "")
+            and resp.body is not None and len(resp.body) > 1024
+            and resp.compression is None):
+        resp.enable_compression()
+    return resp
+
+
+async def _api_debug_perf(runner, request: web.Request) -> web.Response:
+    """GET /api/debug/perf — slowest routes, slowest jobs, event-loop stalls, DB ping."""
+    from scheduler.perf import report
+    if not await _verify_admin_session(request):
+        from scheduler.security import check_bearer_auth
+        denied = check_bearer_auth(request, _SETTINGS.api_auth_token)
+        if denied is not None:
+            return denied
+    return web.json_response(report())
+
+
 async def make_app(runner) -> web.Application:
     from scheduler.security import rate_limit_middleware, security_headers_middleware
 
@@ -5221,9 +5244,12 @@ async def make_app(runner) -> web.Application:
     # than being opted into per-route — a cross-cutting concern bolted onto
     # individual handlers is the one that gets forgotten on the next new
     # endpoint.
+    from scheduler.perf import timing_middleware
     app = web.Application(middlewares=[
+        timing_middleware,          # outermost: times the whole request
         rate_limit_middleware(lambda: _SETTINGS),
         security_headers_middleware,
+        _compress_middleware,
     ])
 
     def _bind(handler_fn):
@@ -5278,6 +5304,7 @@ async def make_app(runner) -> web.Application:
     app.router.add_post("/api/crypto/watchlist/remove", _bind(_api_crypto_watchlist_remove))
     app.router.add_get("/api/commodities", _bind(_api_commodities))
     app.router.add_get("/api/debug/binance", _bind(_api_binance_probe))
+    app.router.add_get("/api/debug/perf", _bind(_api_debug_perf))
     from scheduler.v2_pages import register as _register_v2_pages
     _register_v2_pages(app, runner)
     return app

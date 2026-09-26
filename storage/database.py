@@ -55,11 +55,19 @@ def _make_url(raw: str) -> tuple[str, dict]:
 
 _url, _connect_args = _make_url(settings.database_url)
 
+_pool = {} if _url.startswith("sqlite") else {
+    # pool_pre_ping sent SELECT 1 to the remote database before EVERY checkout:
+    # one extra round trip per request. Recycling connections every 5 minutes
+    # avoids the stale-connection problem pre-ping guarded against, without
+    # the per-request cost. A larger pool stops pages queueing behind jobs.
+    "pool_recycle": 300, "pool_size": 10, "max_overflow": 10, "pool_timeout": 15,
+}
 engine = create_async_engine(
     _url,
     echo=False,
-    pool_pre_ping=True,
+    pool_pre_ping=False,
     connect_args=_connect_args,
+    **_pool,
 )
 AsyncSessionFactory = async_sessionmaker(engine, expire_on_commit=False)
 

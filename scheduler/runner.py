@@ -1628,6 +1628,12 @@ class AppRunner:
         # picks up symbols, so the very first connection already has the right set.
         await self._load_crypto_watchlist()
 
+        # Measure before anything is scheduled, so every job is timed and a
+        # stalled event loop can be traced to the job that stalled it.
+        from scheduler import perf
+        perf.instrument_scheduler(self.scheduler)
+        self._ws_tasks.append(asyncio.create_task(perf.loop_monitor(), name="loop_monitor"))
+        self._ws_tasks.append(asyncio.create_task(perf.db_ping_monitor(), name="db_ping"))
         self.setup_jobs()
         self.scheduler.start()
 
