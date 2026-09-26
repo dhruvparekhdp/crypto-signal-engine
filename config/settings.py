@@ -348,6 +348,9 @@ class Settings(BaseSettings):
     # No new paper trades around FOMC / CPI / NFP / PCE / PPI releases, or for
     # an hour after confidently scored high-impact news (war, tariffs, rates).
     event_blackout_enabled: bool = True
+    # During an event window, trade with the AI's bull/bear read of it
+    # (analysis/event_bias.py) instead of pausing everything.
+    event_bias_mode: bool = True
     fear_greed_refresh_minutes: int = 60
     crypto_max_stake_pct: float = 0.02
     use_finbert: bool = False

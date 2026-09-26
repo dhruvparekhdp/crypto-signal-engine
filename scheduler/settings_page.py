@@ -121,7 +121,10 @@ def pipeline_api(runner):
             "in_session_now": (in_session(now.replace(tzinfo=None), protect)
                                if protect and protect.session_filter else True),
             "weekday": now.strftime("%A"),
-            "blackout": ({"name": blackout.name, "kind": blackout.kind}
+            "blackout": ({"name": blackout.name, "kind": blackout.kind,
+                          "bias_mode": settings.event_bias_mode,
+                          "bias": (getattr(runner, "_event_biases", {}) or {}).get(
+                              f"{blackout.kind}:{blackout.name}:{blackout.at}")}
                          if blackout is not None else None),
             "book_full_with": full.symbol.upper() if full is not None else None,
             "open_positions": len(open_rows),
@@ -343,7 +346,13 @@ async function funnel(){
   if(g.session_filter && !g.in_session_now) stop.push('Outside trading hours: new trades only '
     +(g.weekdays_only?'Mon–Fri ':'')+istHour(g.session_hours_utc[0])+'–'+istHour(g.session_hours_utc[1])
     +' IST. Today is '+g.weekday+'. Change it under Protections below.');
-  if(g.blackout) stop.push('Paused for '+esc(g.blackout.name)+'.');
+  let info='';
+  if(g.blackout && !g.blackout.bias_mode) stop.push('Paused for '+esc(g.blackout.name)+'.');
+  if(g.blackout && g.blackout.bias_mode){ const b=g.blackout.bias;
+    info='<div class="row inset"><div><div class="l">Trading through news</div><div class="h">'
+      +esc(g.blackout.name)+'<br>'+(b?'Bias: <b>'+esc(b.bias.toUpperCase())+'</b> ('+b.confidence
+      +') · '+esc(b.reason||''):'Asking Groq for the public mood; using news sentiment meanwhile.')
+      +'<br>Signals against a confident bias are skipped; the rest trade.</div></div><div></div></div>'; }
   if(g.book_full_with) stop.push('Book full: premium trade open in '+esc(g.book_full_with)+'.');
   const stale=(d.feeds||[]).filter(f=>f.candle_age_s==null||f.candle_age_s>300);
   if(stale.length) stop.push('No fresh price for '+stale.map(f=>esc(f.symbol)).join(', ')+' (over 5 min old).');
@@ -354,6 +363,7 @@ async function funnel(){
       +stop.map(x=>'<div class="h">• '+x+'</div>').join('')+'</div><div></div></div>'
       :'<div class="row inset"><div><div class="l" style="color:var(--pos)">Nothing is blocking new trades right now</div>'
       +'<div class="h">Trades open when a setup passes every filter.</div></div><div></div></div>')
+    +info
     +'<div class="row inset"><div><div class="l">Last 24 hours</div><div class="h">'
     +n('fired')+' signals fired (last '+ago('fired')+') · '+n('blocked')+' blocked by filters · '
     +n('paper_skipped')+' skipped by paper rules · '+n('paper_opened')+' trades opened (last '

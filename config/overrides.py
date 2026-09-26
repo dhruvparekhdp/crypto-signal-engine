@@ -89,6 +89,11 @@ FIELDS: tuple[Field, ...] = (
           "else until it closes. Signals on the same tick are always taken best first."),
     Field("premium_roe_pct", "exits", "Premium deal: target pays at least (% on margin)",
           "50% at 25x is a 2% move, typical of a volatile coin.", kind="float", lo=5, hi=500),
+    Field("event_blackout_enabled", "protect", "Watch news and economic events",
+          "Off: events are ignored entirely."),
+    Field("event_bias_mode", "protect", "Trade through news with the AI's bias",
+          "On: during an event, Groq reads the public mood (bull / bear); trades with it go "
+          "ahead, only trades against a confident bias are skipped. Off: pause all new trades."),
     # Protections
     Field("protections_enabled", "protect", "Protections",
           "Master switch for everything in this group."),

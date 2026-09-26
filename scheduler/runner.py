@@ -165,6 +165,9 @@ class AppRunner:
         # symbol -> time of an unconfirmed model "close" vote.
         self._close_votes: dict[str, datetime] = {}
         self._tick_notes: list[str] = []
+        # Groq's bull/bear read per news or calendar event (event_bias.py).
+        self._event_biases: dict[str, dict] = {}
+        self._event_bias_pending: set[str] = set()
         self.oi_collector = BinanceFuturesOICollector(self.crypto_store)
         self._pending_paper_signals: list[tuple[CryptoSignal, object]] = []
         self.fear_greed = None
@@ -432,10 +435,15 @@ class AppRunner:
                 # takes out stops sized for an ordinary hour. Stand aside;
                 # open positions keep their stops.
                 blackout = self._blackout(now)
-                if blackout is not None and pending:
+                event_bias = None
+                if blackout is not None and pending and not settings.event_bias_mode:
                     log.info("paper_trades_blackout", event=blackout.name,
                              kind=blackout.kind, skipped=len(pending))
                     pending = []
+                elif blackout is not None:
+                    # Trade through it with the crowd's bias (owner, 26 Sep):
+                    # only signals against a confident bias are skipped.
+                    event_bias = self._event_bias_for(blackout, states)
 
                 from analysis.paper_cycle import reprice_signal
                 from analysis.protections import RecentTrade, check_entry
@@ -470,6 +478,13 @@ class AppRunner:
                 for sig, st in pending:
                     if st.current_price <= 0:
                         continue
+                    if event_bias is not None:
+                        from analysis.event_bias import allows
+                        if not allows(sig.direction, event_bias):
+                            log.info("paper_trade_skipped", symbol=sig.symbol,
+                                     reason="against_news_bias", bias=event_bias["bias"],
+                                     event=blackout.name)
+                            continue
                     full = (book_full(cstate.positions, settings.premium_roe_pct)
                             if settings.premium_fills_book else None)
                     if full is not None:
@@ -513,7 +528,10 @@ class AppRunner:
                               f"{vol_class.get(pos.symbol, 'unknown')} coin · target pays "
                               f"{roe:.0f}% on margin"
                               + (" · PREMIUM: book full until this closes" if premium
-                                 else "")))])
+                                 else "")
+                              + (f" · news: {blackout.name[:60]} → {event_bias['bias']} "
+                                 f"({event_bias['confidence']:.2f}, {event_bias['source']})"
+                                 if event_bias else "")))])
                     cstate.position_ids[len(cstate.positions)] = row.id
                     cstate.positions.append(pos)
                     log.info("paper_trade_opened", symbol=pos.symbol,
@@ -1469,6 +1487,44 @@ class AppRunner:
             "sentiment_score": round(float(getattr(state, "sentiment_score", 0.0) or 0.0), 4),
             "fear_greed": int(self.fear_greed.value) if self.fear_greed else 0,
         }
+
+    def _event_bias_for(self, event, states) -> dict:
+        """
+        The bull/bear bias for this event: Groq's answer once it arrives,
+        the engine's news sentiment until then. Asks Groq once per event,
+        in the background, so the paper tick never waits on a model.
+        """
+        from analysis.event_bias import from_sentiment
+        key = f"{event.kind}:{event.name}:{event.at}"
+        got = self._event_biases.get(key)
+        if got is not None:
+            return got
+        if key not in self._event_bias_pending:
+            self._event_bias_pending.add(key)
+            asyncio.create_task(self._fetch_event_bias(key, event))
+        scores = [st.sentiment_score for st in states.values()
+                  if getattr(st, "sentiment_score", None) is not None]
+        return from_sentiment(sum(scores) / len(scores) if scores else 0.0)
+
+    async def _fetch_event_bias(self, key: str, event) -> None:
+        from analysis.event_bias import SYSTEM, parse, prompt
+        from collectors.llm_client import ask_json, chain_for
+        try:
+            if not chain_for("briefing"):
+                return
+            when = (event.at + timedelta(hours=5, minutes=30)).strftime("%d %b %H:%M")
+            reply = await ask_json("briefing", SYSTEM, prompt(event.name, event.kind, when),
+                                   max_tokens=900, temperature=0.2, timeout=60.0)
+            got = parse(reply.data) if reply else None
+            if got is not None:
+                got["model"] = reply.served_by
+                self._event_biases[key] = got
+                log.info("event_bias", event=event.name, bias=got["bias"],
+                         confidence=got["confidence"], reason=got["reason"][:160])
+        except Exception:
+            log.exception("event_bias_failed")
+        finally:
+            self._event_bias_pending.discard(key)
 
     def _blackout(self, now: datetime):
         """The event that forbids opening a trade right now, or None."""
