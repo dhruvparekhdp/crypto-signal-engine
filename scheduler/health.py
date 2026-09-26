@@ -186,6 +186,31 @@ async def _api_predict(runner, request: web.Request) -> web.Response:
     })
 
 
+def _blocked_downstream(runner, state, direction: str) -> str | None:
+    """
+    Would the live engine's HTF-trend filter or cooldown veto this direction?
+
+    `evaluate()` — the confluence vote — is the only gate /api/debug/signals
+    used to check. It agreeing is not the whole story: CryptoEngine.process()
+    runs two more gates after it that this endpoint had no way to see,
+    reporting "WOULD FIRE" for setups already vetoed live a moment earlier.
+    """
+    engine = getattr(runner, "crypto_engine", None)
+    if engine is None:
+        return None
+    import types
+    fake = types.SimpleNamespace(symbol=state.symbol, direction=direction,
+                                 signal_type="confluence")
+    try:
+        if engine._opposes_htf_trend(fake, state):
+            return "against the 1h/15m or daily trend"
+        if engine._is_on_cooldown(state.symbol, "confluence"):
+            return "same coin fired recently — on cooldown"
+    except Exception:
+        return None
+    return None
+
+
 async def _api_debug_signals(runner, request: web.Request) -> web.Response:
     """
     Why each watchlist symbol did or did not produce a signal, right now.
@@ -193,7 +218,8 @@ async def _api_debug_signals(runner, request: web.Request) -> web.Response:
     Written because "only XRP is firing" cannot be answered from the outside:
     every gate that refuses a setup logs at debug and then the setup vanishes.
     This asks each gate the same question the engine does and reports the
-    first one that says no, per symbol.
+    first one that says no, per symbol — including the two gates that run
+    after the confluence vote (see _blocked_downstream).
     """
     from analysis import indicators as ind
     from analysis.confluence import ConvictionGate, evaluate
@@ -303,9 +329,18 @@ async def _api_debug_signals(runner, request: web.Request) -> web.Response:
         row["agreeing"] = max(longs, shorts)
         row["dissenting"] = min(longs, shorts)
         row["leaning"] = "long" if longs > shorts else ("short" if shorts > longs else "split")
+        blocked = None if v.direction is None else _blocked_downstream(runner, st, v.direction)
         if v.direction is None:
             row["verdict"] = v.vetoes[0] if v.vetoes else "no majority"
             row["gate"] = "confluence"
+        elif blocked is not None:
+            # Confluence agrees, but two gates after it — the HTF/daily
+            # trend filter and the per-symbol cooldown — are not part of
+            # `evaluate()` and were reporting WOULD FIRE for setups the live
+            # engine had already vetoed a moment earlier (visible on
+            # /api/pipeline as "blocked: against the daily trend").
+            row["verdict"] = f"blocked live too: {blocked}"
+            row["gate"] = "htf_trend"
         else:
             row["verdict"] = f"WOULD FIRE {v.direction} at {v.confidence * 100:.0f}%"
             row["gate"] = None

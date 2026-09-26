@@ -164,13 +164,13 @@ class TestGateDiagnostic(unittest.IsolatedAsyncioTestCase):
     process. This endpoint asks each gate the same question the engine does.
     """
 
-    async def _report(self, cases):
+    async def _report(self, cases, engine=None):
         import random
         from datetime import timedelta
 
+        import scheduler.health as health
         from analysis.crypto_state import CryptoState, OHLCVCandle
         from analysis.crypto_state_store import CryptoStateStore, recalculate_indicators
-        import scheduler.health as health
 
         t0 = datetime(2026, 8, 20, tzinfo=UTC)
         store = CryptoStateStore()
@@ -200,8 +200,9 @@ class TestGateDiagnostic(unittest.IsolatedAsyncioTestCase):
             if len(st.candles_1m) >= 14:
                 recalculate_indicators(st)
 
-        runner = type("R", (), {"crypto_store": store})()
+        runner = type("R", (), {"crypto_store": store, "crypto_engine": engine})()
         from unittest.mock import patch
+
         from analysis.confluence import ConvictionGate
         with patch("analysis.crypto_signals.GATE", ConvictionGate()):
             resp = await health._api_debug_signals(runner, type("Q", (), {"query": {}})())
@@ -238,3 +239,45 @@ class TestGateDiagnostic(unittest.IsolatedAsyncioTestCase):
         rows = await self._report([("xrpusdt", 120, 0.006, 0.0018, 1.0, False)])
         self.assertIn("votes", rows["XRPUSDT"])
         self.assertGreaterEqual(rows["XRPUSDT"]["agreeing"], 3)
+
+    async def test_confluence_agreeing_is_not_the_whole_story(self):
+        """
+        The 26-27 Sep diagnostics bundle: this endpoint said SOLUSDT
+        WOULD FIRE while /api/pipeline showed a real short blocked minutes
+        earlier for "against the daily trend" — the same setup, since this
+        endpoint never asked the HTF-trend filter or the cooldown, only the
+        confluence vote. It must now report the same block the live engine
+        already made, not a WOULD FIRE the engine had already refused.
+        """
+        class FakeEngine:
+            def _opposes_htf_trend(self, sig, state):
+                return sig.symbol == "xrpusdt"
+
+            def _is_on_cooldown(self, symbol, signal_type):
+                return False
+
+        rows = await self._report([("xrpusdt", 120, 0.006, 0.0018, 1.0, False)],
+                                  engine=FakeEngine())
+        row = rows["XRPUSDT"]
+        self.assertNotIn("WOULD FIRE", row["verdict"])
+        self.assertIn("blocked live too", row["verdict"])
+        self.assertIn("trend", row["verdict"])
+
+    async def test_a_cooling_down_symbol_is_not_reported_as_would_fire(self):
+        class FakeEngine:
+            def _opposes_htf_trend(self, sig, state):
+                return False
+
+            def _is_on_cooldown(self, symbol, signal_type):
+                return True
+
+        rows = await self._report([("xrpusdt", 120, 0.006, 0.0018, 1.0, False)],
+                                  engine=FakeEngine())
+        self.assertIn("cooldown", rows["XRPUSDT"]["verdict"])
+
+    async def test_no_engine_attached_still_reports_would_fire(self):
+        """The public /api/debug/signals caller in earlier tests has no
+        crypto_engine at all — must degrade to the confluence-only check,
+        not raise."""
+        rows = await self._report([("xrpusdt", 120, 0.006, 0.0018, 1.0, False)])
+        self.assertIn("WOULD FIRE", rows["XRPUSDT"]["verdict"])
