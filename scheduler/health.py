@@ -1883,7 +1883,7 @@ section h2{color:var(--accent-soft)}
 <div id="tab-crypto" class="tab-content">
   <section>
     <h2>🪙 Live Crypto Watchlist</h2>
-    <div class="cr-note">Prices update every 30-60s from CoinDCX and CoinGecko. Add or remove symbols here — changes apply immediately, no redeploy needed.</div>
+    <div class="cr-note">Prices come from whatever you've enabled on <a href="/settings" style="color:inherit">Settings</a> — live, tick-by-tick when the Binance stream is on; polled every 15-60s otherwise. Add or remove symbols here — changes apply immediately, no redeploy needed.</div>
     <div class="cr-watchlist-manager">
       <input type="text" id="cr-add-input" class="cr-input" placeholder="Add symbol, e.g. dogeusdt" onkeydown="if(event.key==='Enter')addCryptoSymbol()">
       <button class="cr-add-btn" onclick="addCryptoSymbol()">+ Add</button>

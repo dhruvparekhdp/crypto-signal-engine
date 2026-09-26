@@ -303,10 +303,21 @@ class CryptoStateStore:
             # next poll append beside it instead of updating it.
             state.candles_1m[-1].is_closed = False
             # Normally a ticker collector owns the price and this only seeds a
-            # cold start. With one source there is no ticker, so the newest
-            # close is the price — and price and candles then cannot disagree,
-            # which is the disagreement that produced the 43% gold target.
-            if settings.binance_only_mode or state.current_price <= 0:
+            # cold start. Binance-only has no CoinDCX/CoinGecko ticker, so
+            # without the WebSocket this poll is the only source and must
+            # own the price — that guarantee (price and candles cannot
+            # disagree) is what fixed the 43% gold target.
+            #
+            # But when the WebSocket IS on, it already updates current_price
+            # on every trade — sub-second, not once per this poll's 15s
+            # interval. Overwriting it here on every poll discarded whatever
+            # fresher price the socket had just set, capping "live" at the
+            # poll interval and quietly disagreeing with Binance's own book
+            # by however much price moved in between (the SOL/BCH gap the
+            # owner saw). REST's job in that case is only to keep the candle
+            # history filled; the socket keeps owning current_price.
+            if state.current_price <= 0 or (settings.binance_only_mode
+                                            and not settings.binance_ws_enabled):
                 state.current_price = state.candles_1m[-1].close
             recalculate_indicators(state)
 
