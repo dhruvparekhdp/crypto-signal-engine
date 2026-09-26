@@ -26,6 +26,9 @@ VARIANTS = {
     "taker_entry": ExecConfig(entry_mode="taker"),
     "breakeven": ExecConfig(breakeven_at_r=1.25),
     "partial": ExecConfig(partial_at_r=1.5),
+    # The owner's exits: lock profit early, trail tight (SOL trade, 26 Sep).
+    "owner_tight": ExecConfig(lock_at_pct=0.005, lock_to_pct=0.0035, trail_pct=0.0015),
+    "owner_medium": ExecConfig(lock_at_pct=0.005, lock_to_pct=0.002, trail_pct=0.003),
 }
 # Setup variants (research items 2-8): same execution, different filters.
 SETUP_VARIANTS = {
@@ -41,13 +44,15 @@ SETUP_VARIANTS = {
                      "swing_alternate": True, "min_swing_atr": 0.75, "regime_routing": True},
                     "All filters together (not entry depth)"),
 }
-TRIALS = 4 + len(SETUP_VARIANTS)       # execution variants + setup variants
+TRIALS = 6 + len(SETUP_VARIANTS)       # execution variants + setup variants
 
 VARIANT_LABELS = {
     "base": "Limit entry, full target",
     "taker_entry": "Market entry at next open",
     "breakeven": "Limit entry, stop to breakeven at +1.25R",
     "partial": "Limit entry, half off at +1.5R, rest to target",
+    "owner_tight": "Your style: at +0.5% lock +0.35%, trail 0.15%",
+    "owner_medium": "Your style, looser: at +0.5% lock +0.2%, trail 0.3%",
 }
 
 

@@ -66,6 +66,52 @@ from storage.repository import Repository
 log = structlog.get_logger()
 
 
+def _trade_snapshot(pos) -> dict:
+    return {"stop": pos.stop_price, "target": pos.target_price, "trail": pos.trail_active,
+            "trail_r": pos.trail_r_override, "lock": pos.locked_roe}
+
+
+def _event(pos, cycle_id: int, now: datetime, kind: str, field: str = "", old: str = "",
+           new: str = "", note: str = "") -> dict:
+    return {"cycle_id": cycle_id, "symbol": pos.symbol.lower(),
+            "opened_at": pos.opened_at.replace(tzinfo=None) if pos.opened_at.tzinfo
+            else pos.opened_at,
+            "at": now.replace(tzinfo=None) if now.tzinfo else now,
+            "kind": kind, "field": field, "old": old, "new": new, "note": note}
+
+
+def _trade_changes(before: dict, pos, cycle_id: int, now: datetime, price: float) -> list[dict]:
+    """
+    What moved on this tick, as log rows. A trailing stop moves a little on
+    most ticks, so a stop move is logged only when it is at least 0.02% of
+    price (or it is the trail's first move): the log should read like a
+    trader's notes, not a tick stream.
+    """
+    out = []
+    ref = price or pos.entry_price
+    if before["trail"] != pos.trail_active and pos.trail_active:
+        out.append(_event(pos, cycle_id, now, "trail", "trail", "off", "on",
+                          f"trail armed at price {price:.6g}"))
+    if before["stop"] != pos.stop_price and (
+            abs(pos.stop_price - before["stop"]) / ref >= 0.0002
+            or (pos.trail_active and not before["trail"])):
+        side = 1 if str(getattr(pos.side, "value", pos.side)) == "long" else -1
+        locked = side * (pos.stop_price - pos.entry_price) / pos.entry_price * 100
+        out.append(_event(pos, cycle_id, now, "stop", "stop", f"{before['stop']:.6g}",
+                          f"{pos.stop_price:.6g}",
+                          f"price {price:.6g} · stop now {locked:+.2f}% from entry"))
+    if before["target"] != pos.target_price:
+        out.append(_event(pos, cycle_id, now, "target", "target", f"{before['target']:.6g}",
+                          f"{pos.target_price:.6g}" if pos.target_price else "released",
+                          "target released: the trail decides the exit"
+                          if not pos.target_price else ""))
+    if before["trail_r"] != pos.trail_r_override and pos.trail_r_override is not None:
+        old = f"{before['trail_r']:.2f}R" if before["trail_r"] is not None else "default"
+        out.append(_event(pos, cycle_id, now, "trail", "trail distance", old,
+                          f"{pos.trail_r_override:.2f}R", "set by the AI confidence"))
+    return out
+
+
 def _record_start(path: Path, window_minutes: int = 60) -> list[str]:
     """Append this start to the file; return the starts within the window, this one included."""
     import json
@@ -114,6 +160,7 @@ class AppRunner:
         self._v2_bt_state: dict = {}
         # symbol -> time of an unconfirmed model "close" vote.
         self._close_votes: dict[str, datetime] = {}
+        self._tick_notes: list[str] = []
         self.oi_collector = BinanceFuturesOICollector(self.crypto_store)
         self._pending_paper_signals: list[tuple[CryptoSignal, object]] = []
         self.fear_greed = None
@@ -325,6 +372,8 @@ class AppRunner:
                         live.append(pos)
                         continue
 
+                    before = _trade_snapshot(pos)
+                    self._tick_notes = []
                     trade = resolve_at_price(pos, st.current_price, now, cfg, wallet)
                     if trade is None:
                         # The position survived the tick's exits. A losing one
@@ -335,14 +384,23 @@ class AppRunner:
                         # this runs only on what resolve_at_price left alive.
                         trade = await self._review_open_position(
                             pos, st, cfg, now, wallet, repo)
+                    events = _trade_changes(before, pos, cycle.id, now, st.current_price)
+                    events += [_event(pos, cycle.id, now, "ai", note=n) for n in self._tick_notes]
                     if trade is None:
                         await repo.sync_position(row.id, pos)
+                        await repo.add_trade_events(events)
                         live_ids[len(live)] = row.id
                         live.append(pos)
                         continue
 
                     wallet = trade.wallet_after
                     await repo.close_position_atomic(cycle.id, row.id, trade, wallet)
+                    events.append(_event(
+                        pos, cycle.id, now, "closed", "exit", new=f"{trade.exit_price:.6g}",
+                        note=(f"{trade.reason.value} · net ₹{trade.net_pnl:+.2f} "
+                              f"({trade.return_on_margin * 100:+.1f}% on margin) · "
+                              f"fees ₹{trade.fees_paid:.2f}")))
+                    await repo.add_trade_events(events)
                     # Post-mortem runs detached: the trade is already closed and
                     # recorded, so a slow or failing reviewer must not hold up
                     # the rest of the tick or the positions still to resolve.
@@ -417,6 +475,13 @@ class AppRunner:
                     cstate.wallet -= pos.margin
                     wallet = cstate.wallet
                     row = await repo.open_position_atomic(cycle.id, pos, wallet)
+                    risk = abs(pos.entry_price - pos.stop_price) / pos.entry_price * 100
+                    await repo.add_trade_events([_event(
+                        pos, cycle.id, now, "opened", "entry", new=f"{pos.entry_price:.6g}",
+                        note=(f"{pos.side.value} {sig.signal_type} at {sig.confidence:.0%} · "
+                              f"stop {pos.stop_price:.6g} ({risk:.2f}% away) · target "
+                              f"{pos.target_price:.6g} · {pos.leverage:.0f}x · margin "
+                              f"₹{pos.margin:.0f} · quoted {sig.current_price:.6g}"))])
                     cstate.position_ids[len(cstate.positions)] = row.id
                     cstate.positions.append(pos)
                     log.info("paper_trade_opened", symbol=pos.symbol,
@@ -555,6 +620,10 @@ class AppRunner:
             return None
 
         if review.asked_model:
+            self._tick_notes.append(
+                f"AI review: {review.verdict} · confidence {review.confidence:.2f} "
+                f"(chart read {review.trend:.2f}) · {review.summary[:140]}")
+        if review.asked_model:
             held = (now - pos.opened_at).total_seconds() / 60.0
             if held < settings.position_review_min_hold_minutes:
                 log.info("position_close_too_early", symbol=pos.symbol,
@@ -567,6 +636,7 @@ class AppRunner:
             age = (now - first).total_seconds() if first is not None else None
             if age is None or age > window:
                 self._close_votes[pos.symbol] = now
+                self._tick_notes.append("AI close vote 1 of 2: waiting for confirmation")
                 log.info("position_close_pending_confirmation", symbol=pos.symbol,
                          confidence=round(review.confidence, 3))
                 return None

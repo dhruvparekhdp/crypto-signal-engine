@@ -812,6 +812,24 @@ def _cycle_row(c) -> dict:
     }
 
 
+async def _api_paper_events(runner, request: web.Request) -> web.Response:
+    """GET /api/paper/events?symbol=SOLUSDT&opened_at=ISO — one trade's change log."""
+    from storage.database import AsyncSessionFactory
+    from storage.repository import Repository
+    sym = request.query.get("symbol", "").lower()
+    raw = request.query.get("opened_at", "")
+    try:
+        opened = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+        opened = opened.astimezone(UTC).replace(tzinfo=None) if opened.tzinfo else opened
+    except ValueError:
+        return web.json_response({"error": "opened_at must be ISO"}, status=400)
+    async with AsyncSessionFactory() as session:
+        rows = await Repository(session).trade_events(sym, opened)
+    return web.json_response({"events": [{
+        "at": _iso(e.at), "kind": e.kind, "field": e.field, "old": e.old, "new": e.new,
+        "note": e.note} for e in rows]})
+
+
 def _trade_row(t) -> dict:
     return {
         "symbol": t.symbol.upper(),
@@ -830,6 +848,7 @@ def _trade_row(t) -> dict:
         "signal_type": t.signal_type,
         "hours_held": round(t.hours_held, 2),
         "closed_at": _iso(t.closed_at),
+        "opened_at": _iso(t.opened_at),
         "qty": t.coin_qty,
         # Money on this row is INR at the rate the trade was booked at, not
         # today's. Sent so the page converts instead of assuming.
@@ -1407,6 +1426,15 @@ section h2{color:var(--accent-soft)}
 .pt-railcap{display:flex;justify-content:space-between;font-size:10px;color:var(--muted);
   margin-top:5px}
 
+.pt-logbtn{margin-left:8px;font:inherit;font-size:11px;font-weight:600;padding:3px 9px;
+  border-radius:7px;cursor:pointer;background:var(--acc-t);color:var(--accent);
+  border:1px solid var(--acc-t2)}
+.pt-logrow td{background:var(--panel2);padding:10px 12px!important}
+.pt-logrow td::before{content:none!important}
+.pt-log{width:100%;border-collapse:collapse;font-size:12px}
+.pt-log th{text-align:left;color:var(--muted2);font-weight:600;padding:4px 6px}
+.pt-log td{padding:5px 6px;border-top:1px solid var(--line2);vertical-align:top;
+  display:table-cell!important;white-space:normal}
 .pt-shead{display:flex;flex-wrap:wrap;gap:8px 14px;align-items:baseline;
   justify-content:space-between;margin-bottom:10px}
 .pt-shead h2{font-size:12px;font-weight:600;margin:0;letter-spacing:.04em;
@@ -1555,6 +1583,9 @@ section h2{color:var(--accent-soft)}
    number at the same time. Below 640px each row becomes its own card with the
    column name beside every value, so nothing needs sideways scrolling. */
 @media(max-width:640px){
+  .pt-log tr{display:table-row!important;border:0!important;padding:0!important;
+    background:none!important}
+  .pt-log td,.pt-log th{font-size:11px}
   html{-webkit-text-size-adjust:100%}
   .main-body{padding:12px 11px 20px}
   footer{padding-bottom:76px}
@@ -2022,6 +2053,44 @@ function renderPaper(){
   renderPaperHistory();
 }
 
+// Per-trade change log (owner's request, 26 Sep): opened, stop moves, trail,
+// target released, AI reviews and votes, close. Open logs survive the 30 s
+// refresh because their state lives here, not in the DOM.
+let _ptLogs = {};
+function ptLogKey(sym, at){ return sym + '|' + at; }
+function ptLogBtn(sym, at){
+  if(!at) return '';
+  const k = ptLogKey(sym, at);
+  return '<button type="button" class="pt-logbtn" onclick="ptLogToggle(\''+k+'\')">'
+    + (_ptLogs[k] !== undefined ? 'Hide log' : 'Log') + '</button>';
+}
+async function ptLogToggle(k){
+  if(_ptLogs[k] !== undefined){ delete _ptLogs[k]; renderPaper(); return; }
+  _ptLogs[k] = null; renderPaper();
+  const [sym, at] = k.split('|');
+  try{
+    const r = await fetch('/api/paper/events?symbol=' + encodeURIComponent(sym)
+                          + '&opened_at=' + encodeURIComponent(at));
+    _ptLogs[k] = r.ok ? (await r.json()).events : [];
+  }catch(e){ _ptLogs[k] = []; }
+  renderPaper();
+}
+function ptLogRow(sym, at, cols){
+  const k = ptLogKey(sym, at), ev = _ptLogs[k];
+  if(ev === undefined) return '';
+  const body = ev === null ? '<div class="pt-muted">Loading…</div>'
+    : !ev.length ? '<div class="pt-muted">No changes logged for this trade (trades opened '
+      + 'before the log existed have none).</div>'
+    : '<table class="pt-log"><tr><th>When (IST)</th><th>What</th><th>Change</th><th>Details</th></tr>'
+      + ev.map(e => '<tr><td>' + fmtStamp(e.at, {seconds:true}) + '<br><span class="pt-muted">'
+        + fmtAgo(e.at) + '</span></td><td><span class="pt-tag">' + e.kind + '</span>'
+        + (e.field && e.field !== e.kind ? ' ' + e.field : '') + '</td><td class="pt-num">'
+        + (e.old ? e.old + ' &rarr; ' : '') + (e.new || '') + '</td><td>'
+        + String(e.note || '').replace(/[&<>]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]))
+        + '</td></tr>').join('') + '</table>';
+  return '<tr class="pt-logrow"><td colspan="' + cols + '">' + body + '</td></tr>';
+}
+
 function renderPaperPositions(rows, rate){
   const el = document.getElementById('paper-positions');
   document.getElementById('pt-open-count').textContent =
@@ -2048,7 +2117,8 @@ function renderPaperPositions(rows, rate){
           <td><span class="pt-sym">${p.symbol}</span>`
           + `<span class="pt-side ${long ? 'l' : 's'}">${p.side.toUpperCase()}</span>`
           + (p.trailing ? '<span class="pt-trail">trailing</span>' : '')
-          + `<span class="pt-setup">${(p.signal_type||'').replace(/_/g,' ')} &middot; ${p.confidence}%</span></td>
+          + `<span class="pt-setup">${(p.signal_type||'').replace(/_/g,' ')} &middot; ${p.confidence}%</span>`
+          + ptLogBtn(p.symbol, p.opened_at) + `</td>
           <td class="r pt-num">${_ptQty(p.qty)} <span class="pt-unit">${unit}</span>
             <span class="pt-notional">${_ptMoney(p.notional, rate)}</span></td>
           <td class="r pt-num">${fmtPrice(p.entry)}</td>
@@ -2067,7 +2137,7 @@ function renderPaperPositions(rows, rate){
           <td class="r pt-num ${_ptCls(p.roe_pct)}">${p.roe_pct > 0 ? '+' : ''}${p.roe_pct}%</td>
           <td class="r pt-num pt-muted">${fmtTime(p.opened_at)}</td>
           <td class="r pt-num">${_ptExpiry(p.expires_at)}</td>
-        </tr>`;
+        </tr>` + ptLogRow(p.symbol, p.opened_at, 11);
       }).join('')
     + '</tbody></table>';
 }
@@ -2137,7 +2207,8 @@ function renderPaperHistory(){
             <td class="pt-num pt-muted">${fmtTime(t.closed_at)}</td>
             <td><span class="pt-sym">${t.symbol}</span>`
             + `<span class="pt-side ${t.side === 'long' ? 'l' : 's'}">${t.side.toUpperCase()}</span>`
-            + `<span class="pt-setup">${(t.signal_type||'').replace(/_/g,' ')} &middot; ${t.confidence}%</span></td>
+            + `<span class="pt-setup">${(t.signal_type||'').replace(/_/g,' ')} &middot; ${t.confidence}%</span>`
+            + ptLogBtn(t.symbol, t.opened_at) + `</td>
             <td class="r pt-num">${_ptQty(t.qty)} <span class="pt-unit">${unit}</span></td>
             <td class="r pt-num">${fmtPrice(t.entry)} <span class="pt-muted">&rarr;</span> ${fmtPrice(t.exit)}</td>
             <td><span class="pt-tag ${t.reason}">${t.reason}</span></td>
@@ -2148,7 +2219,7 @@ function renderPaperHistory(){
             <td class="r pt-num ${_ptCls(t.roe_pct)}">${t.roe_pct > 0 ? '+' : ''}${t.roe_pct}%</td>
             <td class="r pt-num">${t.hours_held < 1 ? Math.round(t.hours_held*60) + 'm' : t.hours_held + 'h'}</td>
             <td class="r pt-num pt-muted">${_ptMoney(t.wallet_after, r)}</td>
-          </tr>`;
+          </tr>` + ptLogRow(t.symbol, t.opened_at, 12);
         }).join('')
       + '</tbody></table>'
     : '<div class="empty">No trades match these filters</div>';
@@ -5385,6 +5456,7 @@ async def make_app(runner) -> web.Application:
     app.router.add_get("/api/crypto/signals", _bind(_api_crypto_signals))
     app.router.add_get("/api/crypto/forecasts", _bind(_api_crypto_forecasts))
     app.router.add_get("/api/paper", _bind(_api_paper))
+    app.router.add_get("/api/paper/events", _bind(_api_paper_events))
     app.router.add_get("/api/debug/coindcx", _bind(_api_debug_coindcx))
     app.router.add_get("/api/research", _bind(_api_research))
     app.router.add_post("/api/sentiment/ingest", _bind(_api_sentiment_ingest))

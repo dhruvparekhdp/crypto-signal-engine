@@ -926,6 +926,28 @@ class Repository:
                 row.value, row.updated_at = json.dumps(value), _now_utc()
         await self.session.commit()
 
+    # ── Paper trade change log ─────────────────────────────────
+
+    async def add_trade_events(self, events: list[dict]) -> None:
+        """Append log rows for paper trades. Never raises into the tick."""
+        from storage.models import TradeEvent
+        if not events:
+            return
+        try:
+            for e in events:
+                self.session.add(TradeEvent(**e))
+            await self.session.commit()
+        except Exception:
+            await self.session.rollback()
+
+    async def trade_events(self, symbol: str, opened_at) -> list:
+        from storage.models import TradeEvent
+        res = await self.session.execute(
+            select(TradeEvent).where(TradeEvent.symbol == symbol.lower(),
+                                     TradeEvent.opened_at == opened_at)
+            .order_by(TradeEvent.at, TradeEvent.id))
+        return list(res.scalars().all())
+
     async def latest_briefing(self):
         from storage.models import MarketBriefing
         res = await self.session.execute(

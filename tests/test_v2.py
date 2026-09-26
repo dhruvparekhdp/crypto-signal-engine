@@ -267,3 +267,28 @@ class TestResearchFilters(unittest.TestCase):
                       {"displacement_atr": 0.8}):
             got = {(c.ts, c.setup, c.side) for c in self.run_with(**flags)}
             self.assertTrue(got <= base, flags)
+
+
+class TestOwnerStyleExit(unittest.TestCase):
+    """Lock profit once price moves 0.5%, then trail tight (the owner's SOL trade)."""
+
+    def test_lock_then_trail(self):
+        ex = ExecConfig(lock_at_pct=0.005, lock_to_pct=0.0035, trail_pct=0.0015)
+        rows = [(100.2, 100.3, 99.9, 100.1),            # fill at 100
+                (100.1, 100.6, 100.0, 100.55),          # +0.6%: lock from the next bar
+                (100.55, 100.7, 100.5, 100.65),         # best 100.7 -> trail 100.549
+                (100.65, 100.66, 100.3, 100.35)]        # falls through the trail
+        (t,) = simulate([cand(target=103.0)], bars(rows), ex)
+        self.assertEqual(t.reason, "trail")
+        trail = 100.7 * (1 - 0.0015)
+        self.assertAlmostEqual(t.exit, trail * (1 - ex.stop_slip), places=6)
+        self.assertGreater(t.r, 0)                       # a small win, not a loss
+        (base,) = simulate([cand(target=103.0)], bars(rows + [(100.35, 100.4, 98.9, 99.0)]))
+        self.assertEqual(base.reason, "stop")            # without it, the full stop
+
+    def test_no_lock_before_the_move(self):
+        ex = ExecConfig(lock_at_pct=0.005, lock_to_pct=0.0035, trail_pct=0.0015)
+        rows = [(100.2, 100.3, 99.9, 100.1), (100.1, 100.4, 100.0, 100.3),
+                (100.3, 100.35, 98.9, 99.0)]
+        (t,) = simulate([cand(target=103.0)], bars(rows), ex)
+        self.assertEqual(t.reason, "stop")

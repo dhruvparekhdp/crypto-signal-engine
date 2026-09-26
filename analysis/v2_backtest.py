@@ -52,6 +52,12 @@ class ExecConfig:
     partial_at_r: float | None = None    # book `partial_frac` at +xR, rest to target
     partial_frac: float = 0.5
     entry_slip: float = 0.0002           # a market entry crosses the spread too
+    # The owner's way (26 Sep SOL trade): once price has moved `lock_at_pct`
+    # in favour, pull the stop to `lock_to_pct` beyond entry, then trail it
+    # `trail_pct` behind the best price. Fractions of price, not R.
+    lock_at_pct: float | None = None
+    lock_to_pct: float = 0.0
+    trail_pct: float | None = None
 
 
 @dataclass
@@ -109,10 +115,12 @@ def _resolve(cand: Candidate, ts, h, lo, c, close_times, ex: ExecConfig, o=None)
     # 2. Manage from the fill bar on. `legs` = (fraction, exit price, exit fee).
     stop, legs, left, moved = cand.stop, [], 1.0, False
     reason, end = "", fill
+    best, locked = entry, False
     for b in range(fill, n):
         if (lo[b] <= stop) if long else (h[b] >= stop):
             legs.append((left, stop * (1 - sign * ex.stop_slip), ex.taker))
-            reason, end, left = ("breakeven" if moved else "stop"), b, 0.0
+            reason = "trail" if locked else ("breakeven" if moved else "stop")
+            end, left = b, 0.0
             break
         if b > fill:
             p_px = entry + sign * (ex.partial_at_r or 0) * risk
@@ -133,7 +141,14 @@ def _resolve(cand: Candidate, ts, h, lo, c, close_times, ex: ExecConfig, o=None)
                 reason, end, left = "time", b, 0.0
                 break
         # Stop moves take effect from the next bar.
-        best = h[b] if long else lo[b]
+        best = max(best, h[b]) if long else min(best, lo[b])
+        if ex.lock_at_pct and sign * (best - entry) / entry >= ex.lock_at_pct:
+            lock_px = entry * (1 + sign * ex.lock_to_pct)
+            stop = max(stop, lock_px) if long else min(stop, lock_px)
+            locked = moved = True
+        if locked and ex.trail_pct:
+            trail_px = best * (1 - sign * ex.trail_pct)
+            stop = max(stop, trail_px) if long else min(stop, trail_px)
         if not moved and (
                 (ex.breakeven_at_r and sign * (best - entry) >= ex.breakeven_at_r * risk)
                 or (ex.partial_at_r and left < 1.0)):

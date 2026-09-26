@@ -574,6 +574,28 @@ class AppSetting(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=_now_utc)
 
 
+class TradeEvent(Base):
+    """
+    Everything that changed during one paper trade, for the trade's log table:
+    opened, stop moved, trail armed, target released, AI review, close vote,
+    closed. Keyed by symbol + opened_at, which the open position and the
+    closed trade both carry.
+    """
+
+    __tablename__ = "trade_events"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    cycle_id: Mapped[int] = mapped_column(Integer, default=0)
+    symbol: Mapped[str] = mapped_column(String, index=True)
+    opened_at: Mapped[datetime] = mapped_column(DateTime, index=True)
+    at: Mapped[datetime] = mapped_column(DateTime, default=_now_utc)
+    kind: Mapped[str] = mapped_column(String)          # opened | stop | target | trail | ai | closed
+    field: Mapped[str] = mapped_column(String, default="")
+    old: Mapped[str] = mapped_column(String, default="")
+    new: Mapped[str] = mapped_column(String, default="")
+    note: Mapped[str] = mapped_column(Text, default="")
+
+
 class PaperPosition(Base):
     """
     An open paper position. Deleted on close — the record lives on as a
