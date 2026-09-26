@@ -231,7 +231,7 @@ async function load(){
   FIELDS=d.fields;
   document.getElementById('sources').innerHTML=(d.sources_on||[]).map(s=>'<span>'+esc(s)+'</span>').join('');
   const groups={}; FIELDS.forEach(f=>(groups[f.group_label]=groups[f.group_label]||[]).push(f));
-  const icons={'Market data':'📡','Signals':'📈','Protections':'🛡️','AI':'🤖','v2 strategy':'🧭','Storage':'🗄️'};
+  const icons={'Market data':'📡','Signals':'📈','Exits (profit lock)':'🔒','Protections':'🛡️','AI':'🤖','v2 strategy':'🧭','Storage':'🗄️'};
   document.getElementById('groups').innerHTML=Object.entries(groups).map(([g,fs],i)=>
     '<details class="raise" style="margin-bottom:18px"'+(i===0?' open':'')+'><summary>'+(icons[g]||'')
     +' '+esc(g)+'</summary><div class="rows">'+fs.map(f=>'<div class="row inset" id="r-'+f.key+'"><div>'

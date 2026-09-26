@@ -130,6 +130,13 @@ class Settings(BaseSettings):
     # Entry protections (analysis/protections.py): session window, daily
     # loss limit, losing-streak brake, pair cooldown, correlated exposure,
     # stop-vs-fee floor and liquidation distance.
+    # Profit lock (the owner's exit): once price moves this % in favour, the
+    # stop jumps to lock_to % beyond entry (never less than costs), then
+    # trails trail % behind the best price. analysis.paper_trading.ProfitLock.
+    profit_lock_enabled: bool = True
+    profit_lock_at_pct: float = 0.5
+    profit_lock_to_pct: float = 0.35
+    profit_lock_trail_pct: float = 0.15
     protections_enabled: bool = True
     session_filter_enabled: bool = True
     session_start_utc: int = 7

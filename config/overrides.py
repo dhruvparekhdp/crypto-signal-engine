@@ -33,6 +33,7 @@ class Field:
 GROUPS = {
     "data": "Market data",
     "signals": "Signals",
+    "exits": "Exits (profit lock)",
     "protect": "Protections",
     "ai": "AI",
     "v2": "v2 strategy",
@@ -72,6 +73,17 @@ FIELDS: tuple[Field, ...] = (
           "Drop signals against the daily SMA20 trend."),
     Field("crypto_volume_spike_enabled", "signals", "Volume spike signals", ""),
     Field("orderflow_enabled", "signals", "Order flow", "Use taker buy/sell flow."),
+    # Exits
+    Field("profit_lock_enabled", "exits", "Profit lock",
+          "Your rule: once a trade is far enough in profit, lock a small win and trail tight."),
+    Field("profit_lock_at_pct", "exits", "Lock when price has moved (%)",
+          "In the trade's favour, from entry.", kind="float", lo=0.1, hi=5),
+    Field("profit_lock_to_pct", "exits", "Lock the stop at (% beyond entry)",
+          "Never less than fees + slippage (~0.19%), whatever is set here.",
+          kind="float", lo=0.0, hi=5),
+    Field("profit_lock_trail_pct", "exits", "Then trail behind the best price (%)",
+          "0.15% is your SOL trade. Tighter = more small wins, more early exits.",
+          kind="float", lo=0.05, hi=3),
     # Protections
     Field("protections_enabled", "protect", "Protections",
           "Master switch for everything in this group."),

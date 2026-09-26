@@ -441,6 +441,41 @@ class Position:
         self.locked_roe = target
         return True
 
+    def apply_profit_lock(self, price: float, lock: ProfitLock, fees: FeeModel,
+                          slippage=None) -> bool:
+        """
+        Tighten the stop by the profit-lock rule. Returns True if it moved.
+
+        Runs after the tick's exits were checked, so it acts from the next
+        tick. The stop only ever tightens, and never:
+          * locks less than the round trip in fees (with GST) plus the spread
+            and stop slippage: a "locked" win must still be a win after costs
+          * sits closer to the price than the trail distance: a lock must not
+            stop the trade out on the tick it arms
+        """
+        if not lock.enabled or price <= 0 or self.entry_price <= 0:
+            return False
+        s = self.sign
+        self.peak_price = s * max(s * (self.peak_price or price), s * price)
+        best = self.peak_price
+        if s * (best - self.entry_price) / self.entry_price * 100 < lock.at_pct:
+            return False
+        cost = fees.round_trip_pct()
+        if slippage is not None:
+            cost += 2 * slippage.spread_pct + slippage.stop_extra_pct
+        lock_to = max(lock.to_pct / 100, cost)
+        new = self.entry_price * (1 + s * lock_to)
+        if lock.trail_pct:
+            trail = best * (1 - s * lock.trail_pct / 100)
+            new = max(new, trail) if s > 0 else min(new, trail)
+        ceiling = price * (1 - s * (lock.trail_pct or 0.05) / 100)
+        new = min(new, ceiling) if s > 0 else max(new, ceiling)
+        if s * (new - self.stop_price) <= 0:
+            return False
+        self.stop_price = new
+        self.trail_active = True
+        return True
+
     def update_trail(self, high: float, low: float, trail: TrailingStop,
                      fees: FeeModel) -> bool:
         """
@@ -856,6 +891,21 @@ class ProfitLadder:
             if peak_roe >= reached:
                 best = locked if best is None else max(best, locked)
         return best
+
+
+@dataclass(frozen=True)
+class ProfitLock:
+    """
+    The owner's exit (26 Sep SOL long: entry 120.69, stop pulled to 121.15 once
+    price reached ~121.3). Once price has moved `at_pct` in our favour, the
+    stop jumps to `to_pct` beyond entry, then trails `trail_pct` behind the
+    best price. Small wins kept, few big losses. Percent of price, not R.
+    """
+
+    enabled: bool = True
+    at_pct: float = 0.5
+    to_pct: float = 0.35
+    trail_pct: float = 0.15
 
 
 @dataclass(frozen=True)

@@ -19,6 +19,7 @@ Candles are never persisted — they live in memory, capped per symbol, and are
 refetched on boot. Only fired signals, snapshots and paper trades reach the DB.
 """
 import asyncio
+import math
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -97,14 +98,17 @@ def _trade_changes(before: dict, pos, cycle_id: int, now: datetime, price: float
             or (pos.trail_active and not before["trail"])):
         side = 1 if str(getattr(pos.side, "value", pos.side)) == "long" else -1
         locked = side * (pos.stop_price - pos.entry_price) / pos.entry_price * 100
-        out.append(_event(pos, cycle_id, now, "stop", "stop", f"{before['stop']:.6g}",
-                          f"{pos.stop_price:.6g}",
-                          f"price {price:.6g} · stop now {locked:+.2f}% from entry"))
+        was = side * (before["stop"] - pos.entry_price) / pos.entry_price * 100
+        kind = "lock" if was <= 0 < locked else "stop"
+        note = (f"profit locked: stop {locked:+.2f}% beyond entry at price {price:.6g}"
+                if kind == "lock" else f"price {price:.6g} · stop now {locked:+.2f}% from entry")
+        out.append(_event(pos, cycle_id, now, kind, "stop", f"{before['stop']:.6g}",
+                          f"{pos.stop_price:.6g}", note))
     if before["target"] != pos.target_price:
+        released = not pos.target_price or not math.isfinite(pos.target_price)
         out.append(_event(pos, cycle_id, now, "target", "target", f"{before['target']:.6g}",
-                          f"{pos.target_price:.6g}" if pos.target_price else "released",
-                          "target released: the trail decides the exit"
-                          if not pos.target_price else ""))
+                          "released" if released else f"{pos.target_price:.6g}",
+                          "target released: the trail decides the exit" if released else ""))
     if before["trail_r"] != pos.trail_r_override and pos.trail_r_override is not None:
         old = f"{before['trail_r']:.2f}R" if before["trail_r"] is not None else "default"
         out.append(_event(pos, cycle_id, now, "trail", "trail distance", old,
@@ -374,7 +378,8 @@ class AppRunner:
 
                     before = _trade_snapshot(pos)
                     self._tick_notes = []
-                    trade = resolve_at_price(pos, st.current_price, now, cfg, wallet)
+                    trade = resolve_at_price(pos, st.current_price, now, cfg, wallet,
+                                             lock=self._profit_lock())
                     if trade is None:
                         # The position survived the tick's exits. A losing one
                         # now has to justify staying open; a winning one has
@@ -1408,6 +1413,13 @@ class AppRunner:
             return context_block(b, headlines, symbol), (b.id if b is not None else 0)
         except Exception:
             return "", 0
+
+    def _profit_lock(self):
+        from analysis.paper_trading import ProfitLock
+        return ProfitLock(enabled=settings.profit_lock_enabled,
+                          at_pct=settings.profit_lock_at_pct,
+                          to_pct=settings.profit_lock_to_pct,
+                          trail_pct=settings.profit_lock_trail_pct)
 
     def _protection_config(self):
         from analysis.protections import ProtectionConfig

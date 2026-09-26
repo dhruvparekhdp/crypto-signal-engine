@@ -24,12 +24,19 @@ class TestTradeLog(unittest.TestCase):
         p.stop_price, p.trail_active = 121.15, True
         ev = _trade_changes(before, p, 1, T0, 121.31)
         kinds = [e["kind"] for e in ev]
-        self.assertEqual(kinds, ["trail", "stop"])
+        self.assertEqual(kinds, ["trail", "lock"])          # crossed into profit
         stop = ev[1]
         self.assertEqual((stop["old"], stop["new"]), ("119", "121.15"))
-        self.assertIn("+0.38% from entry", stop["note"])
+        self.assertIn("profit locked: stop +0.38% beyond entry", stop["note"])
         self.assertEqual(stop["symbol"], "solusdt")
         self.assertEqual(stop["opened_at"], T0)
+
+    def test_a_later_move_in_profit_is_a_plain_stop_move(self):
+        p = pos(trail_active=True, stop_price=121.15)
+        before = _trade_snapshot(p)
+        p.stop_price = 121.45
+        (e,) = _trade_changes(before, p, 1, T0, 121.6)
+        self.assertEqual(e["kind"], "stop")
 
     def test_tiny_trail_ticks_are_not_logged(self):
         p = pos(trail_active=True, stop_price=121.15)

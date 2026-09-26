@@ -310,11 +310,14 @@ def resolve_at_price(
     now: datetime,
     cfg: CycleConfig,
     wallet: float,
+    lock=None,
 ) -> ClosedTrade | None:
     """
     Close the position if this tick price hits a level. None means it survives.
 
     High and low are both the tick price: a poller sees prices, not bars.
+    `lock` (analysis.paper_trading.ProfitLock) tightens the stop once the
+    trade is far enough in profit.
     """
     hit = resolve_candle(pos, high=price, low=price, close=price, ts=now,
                          slippage=cfg.slippage)
@@ -324,6 +327,8 @@ def resolve_at_price(
         # tick should protect the position from the next one onward.
         pos.apply_ladder(price, cfg.ladder, fees)
         pos.update_trail(price, price, cfg.trailing, fees)
+        if lock is not None:
+            pos.apply_profit_lock(price, lock, fees, cfg.slippage)
         return None
     reason, fill = hit
     return close_position(pos, fill, reason, now, fees_for(pos.symbol), wallet)
