@@ -9,6 +9,11 @@ def _pipeline_processor(logger, method_name, event_dict):
     return processor(logger, method_name, event_dict)
 
 
+def _alerts_processor(logger, method_name, event_dict):
+    from scheduler.alerts import processor
+    return processor(logger, method_name, event_dict)
+
+
 def configure_logging(level: str = "INFO") -> None:
     structlog.configure(
         processors=[
@@ -16,6 +21,8 @@ def configure_logging(level: str = "INFO") -> None:
             structlog.processors.add_log_level,
             # Counts signals through each gate for the "Why no trades?" panel.
             _pipeline_processor,
+            # Errors become Telegram alerts (30 min cooldown per error).
+            _alerts_processor,
             structlog.processors.TimeStamper(fmt="iso"),
             structlog.dev.ConsoleRenderer() if sys.stderr.isatty() else structlog.processors.JSONRenderer(),
         ],

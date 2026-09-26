@@ -1904,6 +1904,17 @@ class AppRunner:
         data_dir = Path(settings.v2_reports_dir).parent
         starts = _record_start(data_dir / "engine_starts.json")
         sha, subject = _code_version()
+        # Real-time alerts: errors while running, and a crash report now if
+        # the previous run died instead of stopping.
+        from scheduler import alerts
+        alerts.configure(data_dir)
+        crashed = alerts.mark_running(sha)
+        self._ws_tasks.append(asyncio.create_task(alerts.sender(
+            lambda text: self.notifier.send_text(text, parse_mode=ParseMode.HTML)),
+            name="alert_sender"))
+        if crashed is not None:
+            await self.notifier.send_text(alerts.crash_report(crashed),
+                                          parse_mode=ParseMode.HTML)
         if _version_changed(data_dir / "engine_version.txt", sha):
             # A deploy: always say so, however soon after the last restart.
             # (Silencing restarts within the hour, to stop a crash loop's

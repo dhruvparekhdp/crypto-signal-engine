@@ -34,6 +34,10 @@ log = structlog.get_logger()
 async def main() -> None:
     configure_logging()
     log.info("crypto_signal_engine_starting")
+    import sys
+
+    from scheduler.alerts import excepthook
+    sys.excepthook = excepthook     # record an error that kills the process
 
     # Render/EC2 injects PORT; fall back to 8080 locally
     port = int(os.environ.get("PORT", 8080))
@@ -70,6 +74,8 @@ async def main() -> None:
 
     log.info("shutting_down")
     await runner.stop()
+    from scheduler.alerts import mark_clean_stop
+    mark_clean_stop()           # a stop we asked for, not a crash
     await health_runner.cleanup()
     log.info("shutdown_complete")
 
