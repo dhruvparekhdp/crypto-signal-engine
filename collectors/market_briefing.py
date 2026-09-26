@@ -39,6 +39,9 @@ BRIEFING_SYSTEM = (
     "search results from the last 12 hours. If nothing important happened, "
     "say so and return an empty list — do not pad it.\n\n"
     f"event_type, use only these: {', '.join(EVENT_TYPES)}\n\n"
+    "The reader is in India: in every text field (summary, titles, notes) "
+    "write times in IST (UTC+5:30), e.g. '19:05 IST'. Only the `when` field "
+    "stays ISO UTC, because code reads it.\n\n"
     "Reply with JSON only, no prose around it:\n"
     '{"risk_tone": -1.0 to 1.0 (negative = risk-off for crypto), '
     '"summary": "3 to 5 plain sentences on what matters for crypto right now", '

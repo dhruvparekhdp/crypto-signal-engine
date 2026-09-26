@@ -113,7 +113,8 @@ def coin_facts(state, move: Move | None = None, btc: Move | None = None) -> dict
         big = max(h1, key=lambda c: abs(c.close - c.open) / c.open if c.open else 0)
         if big.open:
             facts["largest_1h_candle"] = {
-                "at": big.timestamp.strftime("%H:%M UTC"),
+                # Shown on /moves and read by the model: the owner reads IST.
+                "at": (big.timestamp + timedelta(hours=5, minutes=30)).strftime("%H:%M IST"),
                 "change_pct": round((big.close - big.open) / big.open * 100, 2),
             }
         vols = [c.volume for c in h1]
@@ -148,7 +149,8 @@ def signals_digest(signals) -> list[dict]:
     """The signals from the window, in the form the model and the page read."""
     return [{
         "symbol": s.symbol,
-        "at": s.timestamp.strftime("%Y-%m-%d %H:%M") if s.timestamp else "",
+        # UTC with an explicit Z, so the page converts it to IST reliably.
+        "at": s.timestamp.strftime("%Y-%m-%dT%H:%M:00Z") if s.timestamp else "",
         "type": s.signal_type,
         "direction": s.direction,
         "confidence": round(float(s.confidence or 0), 2),
@@ -189,10 +191,13 @@ ATTRIBUTION_SYSTEM = (
     "Then grade the signals: were they on the right side of what drove the "
     "market, did any fire into a news event they could not see, and what "
     "would have been the better call. Be specific, cite times.\n\n"
+    "Times: the reader is in India. Every time you write, in any field, "
+    "must be in IST (UTC+5:30) and say so, e.g. '19:05 IST'. The data below "
+    "gives times in UTC (ending in Z); convert them.\n\n"
     f"cause_type, use only these: {', '.join(CAUSE_TYPES)}\n\n"
     "Reply with JSON only:\n"
     '{"overall": "3 to 6 sentences: what drove the market in this window", '
-    '"drivers": [{"event": "what happened", "when": "time UTC or empty", '
+    '"drivers": [{"event": "what happened", "when": "time in IST, e.g. 19:05 IST, or empty", '
     '"coins": ["btcusdt"], "direction": "up|down|mixed", "confidence": 0.0-1.0}], '
     '"coins": [{"symbol": "btcusdt", "cause_type": "news", '
     '"cause": "short name of the cause", "confidence": 0.0-1.0, '

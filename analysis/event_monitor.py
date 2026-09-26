@@ -102,6 +102,9 @@ MONITOR_SYSTEM = (
     "Only report things you found in search results. Update an event already "
     "being tracked by its id (new facts, a changed level, or that it is over) "
     "instead of reporting it again. If nothing new happened, return empty lists.\n\n"
+    "The reader is in India: in every text field (summary, titles, notes) "
+    "write times in IST (UTC+5:30), e.g. '19:05 IST'. Only the `when` field "
+    "stays ISO UTC, because code reads it.\n\n"
     "Reply with JSON only:\n"
     '{"risk_tone": -1.0 to 1.0, "summary": "2 to 4 plain sentences", '
     '"new": [{"title": "short factual line", "category": "tag", "level": 1-5, '

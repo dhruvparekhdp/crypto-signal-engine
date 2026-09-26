@@ -4793,7 +4793,7 @@ function render(){
       +'<div class="reason">'+esc(c.reasoning)+'</div>'
       +'<div class="sigs"><div class="lbl">Our signals ('+sigs.length+')</div>'
       +(sigs.length? sigs.slice(0,6).map(s=>'<div class="sig"><span class="pill '+esc(s.direction)+'">'+esc(s.direction)+'</span>'+esc(s.type)
-          +' · '+esc(s.at.slice(11))+' UTC · <span class="pill '+esc(s.outcome)+'">'+esc(s.outcome)+'</span>'
+          +' · '+esc(window.istClock?istClock(s.at):s.at)+' · <span class="pill '+esc(s.outcome)+'">'+esc(s.outcome)+'</span>'
           +(s.outcome!=='pending'?' '+(s.pnl_pct>=0?'+':'')+s.pnl_pct.toFixed(2)+'%':'')
           +(s.blocked_by?' · <span class="muted">blocked by '+esc(s.blocked_by)+'</span>':'')+'</div>').join('')
         : '<div class="sig">None fired on this coin.</div>')
@@ -5104,32 +5104,65 @@ async function apiFetch(url, opts){
 // rather than as the viewer's local time, which is the bug that makes
 // everything look 5h30m early.
 if(!window.fmtStamp){
+  // Every time on every page is shown in IST (owner's request, 26 Sep). The
+  // wire and the database stay UTC; a stamp without a zone is read as UTC.
+  var _toDate = function(iso){
+    if(!iso) return null;
+    if(iso instanceof Date) return iso;
+    var d = new Date(/[Zz+]|-\\d\\d:\\d\\d$/.test(iso) ? iso : String(iso).replace(' ','T') + 'Z');
+    return isNaN(d) ? null : d;
+  };
   window.fmtStamp = function(iso, opts){
-    if(!iso) return '—';
-    var d = new Date(/[Z+]|-\\d\\d:\\d\\d$/.test(iso) ? iso : iso + 'Z');
-    if(isNaN(d)) return String(iso);
+    var d = _toDate(iso); if(!d) return iso ? String(iso) : '—';
     var o = opts || {};
-    var now = new Date();
-    var parts = {timeZone:'Asia/Kolkata', day:'2-digit', month:'short',
-                 hour:'2-digit', minute:'2-digit', hour12:false};
-    // The year only earns its place once it is not this one.
-    if(d.getFullYear() !== now.getFullYear()) parts.year = 'numeric';
-    if(o.seconds) parts.second = '2-digit';
-    return d.toLocaleString('en-IN', parts).replace(',', '');
+    // Parts in IST, month named from a fixed list: browsers disagree on
+    // "Sep" vs "Sept", and a date column should not change with the phone.
+    var p = {};
+    new Intl.DateTimeFormat('en-GB', {timeZone:'Asia/Kolkata', year:'numeric', month:'numeric',
+      day:'2-digit', hour:'2-digit', minute:'2-digit', second:'2-digit', hourCycle:'h23'})
+      .formatToParts(d).forEach(function(x){ p[x.type] = x.value; });
+    var M = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+    var s = p.day + ' ' + M[Number(p.month) - 1]
+      // The year only earns its place once it is not this one.
+      + (Number(p.year) !== new Date().getFullYear() ? ' ' + p.year : '')
+      + ' ' + p.hour + ':' + p.minute + (o.seconds ? ':' + p.second : '');
+    return o.noZone ? s : s + ' IST';
   };
-  // "3h ago" answers a different question from "24 Sep 15:39" and both are
-  // wanted: the first tells you whether to care, the second which row it was.
+  // Time of day only, for rows that are obviously today: "14:05 IST".
+  window.istClock = function(iso){
+    var d = _toDate(iso); if(!d) return '—';
+    return d.toLocaleTimeString('en-IN', {timeZone:'Asia/Kolkata', hour:'2-digit',
+      minute:'2-digit', hour12:false}) + ' IST';
+  };
+  // "just now", "12m ago", "1h 20m ago", "3d ago" — and "in 45m" for the future.
   window.fmtAgo = function(iso){
-    if(!iso) return '';
-    var d = new Date(/[Z+]|-\\d\\d:\\d\\d$/.test(iso) ? iso : iso + 'Z');
-    if(isNaN(d)) return '';
-    var s = Math.floor((Date.now() - d.getTime()) / 1000);
-    if(s < 0) return 'in ' + window.fmtAgo(new Date(Date.now()*2 - d.getTime()).toISOString());
-    if(s < 60) return s + 's ago';
-    if(s < 3600) return Math.floor(s/60) + 'm ago';
-    if(s < 86400) return Math.floor(s/3600) + 'h ago';
-    return Math.floor(s/86400) + 'd ago';
+    var d = _toDate(iso); if(!d) return '';
+    var s = Math.round((Date.now() - d.getTime()) / 1000), fut = s < 0;
+    s = Math.abs(s);
+    var txt;
+    if(s < 45) return fut ? 'in a moment' : 'just now';
+    if(s < 3600) txt = Math.max(1, Math.round(s/60)) + 'm';
+    else if(s < 86400){ var h = Math.floor(s/3600), m = Math.round((s % 3600)/60);
+      txt = h + 'h' + (m && h < 6 ? ' ' + m + 'm' : ''); }
+    else { var dd = Math.floor(s/86400), hh = Math.round((s % 86400)/3600);
+      txt = dd + 'd' + (hh && dd < 3 ? ' ' + hh + 'h' : ''); }
+    return fut ? 'in ' + txt : txt + ' ago';
   };
+  // Both at once: "26 Sep 14:05 IST · 3m ago".
+  window.fmtWhen = function(iso){
+    var d = _toDate(iso); if(!d) return '—';
+    return window.fmtStamp(d) + ' · ' + window.fmtAgo(d);
+  };
+  // A UTC hour-of-day as IST wall clock: 7 -> "12:30".
+  window.istHour = function(h){
+    var m = ((Math.round(Number(h) * 60) + 330) % 1440 + 1440) % 1440;
+    return String(Math.floor(m/60)).padStart(2,'0') + ':' + String(m % 60).padStart(2,'0');
+  };
+  // Relative labels stay true without a reload: <span data-ago="iso"></span>.
+  setInterval(function(){
+    document.querySelectorAll('[data-ago]').forEach(function(el){
+      el.textContent = window.fmtAgo(el.getAttribute('data-ago')); });
+  }, 30000);
 }
 
 // Carry each table's column names onto its cells so the phone layout can

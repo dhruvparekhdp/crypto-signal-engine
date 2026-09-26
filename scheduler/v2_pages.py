@@ -189,14 +189,15 @@ header h1{font-size:16px;color:var(--text-strong)}
 a.nav-btn,button.nav-btn{background:var(--acc-t);border:1px solid var(--acc-t2);color:var(--accent);
   font-size:12px;font-weight:600;padding:6px 12px;border-radius:8px;text-decoration:none;
   cursor:pointer;font-family:inherit}
-main{padding:16px;max-width:1100px;margin:0 auto;display:grid;gap:16px}
+main{padding:16px;max-width:1100px;margin:0 auto;display:grid;gap:16px;grid-template-columns:minmax(0,1fr)}
+.card{min-width:0}
 .card{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:16px}
 h2{font-size:15px;color:var(--text-strong);margin-bottom:10px}
 .muted{color:var(--muted)} .pos{color:var(--pos)} .neg{color:var(--neg)}
-.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:10px}
 .stat{background:var(--panel2);border:1px solid var(--line2);border-radius:10px;padding:10px}
 .stat b{display:block;font-size:18px;color:var(--text-strong)}
-.tbl{overflow-x:auto} table{width:100%;border-collapse:collapse;font-size:12.5px}
+.tw{overflow-x:auto;max-width:100%;-webkit-overflow-scrolling:touch} table{width:100%;border-collapse:collapse;font-size:12.5px}
 th,td{padding:6px 8px;border-bottom:1px solid var(--line2);text-align:left;white-space:nowrap}
 th{color:var(--muted2);font-weight:600}
 .ok{color:var(--pos);font-weight:700} .no{color:var(--neg);font-weight:700}
@@ -246,13 +247,13 @@ async function loadBacktest(){
   const busy=st.running?' · <b>running now ('+esc(st.stage||'')+')</b>':'';
   if(!r) return '<section class="card"><h2>Backtest on real Binance data</h2><p class="muted">'
     +(st.error?'Last run failed: '+esc(st.error):'The server downloads 2 years of data and '
-    +'runs the test a few minutes after deploy, then daily at 02:17 UTC.')+busy
+    +'runs the test a few minutes after deploy, then daily at 07:47 IST.')+busy
     +'</p><button class="nav-btn" onclick="runBt()">Run now (admin)</button></section>';
   let h='<section class="card"><h2>Backtest on real Binance data</h2><p class="muted" '
     +'style="font-size:12px;margin-bottom:10px">'+esc(r.window[0])+' → '+esc(r.window[1])+' · '
     +esc(r.symbols.join(', '))+' · all fees, GST, slippage and funding included · run '
-    +esc((r.generated||'').slice(0,16).replace('T',' '))+' UTC'+busy+'</p>'
-    +'<div class="tbl"><table><tr><th></th><th>Trades</th><th>Win</th><th>Per trade</th>'
+    +esc(fmtWhen(r.generated))+busy+'</p>'
+    +'<div class="tw"><table><tr><th></th><th>Trades</th><th>Win</th><th>Per trade</th>'
     +'<th>Avg win / loss</th><th>PF</th><th>Windows up</th><th>Gate</th></tr>'
     +row('All setups',r.overall);
   Object.entries(r.setups).forEach(([k,g])=>{h+=row(k+' · '+NAMES[k],g);});
@@ -267,7 +268,7 @@ async function loadBacktest(){
       +'<p class="muted" style="font-size:12px;margin-bottom:8px">What the limit entry costs '
       +'versus a market entry, and what breakeven or half-profit exits do to win rate AND '
       +'profit per trade. Deflated Sharpe accounts for trying all four.</p>'
-      +'<div class="tbl"><table><tr><th></th><th>Trades</th><th>Win</th><th>Per trade</th>'
+      +'<div class="tw"><table><tr><th></th><th>Trades</th><th>Win</th><th>Per trade</th>'
       +'<th>Avg win / loss</th><th>PF</th><th>Windows up</th><th>Gate</th></tr>';
     Object.values(vs).forEach(v=>{h+=row(v.label,v.overall);});
     h+='</table></div>'; }
@@ -277,7 +278,7 @@ async function loadBacktest(){
       +'<p class="muted" style="font-size:12px;margin-bottom:8px">Each row changes one rule from '
       +'the research and re-runs everything. A filter is worth keeping only if profit per '
       +'trade rises, not just win rate.</p>'
-      +'<div class="tbl"><table><tr><th></th><th>Trades</th><th>Win</th><th>Per trade</th>'
+      +'<div class="tw"><table><tr><th></th><th>Trades</th><th>Win</th><th>Per trade</th>'
       +'<th>Avg win / loss</th><th>PF</th><th>Windows up</th><th>Gate</th></tr>'
       +row('Base (for comparison)',r.overall);
     Object.values(sv).forEach(v=>{h+=row(v.label,v.overall);});
@@ -287,7 +288,7 @@ async function loadBacktest(){
     h+='<h2 style="margin-top:16px">Freqtrade community strategies, same data and costs</h2>'
       +'<p class="muted" style="font-size:12px;margin-bottom:8px">Published rules from '
       +'freqtrade-strategies, long-only at 1x, per trade after fees. The bar v2 has to clear.</p>'
-      +'<div class="tbl"><table><tr><th>Strategy</th><th>TF</th><th>Trades</th><th>Win</th>'
+      +'<div class="tw"><table><tr><th>Strategy</th><th>TF</th><th>Trades</th><th>Win</th>'
       +'<th>Per trade</th><th>Avg win / loss</th><th>PF</th><th>Compounded</th></tr>';
     Object.entries(bm).forEach(([k,b])=>{ h+='<tr><td>'+esc(k)+'</td><td>'+esc(b.timeframe)+'</td>'
       +(b.trades?'<td>'+b.trades+'</td><td>'+Math.round(b.win_rate*100)+'%</td><td class="'
@@ -317,10 +318,10 @@ async function load(){
     +'traded. Same setups and fill rules as scripts/backtest_v2.py, so live and backtest '
     +'numbers compare directly. Gates to paper: 200+ trades, +0.15R, PF 1.3, '
     +'60% of windows up.</p></section>';
-  h+='<section class="card"><h2>Signals</h2><div class="tbl"><table><tr><th>Time (UTC)</th>'
+  h+='<section class="card"><h2>Signals</h2><div class="tw"><table><tr><th>Time (IST)</th>'
     +'<th>Coin</th><th>Setup</th><th>Side</th><th>Entry</th><th>Stop</th><th>Target</th>'
     +'<th>Status</th><th>Result</th></tr>';
-  d.rows.forEach(r=>{h+='<tr><td>'+esc((r.decided_at||'').slice(5,16).replace('T',' '))
+  d.rows.forEach(r=>{h+='<tr><td>'+esc(fmtStamp(r.decided_at))+'<br><span class="muted" data-ago="'+esc(r.decided_at)+'">'+esc(fmtAgo(r.decided_at))+'</span>'
     +'</td><td>'+esc(r.symbol.toUpperCase())+'</td><td>'+esc(r.setup+' '+NAMES[r.setup])
     +'</td><td class="'+(r.side==='long'?'pos':'neg')+'">'+esc(r.side)+'</td><td>'
     +r.entry.toPrecision(6)
@@ -328,7 +329,7 @@ async function load(){
     +esc(r.status)+(r.reason?' · '+esc(r.reason):'')+'</td><td class="'+(r.r>=0?'pos':'neg')+'">'
     +(r.status==='closed'?(r.r>=0?'+':'')+r.r.toFixed(2)+'R':'')+'</td></tr>';});
   if(!d.rows.length) h+='<tr><td colspan="9" class="muted">No v2 signals yet. They appear on '
-    +'weekdays 07–17 UTC when a setup passes every filter.</td></tr>';
+    +'weekdays '+istHour(7)+'–'+istHour(17)+' IST when a setup passes every filter.</td></tr>';
   document.getElementById('main').innerHTML=h+'</table></div></section>';
 }
 load(); setInterval(load,60000);
@@ -362,7 +363,7 @@ JOURNAL_HTML = """<!DOCTYPE html><html lang="en"><head><meta charset="utf-8">
 <div class="wide"><button class="nav-btn" type="submit">Save</button>
 <span id="msg" class="muted" style="margin-left:10px"></span></div>
 </form></section>
-<section class="card"><h2>Entries</h2><div class="tbl" id="list">Loading…</div></section>
+<section class="card"><h2>Entries</h2><div class="tw" id="list">Loading…</div></section>
 </main>
 <script>""" + _ESC + """
 const TAGS=""" + json.dumps(list(JOURNAL_TAGS)) + """;
@@ -387,9 +388,9 @@ async function list(){
   const d=await r.json();
   if(!d.rows.length){el.innerHTML='<span class="muted">Nothing yet. Twenty trades with a line '
     +'of why each is enough to check the rules against how you trade.</span>';return;}
-  el.innerHTML='<table><tr><th>Opened (UTC)</th><th>Coin</th><th>Side</th><th>Took</th>'
+  el.innerHTML='<table><tr><th>Opened (IST)</th><th>Coin</th><th>Side</th><th>Took</th>'
     +'<th>Entry → Exit</th><th>Tags</th><th>15m structure</th><th>Note</th></tr>'
-    +d.rows.map(r=>'<tr><td>'+esc((r.opened_at||'').slice(0,16).replace('T',' '))+'</td><td>'
+    +d.rows.map(r=>'<tr><td>'+esc(fmtWhen(r.opened_at))+'</td><td>'
     +esc(r.symbol.toUpperCase())+'</td><td class="'+(r.side==='long'?'pos':'neg')+'">'+esc(r.side)
     +'</td><td>'+(r.took?'yes':'skipped')+'</td><td>'+(r.entry||'')+' → '+(r.exit_price||'')
     +'</td><td>'+esc(r.tags)+'</td><td>'+esc((r.features||{}).structure_15m_12h||'')

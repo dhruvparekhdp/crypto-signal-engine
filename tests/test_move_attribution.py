@@ -105,7 +105,7 @@ class TestConcreteFacts(unittest.TestCase):
         m = Move("solusdt", 107.0, 0.4, 2.1, 2.6, 3.8)
         btc = Move("btcusdt", 60000.0, 0.0, 0.1, 0.1, 1.0)
         f = coin_facts(self._state(), m, btc)
-        self.assertEqual(f["largest_1h_candle"]["at"], "11:00 UTC")
+        self.assertEqual(f["largest_1h_candle"]["at"], "16:30 IST")   # 11:00 UTC
         self.assertEqual(f["largest_1h_candle"]["change_pct"], 2.5)
         self.assertGreater(f["volume_last3h_vs_prior"], 1.5)
         self.assertEqual(f["open_interest_1h_pct"], 3.2)

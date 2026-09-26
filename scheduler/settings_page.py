@@ -214,9 +214,13 @@ async function logout(){await fetch('/api/settings/auth/logout',{method:'POST',h
 function control(f){const v=f.value, id='f-'+f.key;
   if(f.kind==='bool') return '<label class="sw"><input type="checkbox" id="'+id+'"'+(v?' checked':'')
     +' onchange="mark(\''+f.key+'\',this.checked)"><span></span></label>';
+  const utcHour=f.key.endsWith('_utc');
   return '<input class="num inset" id="'+id+'" type="number" step="'+(f.kind==='int'?1:0.01)+'"'
     +(f.lo!=null?' min="'+f.lo+'"':'')+(f.hi!=null?' max="'+f.hi+'"':'')+' value="'+esc(v)
-    +'" onchange="mark(\''+f.key+'\',this.value)">';}
+    +'" oninput="'+(utcHour?'document.getElementById(\'ist-'+f.key+'\').textContent=istHour(this.value)+\' IST\';':'')
+    +'" onchange="mark(\''+f.key+'\',this.value)">'
+    +(utcHour?'<div class="small muted" style="text-align:right;margin-top:4px">UTC · <b id="ist-'+f.key+'">'
+      +istHour(v)+' IST</b></div>':'');}
 function mark(k,v){changes[k]=v;document.getElementById('r-'+k).classList.add('dirty');bar();}
 function markP(k,v){paperChanges[k]=v;document.getElementById('p-'+k).classList.add('dirty');bar();}
 function bar(){const n=Object.keys(changes).length+Object.keys(paperChanges).length;
