@@ -5458,6 +5458,8 @@ async def make_app(runner) -> web.Application:
     app.router.add_get("/settings", settings_page)
     app.router.add_get("/settings/classic", _settings_page)
     _register_settings(app, runner)
+    from scheduler.api_docs import register as _register_api_docs
+    _register_api_docs(app)
     app.router.add_get("/api/settings", _bind(_api_collector_states))
     app.router.add_post("/api/auth/verify", _bind(_api_auth_verify))
     app.router.add_post("/api/settings/auth/login", _bind(_api_settings_auth_login))

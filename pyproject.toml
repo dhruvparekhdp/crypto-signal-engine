@@ -44,6 +44,7 @@ select = ["E", "F", "I", "UP"]
 # 100 columns hurts more than it helps.
 "scheduler/settings_page.py" = ["E501"]
 "scheduler/v2_pages.py" = ["E501"]
+"scheduler/api_docs.py" = ["E501"]
 
 [tool.mypy]
 python_version = "3.11"

@@ -223,7 +223,7 @@ th{color:var(--muted2);font-weight:600}
 </style></head><body>
 <header><h1>⚙️ Settings</h1>
 <nav><a href="/">Dashboard</a><a href="/v2">v2 strategy</a><a href="/journal">Journal</a>
-<a href="/moves">Market moves</a><a href="#speed">Speed</a><a href="/settings/classic">Classic</a></nav>
+<a href="/moves">Market moves</a><a href="/api-docs">API list</a><a href="#speed">Speed</a><a href="/settings/classic">Classic</a></nav>
 </header>
 <main>
 <section class="card raise" id="auth"></section>
