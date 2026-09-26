@@ -103,17 +103,34 @@ class Settings(BaseSettings):
     # model can study them later.
     llm_chain_pre_trade: str = (
         "groq:openai/gpt-oss-120b, groq:openai/gpt-oss-20b, openrouter:qwen/qwen3-32b")
+    # A quota is per-organization on Groq's free tier, so when it is hit
+    # every Groq model in a chain fails together — the 21-25 Sep pattern
+    # where the whole "why did it move" job went silent for hours because
+    # both its entries were Groq. Every chain below now ends in OpenRouter,
+    # so an org-wide Groq outage degrades a chain instead of emptying it.
+    # Where the task needs real web search (briefing, attribution, history
+    # search) that fallback is "model:online" — OpenRouter's own search
+    # plugin, a small per-search charge on its account — never a bare
+    # model: one asked "what happened in the last 30 minutes" with no way
+    # to check invents an answer, which is worse than none at all.
     llm_chain_post_trade: str = (
         "groq:openai/gpt-oss-120b+search, groq:openai/gpt-oss-120b, anthropic:claude-sonnet-5")
-    # The world-events briefing. Only web-searching models: a model without
-    # search asked for "today's news" invents it.
+    # The world-events briefing. Every entry can actually search.
     llm_chain_briefing: str = (
-        "groq:openai/gpt-oss-120b+search, groq:openai/gpt-oss-20b+search")
+        "groq:openai/gpt-oss-120b+search, groq:openai/gpt-oss-20b+search, "
+        "openrouter:qwen/qwen3-32b:online")
     market_briefing_enabled: bool = True
     market_briefing_minutes: int = 30
     # Hourly: why each watchlist coin moved, and how our signals fared.
+    #
+    # This chain used to fall through to a plain (non-searching) Groq model
+    # when browser_search hit its rate limit — the fabricated "surprise US
+    # PMI" story on /moves was that model answering "what moved the market"
+    # from its training data instead of admitting it had no news to check
+    # against. Every entry here must be able to search; see the test in
+    # tests/test_market_briefing.py.
     llm_chain_attribution: str = (
-        "groq:openai/gpt-oss-120b+search, groq:openai/gpt-oss-120b")
+        "groq:openai/gpt-oss-120b+search, openrouter:qwen/qwen3-32b:online")
     move_attribution_enabled: bool = True
     # The event monitor: adaptive, jittered web checks with a daily cap. The
     # free tier's daily requests are shared by every role, so the monitor
@@ -121,12 +138,15 @@ class Settings(BaseSettings):
     event_monitor_enabled: bool = True
     event_monitor_daily_cap: int = 120
     llm_chain_briefing_calm: str = (
-        "groq:openai/gpt-oss-20b+search, groq:openai/gpt-oss-120b+search")
+        "groq:openai/gpt-oss-20b+search, groq:openai/gpt-oss-120b+search, "
+        "openrouter:qwen/qwen3-32b:online")
     # Labelling past moves from the Binance lake (scripts/review_history.py).
     # Local first: it is bulk work and the free Groq requests are shared with
     # live trading. The biggest moves use web search to find that day's news.
-    llm_chain_history: str = "ollama:qwen3:8b, groq:openai/gpt-oss-120b"
-    llm_chain_history_search: str = "groq:openai/gpt-oss-120b+search"
+    llm_chain_history: str = (
+        "ollama:qwen3:8b, groq:openai/gpt-oss-120b, openrouter:qwen/qwen3-32b")
+    llm_chain_history_search: str = (
+        "groq:openai/gpt-oss-120b+search, openrouter:qwen/qwen3-32b:online")
     # Entry protections (analysis/protections.py): session window, daily
     # loss limit, losing-streak brake, pair cooldown, correlated exposure,
     # stop-vs-fee floor and liquidation distance.

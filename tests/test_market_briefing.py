@@ -74,10 +74,19 @@ class TestRouting(unittest.TestCase):
                 self.assertEqual(chain[0][0], "groq")
 
     def test_the_briefing_only_uses_web_searching_models(self):
+        """
+        Every entry must be able to actually search — "+search" is Groq's
+        browser_search tool, ":online" is OpenRouter's own search plugin.
+        A model with neither, asked what happened in the last 30 minutes,
+        answers anyway and invents it — worse than the briefing being empty.
+        """
         from collectors.llm_client import _parse_chain
         from config.settings import settings
-        for _, model in _parse_chain(settings.llm_chain_briefing):
-            self.assertTrue(model.endswith("+search"), model)
+        for role in ("briefing", "briefing_calm", "attribution", "history_search"):
+            with self.subTest(role=role):
+                chain = getattr(settings, f"llm_chain_{role}")
+                for _, model in _parse_chain(chain):
+                    self.assertTrue(model.endswith("+search") or model.endswith(":online"), model)
 
     def test_no_chain_names_a_decommissioned_model(self):
         # groq/compound and compound-mini were shut down on 21 Sep 2026.

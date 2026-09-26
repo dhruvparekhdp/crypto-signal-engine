@@ -23,7 +23,7 @@ class Field:
     group: str
     label: str
     help: str
-    kind: str = "bool"          # bool | int | float | choice
+    kind: str = "bool"          # bool | int | float | choice | secret
     live: bool = True           # False: read once at startup
     lo: float | None = None
     hi: float | None = None
@@ -38,7 +38,16 @@ GROUPS = {
     "ai": "AI",
     "v2": "v2 strategy",
     "storage": "Storage",
+    "keys": "API keys",
 }
+
+# Settings typed SecretStr on the pydantic model — coerce() must wrap the
+# string in one before setattr, or pydantic rejects a plain str at assignment.
+# Everything else of kind="secret" is a plain str field.
+SECRET_STR_KEYS = frozenset({
+    "groq_api_key", "openrouter_api_key", "gemini_api_key", "anthropic_api_key",
+    "telegram_bot_token",
+})
 
 FIELDS: tuple[Field, ...] = (
     # Market data
@@ -127,6 +136,32 @@ FIELDS: tuple[Field, ...] = (
     # Storage
     Field("db_retention_days", "storage", "Days kept in the database",
           "Older rows move to JSON files, never deleted.", kind="int", lo=90, hi=3650),
+    # API keys — editable from the phone, no server access needed. Leaving
+    # the box blank and saving keeps whatever key is already set; the real
+    # value is never sent back to the page once saved, only whether one exists.
+    Field("groq_api_key", "keys", "Groq API key",
+          "The main AI provider — free tier. console.groq.com/keys",
+          kind="secret"),
+    Field("openrouter_api_key", "keys", "OpenRouter API key",
+          "Falls back to this when Groq is rate-limited or down. openrouter.ai/keys",
+          kind="secret"),
+    Field("gemini_api_key", "keys", "Google Gemini API key",
+          "Quick position reviews and news scoring. aistudio.google.com/apikey",
+          kind="secret"),
+    Field("anthropic_api_key", "keys", "Anthropic API key",
+          "Deepest research and post-mortems (Claude). console.anthropic.com",
+          kind="secret"),
+    Field("telegram_bot_token", "keys", "Telegram bot token",
+          "Deploy, crash and trade alerts. Get one from @BotFather.", kind="secret"),
+    Field("twelvedata_api_key", "keys", "Twelve Data API key",
+          "Gold, silver, oil prices. Ignored when Binance only is on. twelvedata.com",
+          kind="secret"),
+    Field("coingecko_api_key", "keys", "CoinGecko API key",
+          "Optional — raises the free rate limit. Ignored when Binance only is on.",
+          kind="secret"),
+    Field("cryptopanic_auth_token", "keys", "CryptoPanic token",
+          "News headlines for sentiment. cryptopanic.com/developers/api",
+          kind="secret"),
 )
 BY_KEY = {f.key: f for f in FIELDS}
 
@@ -156,6 +191,11 @@ def coerce(field: Field, value):
         if value not in field.choices:
             raise ValueError(f"{field.key}: not one of {field.choices}")
         return value
+    if field.kind == "secret":
+        # "" means "leave it as it is" — a key is never cleared by accident
+        # from a blank box, and the caller filters "" out before saving so a
+        # blank submission never overwrites a real key with nothing.
+        return "" if value is None else str(value).strip()
     return value
 
 
@@ -166,19 +206,39 @@ def apply(settings, values: dict) -> list[str]:
         field = BY_KEY.get(key)
         if field is None:
             continue
+        if field.kind == "secret" and value == "":
+            continue
         try:
-            setattr(settings, key, coerce(field, value))
+            coerced = coerce(field, value)
+            if field.kind == "secret" and key in SECRET_STR_KEYS:
+                from pydantic import SecretStr
+                coerced = SecretStr(coerced)
+            setattr(settings, key, coerced)
             done.append(key)
         except (TypeError, ValueError):
             continue
     return done
 
 
+def _is_set(settings, key: str) -> bool:
+    v = getattr(settings, key, None)
+    if v is None:
+        return False
+    return bool(v.get_secret_value()) if hasattr(v, "get_secret_value") else bool(v)
+
+
 def describe(settings, stored: dict) -> list[dict]:
-    """Every field with its current value and where that value comes from."""
+    """
+    Every field with its current value and where that value comes from.
+
+    A field of kind="secret" never carries its real value here — this feeds
+    a public, unauthenticated GET — only whether one is set.
+    """
     return [{
         "key": f.key, "group": f.group, "group_label": GROUPS[f.group],
         "label": f.label, "help": f.help, "kind": f.kind, "live": f.live,
-        "lo": f.lo, "hi": f.hi, "value": getattr(settings, f.key, None),
+        "lo": f.lo, "hi": f.hi,
+        "value": None if f.kind == "secret" else getattr(settings, f.key, None),
+        "is_set": _is_set(settings, f.key) if f.kind == "secret" else None,
         "source": "saved" if f.key in stored else "default",
     } for f in FIELDS]

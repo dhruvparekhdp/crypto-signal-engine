@@ -36,6 +36,40 @@ class TestOverrides(unittest.TestCase):
         self.assertAlmostEqual(s.crypto_min_confidence, 0.7)
         self.assertFalse(hasattr(s, "api_auth_token"))
 
+    def test_a_blank_key_box_leaves_the_stored_key_alone(self):
+        """The whole point of "leave blank to keep it": apply() must never
+        let an empty submission clear a key that is already set."""
+        s = SimpleNamespace(openrouter_api_key="sentinel", twelvedata_api_key="sentinel2")
+        done = apply(s, {"openrouter_api_key": "", "twelvedata_api_key": ""})
+        self.assertEqual(done, [])
+        self.assertEqual(s.openrouter_api_key, "sentinel")
+        self.assertEqual(s.twelvedata_api_key, "sentinel2")
+
+    def test_a_pasted_key_is_wrapped_in_secretstr_where_the_model_expects_one(self):
+        from pydantic import SecretStr
+        s = SimpleNamespace(openrouter_api_key=None, twelvedata_api_key=None)
+        done = apply(s, {"openrouter_api_key": "  sk-or-abc123  ",
+                         "twelvedata_api_key": "plain-key"})
+        self.assertEqual(sorted(done), ["openrouter_api_key", "twelvedata_api_key"])
+        self.assertIsInstance(s.openrouter_api_key, SecretStr)
+        self.assertEqual(s.openrouter_api_key.get_secret_value(), "sk-or-abc123")
+        self.assertEqual(s.twelvedata_api_key, "plain-key")            # not wrapped
+
+    def test_describe_never_carries_a_key_only_whether_one_is_set(self):
+        from pydantic import SecretStr
+
+        from config.overrides import describe
+        s = SimpleNamespace(groq_api_key=SecretStr("a-real-secret"), openrouter_api_key=None,
+                            twelvedata_api_key="also-real", session_end_utc=22)
+        rows = {r["key"]: r for r in describe(s, {})}
+        self.assertIsNone(rows["groq_api_key"]["value"])
+        self.assertTrue(rows["groq_api_key"]["is_set"])
+        self.assertIsNone(rows["openrouter_api_key"]["value"])
+        self.assertFalse(rows["openrouter_api_key"]["is_set"])
+        self.assertIsNone(rows["twelvedata_api_key"]["value"])
+        self.assertTrue(rows["twelvedata_api_key"]["is_set"])
+        self.assertEqual(rows["session_end_utc"]["value"], 22)         # not a secret
+
 
 class TestApi(unittest.TestCase):
     def test_save_is_stored_applied_and_reaches_the_runner(self):
@@ -76,6 +110,49 @@ class TestApi(unittest.TestCase):
             self.assertNotEqual(denied.status, 200)                     # admin only
             settings.session_end_utc = before
             settings.high_conviction_only = False
+            await database.engine.dispose()
+
+        asyncio.run(run())
+
+    def test_a_pasted_key_never_comes_back_and_a_blank_box_does_not_clear_it(self):
+        os.environ["DATABASE_URL"] = f"sqlite+aiosqlite:///{tempfile.mktemp(suffix='.db')}"
+
+        async def run():
+            import storage.database as database
+            from config.settings import settings
+            from scheduler import settings_page
+            from storage.database import init_db
+            from storage.repository import Repository
+
+            await init_db()
+            get, post = settings_page.settings_api(SimpleNamespace(collector_enabled={}))
+            before_key = settings.openrouter_api_key
+            with patch.object(settings_page, "_admin", AsyncMock(return_value=None)):
+                req = make_mocked_request("POST", "/api/app-settings")
+                req.json = AsyncMock(
+                    return_value={"values": {"openrouter_api_key": "sk-or-v1-realsecret"}})
+                body = json.loads((await post(req)).text)
+                self.assertEqual(body["applied"], ["openrouter_api_key"])
+                self.assertEqual(settings.openrouter_api_key.get_secret_value(),
+                                 "sk-or-v1-realsecret")
+
+                fields = json.loads((await get(make_mocked_request("GET", "/"))).text)["fields"]
+                row = next(f for f in fields if f["key"] == "openrouter_api_key")
+                self.assertIsNone(row["value"])                        # never echoed
+                self.assertTrue(row["is_set"])
+                self.assertNotIn("sk-or-v1-realsecret", json.dumps(fields))
+
+                blank = make_mocked_request("POST", "/api/app-settings")
+                blank.json = AsyncMock(return_value={"values": {"openrouter_api_key": ""}})
+                body2 = json.loads((await post(blank)).text)
+                self.assertEqual(body2["applied"], [])                 # nothing to apply
+                self.assertEqual(settings.openrouter_api_key.get_secret_value(),
+                                 "sk-or-v1-realsecret")                # unchanged
+            async with database.AsyncSessionFactory() as s:
+                stored = await Repository(s).get_app_settings()
+            self.assertEqual(stored["openrouter_api_key"], "sk-or-v1-realsecret")
+
+            settings.openrouter_api_key = before_key
             await database.engine.dispose()
 
         asyncio.run(run())

@@ -65,9 +65,15 @@ def settings_api(runner):
                 errors.append(f"unknown setting {key}")
                 continue
             try:
-                values[key] = coerce(field, value)
+                coerced = coerce(field, value)
             except (TypeError, ValueError) as exc:
                 errors.append(str(exc))
+                continue
+            # A blank key box means "leave it alone" — never persist an empty
+            # string over a key that is already set.
+            if field.kind == "secret" and coerced == "":
+                continue
+            values[key] = coerced
         if errors:
             return web.json_response({"error": "; ".join(errors)}, status=400)
         async with AsyncSessionFactory() as session:
@@ -277,6 +283,11 @@ async function logout(){await fetch('/api/settings/auth/logout',{method:'POST',h
 function control(f){const v=f.value, id='f-'+f.key;
   if(f.kind==='bool') return '<label class="sw"><input type="checkbox" id="'+id+'"'+(v?' checked':'')
     +' onchange="mark(\''+f.key+'\',this.checked)"><span></span></label>';
+  if(f.kind==='secret') return '<input class="inset" id="'+id+'" type="password" autocomplete="off" '
+    +'spellcheck="false" style="width:170px;text-align:right;padding:9px 11px" placeholder="'
+    +(f.is_set?'set — paste to replace':'not set')+'" '
+    +'onchange="if(this.value.trim())mark(\''+f.key+'\',this.value.trim());'
+    +'else this.value=\'\'">';
   const utcHour=f.key.endsWith('_utc');
   return '<input class="num inset" id="'+id+'" type="number" step="'+(f.kind==='int'?1:0.01)+'"'
     +(f.lo!=null?' min="'+f.lo+'"':'')+(f.hi!=null?' max="'+f.hi+'"':'')+' value="'+esc(v)
@@ -294,10 +305,15 @@ async function load(){
   FIELDS=d.fields;
   document.getElementById('sources').innerHTML=(d.sources_on||[]).map(s=>'<span>'+esc(s)+'</span>').join('');
   const groups={}; FIELDS.forEach(f=>(groups[f.group_label]=groups[f.group_label]||[]).push(f));
-  const icons={'Market data':'📡','Signals':'📈','Exits (profit lock)':'🔒','Protections':'🛡️','AI':'🤖','v2 strategy':'🧭','Storage':'🗄️'};
+  const icons={'Market data':'📡','Signals':'📈','Exits (profit lock)':'🔒','Protections':'🛡️','AI':'🤖','v2 strategy':'🧭','Storage':'🗄️','API keys':'🔑'};
+  const groupNote={'API keys':'Paste a new key and save — leave a box blank to keep '
+    +'whatever key is already set. Once saved a key is never shown again, here or in any '
+    +'API response, only whether one is set.'};
   document.getElementById('groups').innerHTML=Object.entries(groups).map(([g,fs],i)=>
     '<details class="raise" style="margin-bottom:18px"'+(i===0?' open':'')+'><summary>'+(icons[g]||'')
-    +' '+esc(g)+'</summary><div class="rows">'+fs.map(f=>'<div class="row inset" id="r-'+f.key+'"><div>'
+    +' '+esc(g)+'</summary><div class="rows">'
+    +(groupNote[g]?'<p class="small muted" style="padding:0 4px 8px">'+groupNote[g]+'</p>':'')
+    +fs.map(f=>'<div class="row inset" id="r-'+f.key+'"><div>'
     +'<div class="l">'+esc(f.label)+'</div>'+(f.help?'<div class="h">'+esc(f.help)+'</div>':'')
     +'<div class="b">'+(f.live?'':'<span class="tag acc">restart</span>')
     +(f.source==='saved'?'<span class="tag">saved</span>':'<span class="tag">default</span>')

@@ -298,3 +298,42 @@ class TestSearchSuffix(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(sent["model"], "openai/gpt-oss-120b")
         self.assertEqual(sent["tools"], [{"type": "browser_search"}])
         self.assertNotIn("response_format", sent)
+
+    async def test_openrouter_online_suffix_passes_straight_through(self):
+        """
+        Unlike Groq's "+search", OpenRouter's ":online" is not a marker our
+        code strips and translates into a tools payload — OpenRouter parses
+        it out of the model id itself. Stripping it here would silently turn
+        every search-required chain entry back into a plain, hallucination-
+        prone model.
+        """
+        from collectors import llm_client
+
+        sent = {}
+
+        class Resp:
+            status_code = 200
+
+            def json(self):
+                return {"choices": [{"message": {"content": "{}"}}]}
+
+        class Client:
+            def __init__(self, **kw):
+                pass
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *a):
+                return False
+
+            async def post(self, url, json, headers):
+                sent.update(json)
+                return Resp()
+
+        with patch.object(llm_client.httpx, "AsyncClient", Client):
+            await llm_client._call_openai_shaped(
+                llm_client.PROVIDERS["openrouter"], "qwen/qwen3-32b:online",
+                "s", "u", 100, 0.2, 5.0)
+        self.assertEqual(sent["model"], "qwen/qwen3-32b:online")
+        self.assertNotIn("tools", sent)
