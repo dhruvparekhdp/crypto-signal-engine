@@ -14,6 +14,7 @@ from analysis.crypto_signals import (
 )
 from analysis.crypto_state import CryptoState
 from config.settings import settings
+from scheduler import pipeline
 
 log = structlog.get_logger()
 
@@ -84,6 +85,7 @@ class CryptoEngine:
 
             if sig.confidence < settings.crypto_min_confidence:
                 log.debug("crypto_signal_below_threshold", symbol=sig.symbol, confidence=sig.confidence)
+                pipeline.no_setup("setup found, confidence below the minimum", sig.signal_type)
                 continue
 
             if self._opposes_htf_trend(sig, state):
@@ -93,11 +95,13 @@ class CryptoEngine:
 
             if self._is_on_cooldown(sig.symbol, sig.signal_type):
                 log.debug("crypto_signal_on_cooldown", symbol=sig.symbol, type=sig.signal_type)
+                pipeline.no_setup("setup found, same coin fired recently", sig.signal_type)
                 continue
 
             if self._still_live(sig, state.current_price):
                 log.debug("crypto_signal_duplicate_of_live", symbol=sig.symbol,
                           direction=sig.direction)
+                pipeline.no_setup("setup found, same trade already live", sig.signal_type)
                 continue
 
             opposing = self._opposing_live(sig, state.current_price)

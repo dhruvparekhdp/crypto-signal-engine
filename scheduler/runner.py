@@ -957,6 +957,20 @@ class AppRunner:
 
             states = await self.crypto_store.get_all()
             self._maybe_trigger_monitor(states)
+            from scheduler import pipeline
+            priced = sum(1 for st in states if st.current_price > 0)
+            if priced < len(states):
+                pipeline.no_setup(f"{len(states) - priced} coin(s) have no price yet")
+            try:
+                await self._analyse_states(states, scfg, pcfg)
+            finally:
+                pipeline.end_scan(priced)
+        except Exception:
+            log.exception("crypto_analysis_job_failed")
+
+    async def _analyse_states(self, states, scfg, pcfg) -> None:
+        """Run the detectors over every priced coin and hand on what fires."""
+        try:
             for state in states:
                 if state.current_price <= 0:
                     continue

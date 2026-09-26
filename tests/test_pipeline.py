@@ -34,6 +34,32 @@ class TestFunnel(unittest.TestCase):
         self.assertIn({"reason": "some new rule", "count": 1}, f["reasons"]["paper_skipped"])
         self.assertIn("fired", f["last"])
 
+    def test_no_setup_reasons_are_grouped_and_counted_per_scan(self):
+        pipeline._scans.clear()
+        pipeline._scan_now.clear()
+        pipeline.no_setup("volatility in the bottom 12% of its own recent range", "confluence")
+        pipeline.no_setup("volatility in the bottom 30% of its own recent range", "confluence")
+        pipeline.no_setup("only 2 of 5 families agree", "confluence")
+        pipeline.end_scan(5)
+        pipeline.no_setup("only 2 of 5 families agree", "confluence")
+        pipeline.end_scan(5)
+        f = pipeline.funnel()
+        self.assertEqual(f["scans"], 2)
+        self.assertEqual(f["coins"], 5)
+        got = {r["reason"]: r["count"] for r in f["no_setup"]}
+        self.assertEqual(got["confluence: volatility at a low for this coin"], 2)
+        self.assertEqual(got["confluence: only 2 of 5 families agree"], 2)
+
+    def test_the_confluence_analyser_reports_why_it_found_nothing(self):
+        from analysis.crypto_signals import ConfluenceAnalyzer
+        from analysis.crypto_state import CryptoState
+        pipeline._scan_now.clear()
+        ConfluenceAnalyzer().analyze(CryptoState(symbol="btcusdt", base_asset="BTC",
+                                                 current_price=100.0))
+        self.assertEqual(list(pipeline._scan_now),
+                         ["confluence: under 60 one-minute candles: history still loading"])
+        pipeline._scan_now.clear()
+
     def test_a_broken_event_never_breaks_logging(self):
         self.assertEqual(pipeline.processor(None, "info", {"event": None}), {"event": None})
 

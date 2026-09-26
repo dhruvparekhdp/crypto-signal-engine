@@ -11,11 +11,13 @@ from analysis.crypto_signal import CryptoSignal, compute_crypto_stake
 from analysis.crypto_state import CryptoState
 from analysis.patterns import range_breakout
 from analysis.scalp_levels import (
+    REASON_TEXT,
     NoTrade,
     ScalpConfig,
     scalp_levels,
 )
 from config.settings import settings
+from scheduler import pipeline
 
 log = structlog.get_logger()
 
@@ -131,6 +133,7 @@ def _emit(
     # which is exactly what the old `atr or price * 0.015` fallback did.
     if state.atr_14 <= 0:
         log.debug("scalp.no_atr", symbol=state.symbol, signal_type=signal_type)
+        pipeline.no_setup("no volatility reading yet", signal_type)
         return None
 
     # Cost is per-market: gold is five times cheaper to trade than ether, so
@@ -169,6 +172,7 @@ def _emit(
     if isinstance(levels, NoTrade):
         log.debug("scalp.refused", symbol=state.symbol,
                   signal_type=signal_type, reason=levels.value)
+        pipeline.no_setup(REASON_TEXT.get(levels, levels.value), signal_type)
         return None
 
     # A target with a wall in front of it is not that target. Price stops at
@@ -178,6 +182,7 @@ def _emit(
     if wall is not None:
         log.debug("scalp.refused", symbol=state.symbol, signal_type=signal_type,
                   reason=NoTrade.WALL_IN_THE_WAY.value, wall=wall)
+        pipeline.no_setup(REASON_TEXT[NoTrade.WALL_IN_THE_WAY], signal_type)
         return None
 
     # Edge is what survives the round trip, not the raw move. Sizing off the
@@ -433,6 +438,8 @@ class ConfluenceAnalyzer:
 
     def analyze(self, state: CryptoState) -> CryptoSignal | None:
         if len(state.candles_1m) < 60 or state.current_price <= 0:
+            pipeline.no_setup(f"under 60 one-minute candles ({len(state.candles_1m)})",
+                              "confluence")
             return None
 
         cfg = SCALP.for_symbol(state.symbol)
@@ -447,6 +454,8 @@ class ConfluenceAnalyzer:
             if verdict.vetoes:
                 log.debug("confluence.no_trade", symbol=state.symbol,
                           reason=verdict.vetoes[0])
+            pipeline.no_setup(verdict.vetoes[0] if verdict.vetoes else "no direction",
+                              "confluence")
             return None
 
         agree = verdict.agreeing_families

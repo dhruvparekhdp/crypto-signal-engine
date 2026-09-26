@@ -18,6 +18,12 @@ from collections import Counter, deque
 _events: deque = deque(maxlen=20000)          # (ts, stage, reason, symbol)
 _last: dict[str, float] = {}
 
+# Before a signal exists: why each analyser found no setup. These refusals are
+# debug logs (thousands a day), which the log level drops before any processor
+# sees them, so the analysers report here directly. One Counter per scan.
+_scans: deque = deque(maxlen=1500)            # (ts, Counter of reasons, coins)
+_scan_now: Counter = Counter()
+
 # log event -> (stage, fixed reason or None to use the event's own `reason`)
 EVENTS = {
     "crypto_signal_fired": ("fired", ""),
@@ -64,6 +70,36 @@ def record(stage: str, reason: str = "", symbol: str = "") -> None:
     _last[stage] = now
 
 
+def no_setup(reason: str, analyser: str = "") -> None:
+    """An analyser looked at a coin and found no tradeable setup, for `reason`."""
+    _scan_now[f"{analyser.replace('_', ' ')}: {_plain(reason)}" if analyser
+              else _plain(reason)] += 1
+
+
+def end_scan(coins: int) -> None:
+    """Close one analysis run (every coin checked once)."""
+    _scans.append((time.time(), Counter(_scan_now), coins))
+    _scan_now.clear()
+
+
+def _plain(reason: str) -> str:
+    """Group refusals that differ only in their numbers."""
+    r = str(reason)
+    if r.startswith("under 60 one-minute candles"):
+        return "under 60 one-minute candles: history still loading"
+    if r.startswith("could move"):
+        return "market too quiet: the move cannot cover fees in time"
+    if r.startswith("volatility in the bottom"):
+        return "volatility at a low for this coin"
+    if r.startswith("volume is"):
+        return "thin volume: too few trades to carry a move"
+    if r.startswith("bands are squeezed"):
+        return "squeeze on: waiting for the breakout"
+    if r.endswith("families disagree"):
+        return "some checks point the other way"
+    return r
+
+
 def processor(logger, method_name, event_dict):
     """structlog processor: turn known engine events into pipeline records."""
     try:
@@ -86,8 +122,15 @@ def funnel(hours: float = 24.0) -> dict:
     stages = Counter(e[1] for e in recent)
     reasons = {st: Counter(e[2] for e in recent if e[1] == st).most_common(12)
                for st in ("blocked", "paper_skipped")}
+    scans = [x for x in _scans if x[0] >= cutoff]
+    no_setup_total: Counter = Counter()
+    for _, c, _coins in scans:
+        no_setup_total.update(c)
     return {
         "hours": hours,
+        "scans": len(scans),
+        "coins": scans[-1][2] if scans else 0,
+        "no_setup": [{"reason": r, "count": n} for r, n in no_setup_total.most_common(10)],
         "stages": dict(stages),
         "reasons": {k: [{"reason": r, "count": n} for r, n in v] for k, v in reasons.items()},
         "last": {k: time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(v)) for k, v in _last.items()},

@@ -88,6 +88,7 @@ def pipeline_api(runner):
 
         from sqlalchemy import select
 
+        from analysis.crypto_signals import SCALP
         from analysis.deal_scanner import book_full
         from analysis.protections import in_session
         from config.settings import settings
@@ -110,8 +111,14 @@ def pipeline_api(runner):
             last = st.candles_1m[-1].timestamp if getattr(st, "candles_1m", None) else None
             age = (now - (last if last.tzinfo else last.replace(tzinfo=UTC))).total_seconds() \
                 if last else None
+            price = st.current_price or 0.0
             feeds.append({"symbol": st.symbol.upper(), "price": st.current_price,
-                          "candle_age_s": round(age) if age is not None else None})
+                          "candle_age_s": round(age) if age is not None else None,
+                          # 1-minute ATR against the cost of a round trip: when the
+                          # swing is smaller than the fees, no setup can pay.
+                          "atr_pct": (round(st.atr_14 / price * 100, 3)
+                                      if price > 0 and st.atr_14 > 0 else None),
+                          "cost_pct": round(SCALP.for_symbol(st.symbol).cost_floor_pct * 100, 3)})
         gates = {
             "paper_enabled": bool(pcfg.enabled),
             "protections_enabled": settings.protections_enabled,
@@ -368,6 +375,14 @@ async function funnel(){
     +n('fired')+' signals fired (last '+ago('fired')+') · '+n('blocked')+' blocked by filters · '
     +n('paper_skipped')+' skipped by paper rules · '+n('paper_opened')+' trades opened (last '
     +ago('paper_opened')+')</div></div><div></div></div>'
+    +'<div class="row inset"><div><div class="l">Why the analysers found no setup</div><div class="h">'
+      +(d.day.scans||0)+' scans of '+(d.day.coins||0)+' coins (one a minute). Counts are coin-checks.</div>'
+      +reasons(d.day.no_setup||[])+'</div><div></div></div>'
+    +((d.feeds||[]).some(f=>f.atr_pct!=null)?'<div class="row inset"><div><div class="l">How fast each coin is moving</div>'
+      +'<div class="h">Typical 1-minute swing, and how many minutes of that it takes to earn back a round trip\'s cost.</div>'
+      +d.feeds.filter(f=>f.atr_pct!=null).map(f=>{const m=Math.pow(f.cost_pct/f.atr_pct,2);
+        return '<div class="h">'+esc(f.symbol)+': '+f.atr_pct.toFixed(3)+'% a minute · fees '+f.cost_pct.toFixed(3)
+        +'% · ~'+(m<1?'<1':Math.round(m))+' min</div>';}).join('')+'</div><div></div></div>':'')
     +'<div class="row inset"><div><div class="l">Filters that stopped signals</div>'+reasons(d.day.reasons.blocked)+'</div><div></div></div>'
     +'<div class="row inset"><div><div class="l">Paper rules that skipped signals</div>'+reasons(d.day.reasons.paper_skipped)+'</div><div></div></div>'
     +(d.day.tracking_since?'<p class="small muted">Counting since '+fmtWhen(d.day.tracking_since)+' (restarts reset it).</p>'
