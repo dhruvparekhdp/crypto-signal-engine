@@ -15,6 +15,7 @@ from datetime import UTC, datetime
 
 import pandas as pd
 
+from analysis.deal_scanner import volatility_classes
 from analysis.v2_backtest import ExecConfig, grade, simulate, trades_to_rows
 from analysis.v2_setups import SETUP_NAMES, V2Config, generate
 from collectors.binance_lake import read
@@ -79,6 +80,8 @@ def run_backtest(symbols: list[str], years: float = 2.0, cfg: V2Config = V2Confi
     from collections import defaultdict
     bench: dict[str, list] = defaultdict(list)
     variant_trades: dict[str, list] = defaultdict(list)
+    variant_by_symbol: dict[str, dict] = defaultdict(dict)
+    coin_atr: dict[str, float] = {}
     setup_trades: dict[str, list] = defaultdict(list)
     for sym in symbols:
         sym = sym.upper()
@@ -96,9 +99,14 @@ def run_backtest(symbols: list[str], years: float = 2.0, cfg: V2Config = V2Confi
                                      frames["1d"], funding, cfg) if c.ts >= start]
         trades = simulate(cands, frames["5m"], ex)
         all_trades += trades
+        # How much this coin moves: median 15m bar range, % of price.
+        k15 = frames["15m"]
+        coin_atr[sym] = round(float(((k15["high"] - k15["low"]) / k15["close"]).median() * 100), 3)
         for name, vex in VARIANTS.items():
-            variant_trades[name] += (trades if name == "base"
-                                     else simulate(cands, frames["5m"], vex))
+            vt = trades if name == "base" else simulate(cands, frames["5m"], vex)
+            variant_trades[name] += vt
+            # Which coins each exit suits (owner's question, 26 Sep).
+            variant_by_symbol[name][sym] = grade(vt, mc=False)["stats"]
         if setup_variants:
             for name, (flags, _) in SETUP_VARIANTS.items():
                 vcfg = replace(cfg, **flags)
@@ -152,6 +160,13 @@ def run_backtest(symbols: list[str], years: float = 2.0, cfg: V2Config = V2Confi
             "setups": {c: grade([t for t in vt if t.setup == c], mc=False,
                                 n_trials=TRIALS)["stats"] for c in cfg.setups}}
             for name, vt in setup_trades.items()},
+        # Every exit style per coin, with the coin's volatility class relative
+        # to the rest of the watchlist: which coins suit the profit lock.
+        "coins": {sym: {"median_15m_range_pct": atr, "class": cls,
+                        "exits": {name: variant_by_symbol[name].get(sym, {})
+                                  for name in VARIANTS}}
+                  for sym, atr in coin_atr.items()
+                  for cls in [volatility_classes(coin_atr).get(sym, "unknown")]},
         # Freqtrade community strategies on the same data and costs (1x spot,
         # long-only, percent per trade): the bar v2 has to clear.
         "benchmarks": _bench_summary(bench),

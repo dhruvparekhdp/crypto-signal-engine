@@ -84,6 +84,11 @@ FIELDS: tuple[Field, ...] = (
     Field("profit_lock_trail_pct", "exits", "Then trail behind the best price (%)",
           "0.15% is your SOL trade. Tighter = more small wins, more early exits.",
           kind="float", lo=0.05, hi=3),
+    Field("premium_fills_book", "exits", "A premium deal fills the book",
+          "When an open trade's target pays at least the % below on margin, open nothing "
+          "else until it closes. Signals on the same tick are always taken best first."),
+    Field("premium_roe_pct", "exits", "Premium deal: target pays at least (% on margin)",
+          "50% at 25x is a 2% move, typical of a volatile coin.", kind="float", lo=5, hi=500),
     # Protections
     Field("protections_enabled", "protect", "Protections",
           "Master switch for everything in this group."),

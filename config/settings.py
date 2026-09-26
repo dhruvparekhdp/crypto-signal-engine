@@ -137,6 +137,11 @@ class Settings(BaseSettings):
     profit_lock_at_pct: float = 0.5
     profit_lock_to_pct: float = 0.35
     profit_lock_trail_pct: float = 0.15
+    # Deal scanner (analysis/deal_scanner.py): signals on the same tick are
+    # taken best first; an open trade whose target pays >= premium_roe_pct on
+    # margin fills the book until it closes.
+    premium_roe_pct: float = 50.0
+    premium_fills_book: bool = True
     protections_enabled: bool = True
     session_filter_enabled: bool = True
     session_start_utc: int = 7

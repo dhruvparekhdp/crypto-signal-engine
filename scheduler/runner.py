@@ -453,8 +453,28 @@ class AppRunner:
                     pnl_today = sum(t.net_pnl for t in recent if t.closed_at >= today0)
                     equity = wallet + sum(p.margin for p in cstate.positions)
                     day_start_wallet = equity - pnl_today
+                # Best deal first: on a tick with several signals, the one
+                # most worth its costs gets the slot (owner's rule, 26 Sep).
+                from analysis.deal_scanner import (
+                    book_full,
+                    deal_score,
+                    target_roe_pct,
+                    volatility_classes,
+                )
+                from analysis.paper_cycle import fees_for as _fees_for
+                pending.sort(key=lambda p: -deal_score(p[0], _fees_for(p[0].symbol)
+                                                        .round_trip_pct()))
+                vol_class = volatility_classes({
+                    sym: (s_.atr_14 / s_.current_price * 100 if s_.current_price > 0 else 0)
+                    for sym, s_ in states.items()})
                 for sig, st in pending:
                     if st.current_price <= 0:
+                        continue
+                    full = (book_full(cstate.positions, settings.premium_roe_pct)
+                            if settings.premium_fills_book else None)
+                    if full is not None:
+                        log.info("paper_trade_skipped", symbol=sig.symbol,
+                                 reason="book_full_premium", holding=full.symbol)
                         continue
                     sig, why_not = reprice_signal(sig, st.current_price, now, max_age)
                     if sig is None:
@@ -481,12 +501,19 @@ class AppRunner:
                     wallet = cstate.wallet
                     row = await repo.open_position_atomic(cycle.id, pos, wallet)
                     risk = abs(pos.entry_price - pos.stop_price) / pos.entry_price * 100
+                    roe = target_roe_pct(pos)
+                    premium = (settings.premium_fills_book
+                               and roe >= settings.premium_roe_pct)
                     await repo.add_trade_events([_event(
                         pos, cycle.id, now, "opened", "entry", new=f"{pos.entry_price:.6g}",
                         note=(f"{pos.side.value} {sig.signal_type} at {sig.confidence:.0%} · "
                               f"stop {pos.stop_price:.6g} ({risk:.2f}% away) · target "
                               f"{pos.target_price:.6g} · {pos.leverage:.0f}x · margin "
-                              f"₹{pos.margin:.0f} · quoted {sig.current_price:.6g}"))])
+                              f"₹{pos.margin:.0f} · quoted {sig.current_price:.6g} · "
+                              f"{vol_class.get(pos.symbol, 'unknown')} coin · target pays "
+                              f"{roe:.0f}% on margin"
+                              + (" · PREMIUM: book full until this closes" if premium
+                                 else "")))])
                     cstate.position_ids[len(cstate.positions)] = row.id
                     cstate.positions.append(pos)
                     log.info("paper_trade_opened", symbol=pos.symbol,

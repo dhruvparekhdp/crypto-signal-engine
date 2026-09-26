@@ -278,6 +278,22 @@ async function loadBacktest(){
       +'<th>Avg win / loss</th><th>PF</th><th>Windows up</th><th>Gate</th></tr>';
     Object.values(vs).forEach(v=>{h+=row(v.label,v.overall);});
     h+='</table></div>'; }
+  const coins=r.coins||{};
+  if(Object.keys(coins).length){
+    const ex=['base','owner_tight','owner_medium'];
+    const cell=st=>st&&st.trades?'<td class="'+(st.expectancy_r>=0?'pos':'neg')+'">'
+      +(st.expectancy_r>=0?'+':'')+st.expectancy_r+'R<br><span class="muted">'
+      +Math.round(st.win_rate*100)+'% · '+st.trades+'</span></td>':'<td class="muted">—</td>';
+    h+='<h2 style="margin-top:16px">Which coins suit your profit lock</h2>'
+      +'<p class="muted" style="font-size:12px;margin-bottom:8px">Per coin: profit per trade, '
+      +'win rate and trades for the normal exit and your two lock styles. Steady / volatile is '
+      +'relative to the rest of the watchlist (median 15m candle range).</p>'
+      +'<div class="tw"><table><tr><th>Coin</th><th>Moves</th><th>Normal exit</th>'
+      +'<th>Your style (tight)</th><th>Your style (looser)</th></tr>';
+    Object.entries(coins).sort((a,b)=>a[1].median_15m_range_pct-b[1].median_15m_range_pct)
+      .forEach(([sym,c])=>{h+='<tr><td>'+esc(sym)+'</td><td>'+esc(c.class)+'<br><span class="muted">'
+        +c.median_15m_range_pct+'% / 15m</span></td>'+ex.map(n=>cell((c.exits||{})[n])).join('')+'</tr>';});
+    h+='</table></div>'; }
   const sv=r.setup_variants||{};
   if(Object.keys(sv).length){
     h+='<h2 style="margin-top:16px">Research filters, one at a time</h2>'

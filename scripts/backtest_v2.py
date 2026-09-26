@@ -90,6 +90,12 @@ def main() -> int:
     print("\n  Execution variants, same candidates:")
     for name, v in report.get("variants", {}).items():
         print(_line(v["label"][:22], v["overall"]))
+    print("\n  Exits by coin (expectancy R / win rate):")
+    for sym, c in report.get("coins", {}).items():
+        cells = "  ".join(
+            f"{name}: {st['expectancy_r']:+.2f}R/{st['win_rate'] * 100:.0f}%"
+            for name, st in c["exits"].items() if st.get("trades"))
+        print(f"  {sym:9} {c['class']:8} range {c['median_15m_range_pct']:.2f}%  {cells}")
     print("\n  Research filters, one at a time (base execution):")
     for name, v in report.get("setup_variants", {}).items():
         print(_line(v["label"][:22], v["overall"]))
