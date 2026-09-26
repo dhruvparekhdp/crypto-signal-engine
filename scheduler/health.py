@@ -5131,8 +5131,9 @@ if(!window.fmtStamp){
   // Time of day only, for rows that are obviously today: "14:05 IST".
   window.istClock = function(iso){
     var d = _toDate(iso); if(!d) return '—';
-    return d.toLocaleTimeString('en-IN', {timeZone:'Asia/Kolkata', hour:'2-digit',
-      minute:'2-digit', hour12:false}) + ' IST';
+    // The clock part of the one formatter, so there is still one format.
+    var s = window.fmtStamp(d, {noZone:true});
+    return s.slice(s.lastIndexOf(' ') + 1) + ' IST';
   };
   // "just now", "12m ago", "1h 20m ago", "3d ago" — and "in 45m" for the future.
   window.fmtAgo = function(iso){
