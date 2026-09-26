@@ -113,8 +113,15 @@ class Settings(BaseSettings):
     # plugin, a small per-search charge on its account — never a bare
     # model: one asked "what happened in the last 30 minutes" with no way
     # to check invents an answer, which is worse than none at all.
+    # No deadline (the trade is already closed), so the last link is the
+    # deepest free model OpenRouter has, not the fast one used elsewhere —
+    # a genuine reasoning model, not a chat model with a "+search" flag.
+    # Free-tier rosters on OpenRouter rotate; if this exact model is ever
+    # retired the chain just logs one more failure and tries the next link,
+    # same as any other model going away.
     llm_chain_post_trade: str = (
-        "groq:openai/gpt-oss-120b+search, groq:openai/gpt-oss-120b, anthropic:claude-sonnet-5")
+        "groq:openai/gpt-oss-120b+search, groq:openai/gpt-oss-120b, anthropic:claude-sonnet-5, "
+        "openrouter:nvidia/nemotron-3-ultra-550b-a55b:free")
     # The world-events briefing. Every entry can actually search.
     llm_chain_briefing: str = (
         "groq:openai/gpt-oss-120b+search, groq:openai/gpt-oss-20b+search, "
@@ -144,7 +151,8 @@ class Settings(BaseSettings):
     # Local first: it is bulk work and the free Groq requests are shared with
     # live trading. The biggest moves use web search to find that day's news.
     llm_chain_history: str = (
-        "ollama:qwen3:8b, groq:openai/gpt-oss-120b, openrouter:qwen/qwen3-32b")
+        "ollama:qwen3:8b, groq:openai/gpt-oss-120b, openrouter:qwen/qwen3-32b, "
+        "openrouter:nvidia/nemotron-3-ultra-550b-a55b:free")
     llm_chain_history_search: str = (
         "groq:openai/gpt-oss-120b+search, openrouter:qwen/qwen3-32b:online")
     # Entry protections (analysis/protections.py): session window, daily
@@ -257,7 +265,8 @@ class Settings(BaseSettings):
     # a few hundred headlines a day it is also the one that would cost the
     # most through a metered API. Local first, and the free tiers behind it.
     llm_chain_news_scoring: str = (
-        "ollama:qwen3:1.7b, groq:openai/gpt-oss-20b, gemini:gemini-3.1-flash-lite")
+        "ollama:qwen3:1.7b, groq:openai/gpt-oss-20b, gemini:gemini-3.1-flash-lite, "
+        "openrouter:qwen/qwen3-32b")
 
     # Groq leads, not the laptop: this call sits inside the 30-second paper
     # tick with a 12-second budget, and an 8B model on the i5 needs 10-25 s

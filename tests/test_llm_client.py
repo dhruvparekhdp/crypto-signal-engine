@@ -89,7 +89,9 @@ class TestRolesAreConfiguredSeparately(unittest.TestCase):
     def test_every_named_provider_is_one_the_router_knows(self):
         from config.settings import settings
 
-        for role in ("pre_trade", "position_review", "post_trade", "research"):
+        for role in ("pre_trade", "position_review", "post_trade", "research",
+                     "briefing", "briefing_calm", "attribution", "history",
+                     "history_search", "news_scoring"):
             raw = getattr(settings, f"llm_chain_{role}")
             named = [e.strip().partition(":")[0] for e in raw.split(",") if e.strip()]
             for provider in named:
