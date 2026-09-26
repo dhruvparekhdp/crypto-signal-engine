@@ -19,6 +19,46 @@ class TestOverrides(unittest.TestCase):
         for f in FIELDS:
             self.assertTrue(hasattr(settings, f.key), f.key)
 
+    def test_a_key_already_in_env_is_recognised_without_ever_touching_settings(self):
+        """
+        Most keys the owner has are already in .env on the server, set long
+        before this page existed. Precedence is database > .env > default —
+        this is the .env rung: nothing saved on /settings, and it must still
+        show as set, from a real Settings() instance reading a real env var,
+        not a stand-in object.
+        """
+        import os as _os
+
+        from config.overrides import describe
+        from config.settings import Settings
+
+        _os.environ["GROQ_API_KEY"] = "gsk_from_env_abc123"
+        try:
+            fresh = Settings()
+            self.assertEqual(fresh.groq_api_key.get_secret_value(), "gsk_from_env_abc123")
+            row = next(r for r in describe(fresh, {}) if r["key"] == "groq_api_key")
+            self.assertTrue(row["is_set"])
+            self.assertIsNone(row["value"])                # still never echoed
+            self.assertEqual(row["source"], "default")      # not saved on the page — from .env
+        finally:
+            del _os.environ["GROQ_API_KEY"]
+
+    def test_a_database_save_overrides_env_not_the_other_way_round(self):
+        """The documented precedence (database > .env > default): a key
+        pasted on /settings must win over whatever .env already has."""
+        import os as _os
+
+        from config.settings import Settings
+
+        _os.environ["GROQ_API_KEY"] = "gsk_from_env_abc123"
+        try:
+            fresh = Settings()
+            done = apply(fresh, {"groq_api_key": "gsk_from_database_xyz"})
+            self.assertEqual(done, ["groq_api_key"])
+            self.assertEqual(fresh.groq_api_key.get_secret_value(), "gsk_from_database_xyz")
+        finally:
+            del _os.environ["GROQ_API_KEY"]
+
     def test_coerce_and_ranges(self):
         self.assertIs(coerce(BY_KEY["binance_only_mode"], "on"), True)
         self.assertEqual(coerce(BY_KEY["session_start_utc"], "7.4"), 7)
