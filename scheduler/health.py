@@ -3194,6 +3194,20 @@ async def _api_auth_verify(runner, request: web.Request) -> web.Response:
     return web.json_response({"ok": True})
 
 
+ADMIN_COOKIE = "admin_session"
+ADMIN_SESSION_DAYS = 7
+
+
+def _session_token(request: web.Request) -> str:
+    """The admin token from the header, a Bearer header, or the 7-day cookie."""
+    token = request.headers.get("X-Settings-Token") or ""
+    if not token:
+        auth_hdr = request.headers.get("Authorization") or ""
+        if auth_hdr.startswith("Bearer "):
+            token = auth_hdr[7:].strip()
+    return token or request.cookies.get(ADMIN_COOKIE, "")
+
+
 async def _verify_admin_session(request: web.Request) -> bool:
     """
     Check X-Settings-Token or a Bearer header against the stored session.
@@ -3203,11 +3217,7 @@ async def _verify_admin_session(request: web.Request) -> bool:
     session token in the access log, the browser history and whatever
     Referer gets sent to the next site the tab visits.
     """
-    token = request.headers.get("X-Settings-Token") or ""
-    if not token:
-        auth_hdr = request.headers.get("Authorization") or ""
-        if auth_hdr.startswith("Bearer "):
-            token = auth_hdr[7:].strip()
+    token = _session_token(request)
     if not token:
         return False
     from storage.database import AsyncSessionFactory
@@ -3232,7 +3242,16 @@ async def _api_settings_auth_login(runner, request: web.Request) -> web.Response
             ok, token = await repo.verify_admin_password(password)
             if not ok or not token:
                 return web.json_response({"ok": False, "error": "Invalid password"}, status=401)
-            return web.json_response({"ok": True, "token": token})
+            # Logged in for 7 days in every tab and page of this browser: an
+            # HttpOnly cookie (scripts cannot read it) that other sites cannot
+            # send (SameSite=Strict). The token is still returned for the
+            # iOS app and older pages that send it as a header.
+            resp = web.json_response({"ok": True, "token": token,
+                                      "expires_days": ADMIN_SESSION_DAYS})
+            resp.set_cookie(ADMIN_COOKIE, token, max_age=ADMIN_SESSION_DAYS * 86400,
+                            httponly=True, samesite="Strict", path="/",
+                            secure=request.secure)
+            return resp
     except Exception as exc:
         return web.json_response({"ok": False, "error": str(exc)}, status=500)
 
@@ -3243,11 +3262,7 @@ async def _api_settings_auth_status(runner, request: web.Request) -> web.Respons
 
 
 async def _api_settings_auth_logout(runner, request: web.Request) -> web.Response:
-    token = request.headers.get("X-Settings-Token") or ""
-    if not token:
-        auth_hdr = request.headers.get("Authorization") or ""
-        if auth_hdr.startswith("Bearer "):
-            token = auth_hdr[7:].strip()
+    token = _session_token(request)
     if token:
         from storage.database import AsyncSessionFactory
         from storage.repository import Repository
@@ -3256,7 +3271,9 @@ async def _api_settings_auth_logout(runner, request: web.Request) -> web.Respons
                 await Repository(session).invalidate_session_token(token)
         except Exception:
             pass
-    return web.json_response({"ok": True})
+    resp = web.json_response({"ok": True})
+    resp.del_cookie(ADMIN_COOKIE, path="/")
+    return resp
 
 
 async def _api_paper_config_get(runner, request: web.Request) -> web.Response:

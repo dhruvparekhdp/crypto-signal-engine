@@ -114,7 +114,9 @@ async def test_settings_api_endpoints(mem_sessionmaker):
             assert pdata["starting_wallet"] == 3000.0
             assert pdata["enabled"] is True
 
-            # POST without auth -> 401
+            # POST without auth -> 401 (a real browser would still carry the
+            # 7-day login cookie, so drop it to test the unauthenticated path)
+            client.session.cookie_jar.clear()
             resp = await client.post("/api/paper/config", json={"starting_wallet": 4500.0})
             assert resp.status == 401
 

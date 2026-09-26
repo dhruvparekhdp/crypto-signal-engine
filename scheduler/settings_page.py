@@ -198,8 +198,9 @@ async function auth(){
   const r=await fetch('/api/settings/auth/status',{headers:H()}).then(r=>r.json()).catch(()=>({}));
   const el=document.getElementById('auth');
   if(r.authenticated){el.innerHTML='<h2>🔓 Logged in <span class="pill on">admin</span></h2>'
-    +'<p class="small muted" style="margin-top:6px">Changes save to the engine. Other tabs need '
-    +'their own login (the session lives in this tab).</p>'
+    +'<p class="small muted" style="margin-top:6px">Changes save to the engine. You stay logged in '
+    +'for 7 days on this browser, in every tab and page. Logging in on another device ends '
+    +'this session.</p>'
     +'<div class="login"><button class="btn" onclick="logout()">Log out</button></div>'; perf(); return true;}
   el.innerHTML='<h2>🔒 Log in to change settings</h2><div class="login">'
     +'<input class="inset" type="password" id="pw" placeholder="Admin password" '

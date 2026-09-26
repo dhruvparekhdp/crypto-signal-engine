@@ -616,11 +616,17 @@ class Repository:
         await self.session.commit()
         return True, token
 
-    async def validate_session_token(self, token: str) -> bool:
+    async def validate_session_token(self, token: str, max_age_days: int = 7) -> bool:
+        """
+        The token matches and was issued within `max_age_days` (the login
+        cookie's lifetime). Sessions used to never expire.
+        """
         if not token or not token.strip():
             return False
         auth = await self.session.get(AdminAuth, 1)
         if auth is None or not auth.session_token:
+            return False
+        if auth.updated_at and _now_utc() - auth.updated_at > timedelta(days=max_age_days):
             return False
         return hmac.compare_digest(auth.session_token, token.strip())
 

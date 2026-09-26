@@ -324,7 +324,7 @@ async function loadBacktest(){
   return h; }
 async function runBt(){ const r=await fetch('/api/v2/backtest/run',{method:'POST',headers:{'X-Settings-Token':sessionStorage.getItem('settings_token')||''}});
   alert(r.ok?'Started. Download plus test takes a few minutes; this page refreshes.'
-    :(r.status===409?'Already running.':'Log in at /settings in this tab first.')); }
+    :(r.status===409?'Already running.':'Log in at /settings first.')); }
 async function load(){
   const bt=await loadBacktest().catch(()=>'');
   const d=await (await fetch('/api/v2/shadow?days=30')).json();
@@ -402,7 +402,7 @@ document.getElementById('f').onsubmit=async e=>{e.preventDefault();
     body:JSON.stringify(body)});
   const d=await r.json();
   msg.textContent=r.ok?'Saved #'+d.id+' with '+Object.keys(d.features||{}).length+' chart facts'
-    :(d.error||'Not saved — log in at /settings in this tab first');
+    :(d.error||'Not saved — log in at /settings first');
   if(r.ok){e.target.reset(); list();}};
 async function list(){
   const r=await fetch('/api/journal',{headers:{'X-Settings-Token':sessionStorage.getItem('settings_token')||''}}); const el=document.getElementById('list');
