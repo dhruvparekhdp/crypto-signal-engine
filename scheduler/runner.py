@@ -1314,6 +1314,14 @@ class AppRunner:
         Every 5 minutes: run the v2 setups on fresh Binance frames for each
         crypto on the watchlist, record new candidates, and resolve the open
         ones with the backtest's own fill rules. Shadow only — nothing trades.
+
+        One DB session to read every symbol's open rows, then step() for all
+        seven symbols with no session open at all, then one DB session to
+        write everything. The old version opened a session per symbol and
+        held it — checked out from the pool, doing nothing — for the whole
+        of that symbol's step() computation, seven times a run. On a remote
+        database that starved every other page and job of a free connection;
+        it is why this job's own 17-20s showed up as 1-4s pings everywhere.
         """
         if not settings.v2_shadow_enabled:
             return
@@ -1333,22 +1341,34 @@ class AppRunner:
         try:
             symbols = [s for s in await self.crypto_store.get_symbols()
                        if spec_for(s).kind == "crypto"]
+
+            async with AsyncSessionFactory() as session:
+                open_by_symbol: dict[str, list] = {}
+                for row in await Repository(session).open_v2_shadows():
+                    open_by_symbol.setdefault(row.symbol, []).append(row)
+
+            all_cands: list = []
+            all_updates: list[tuple[int, dict]] = []
             for sym in symbols:
                 frames = await fetch_frames(sym)
                 if frames["5m"].empty:
                     continue
                 funding = await fetch_funding(sym)
+                # CPU work; off the event loop so the paper tick and the web
+                # pages never wait on it. No DB session is open while it runs.
+                cands, updates = await asyncio.to_thread(
+                    step, sym, frames, funding, open_by_symbol.get(sym, []), now, cfg)
+                all_cands.extend(cands)
+                all_updates.extend((u.row_id, u.fields) for u in updates)
+
+            if all_cands or all_updates:
                 async with AsyncSessionFactory() as session:
                     repo = Repository(session)
-                    rows = await repo.open_v2_shadows(sym)
-                    # generate() is CPU work; off the event loop so the
-                    # paper tick and the web pages never wait on it.
-                    cands, updates = await asyncio.to_thread(
-                        step, sym, frames, funding, rows, now, cfg)
-                    for u in updates:
-                        await repo.update_v2_shadow(u.row_id, **u.fields)
-                        closed += u.fields.get("status") == "closed"
-                    new_total += await repo.save_v2_candidates(cands)
+                    for row_id, fields in all_updates:
+                        await repo.update_v2_shadow(row_id, commit=False, **fields)
+                        closed += fields.get("status") == "closed"
+                    new_total = await repo.save_v2_candidates(all_cands, commit=False)
+                    await session.commit()
             log.info("v2_shadow_step", symbols=len(symbols), new=new_total, closed=closed)
         except Exception:
             log.exception("v2_shadow_failed")
@@ -1609,11 +1629,16 @@ class AppRunner:
             log.exception("crypto_news_job_failed")
 
     async def _crypto_snapshot_job(self) -> None:
-        """Save periodic crypto & commodity snapshots for ML training and backtesting."""
+        """
+        Save periodic crypto & commodity snapshots for ML training and backtesting.
+
+        One commit for the whole watchlist, not one per coin. Each commit is a
+        round trip to the database; on a remote database with real latency,
+        ten sequential commits for ten rows was most of this job's 8-14s.
+        """
         try:
             async with AsyncSessionFactory() as session:
                 repo = Repository(session)
-                # Crypto snapshots
                 for state in await self.crypto_store.get_all():
                     if state.current_price > 0:
                         await repo.save_crypto_snapshot(
@@ -1627,9 +1652,9 @@ class AppRunner:
                             bollinger_lower=state.bollinger_lower,
                             atr_14=state.atr_14,
                             sentiment_score=state.sentiment_score,
+                            commit=False,
                         )
 
-                # Commodity snapshots
                 for cstate in await self.commodity_store.get_all():
                     if cstate.current_price > 0:
                         await repo.save_commodity_snapshot(
@@ -1637,7 +1662,9 @@ class AppRunner:
                             price=cstate.current_price,
                             rsi_14=cstate.rsi_14,
                             atr_14=cstate.atr_14,
+                            commit=False,
                         )
+                await session.commit()
         except Exception:
             log.exception("crypto_snapshot_job_failed")
 

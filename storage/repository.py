@@ -203,7 +203,9 @@ class Repository:
         bollinger_lower: float,
         atr_14: float,
         sentiment_score: float,
+        commit: bool = True,
     ) -> None:
+        """`commit=False` batches a whole watchlist into one round trip."""
         self.session.add(CryptoSnapshot(
             symbol=symbol,
             price=price,
@@ -217,7 +219,8 @@ class Repository:
             sentiment_score=sentiment_score,
             timestamp=_now_utc(),
         ))
-        await self.session.commit()
+        if commit:
+            await self.session.commit()
 
     async def save_commodity_snapshot(
         self,
@@ -225,6 +228,7 @@ class Repository:
         price: float,
         rsi_14: float,
         atr_14: float,
+        commit: bool = True,
     ) -> None:
         self.session.add(CommoditySnapshot(
             symbol=symbol,
@@ -233,7 +237,8 @@ class Repository:
             atr_14=atr_14,
             timestamp=_now_utc(),
         ))
-        await self.session.commit()
+        if commit:
+            await self.session.commit()
 
     async def log_crypto_signal(
         self,
@@ -843,8 +848,14 @@ class Repository:
 
     # ── v2 shadow signals ───────────────────────────────────────
 
-    async def save_v2_candidates(self, cands: list) -> int:
-        """Store new live v2 candidates; ones already stored are skipped."""
+    async def save_v2_candidates(self, cands: list, commit: bool = True) -> int:
+        """
+        Store new live v2 candidates; ones already stored are skipped.
+
+        `commit=False` lets a caller batch several symbols' candidates into
+        one round trip instead of one per symbol — see the shadow job, where
+        a remote database turned seven small commits into several seconds.
+        """
         import json
 
         from storage.models import V2ShadowSignal
@@ -863,7 +874,8 @@ class Repository:
                 entry=c.entry, stop=c.stop, target=c.target,
                 notes=json.dumps(c.notes, default=str)))
             new += 1
-        await self.session.commit()
+        if commit:
+            await self.session.commit()
         return new
 
     async def open_v2_shadows(self, symbol: str | None = None) -> list:
@@ -873,14 +885,15 @@ class Repository:
             q = q.where(V2ShadowSignal.symbol == symbol)
         return list((await self.session.execute(q)).scalars().all())
 
-    async def update_v2_shadow(self, row_id: int, **fields) -> None:
+    async def update_v2_shadow(self, row_id: int, commit: bool = True, **fields) -> None:
         from storage.models import V2ShadowSignal
         row = await self.session.get(V2ShadowSignal, row_id)
         if row is None:
             return
         for k, v in fields.items():
             setattr(row, k, v)
-        await self.session.commit()
+        if commit:
+            await self.session.commit()
 
     async def recent_v2_shadows(self, days: float = 30, limit: int = 500) -> list:
         from storage.models import V2ShadowSignal
