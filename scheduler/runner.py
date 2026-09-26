@@ -66,6 +66,25 @@ from storage.repository import Repository
 log = structlog.get_logger()
 
 
+def _record_start(path: Path, window_minutes: int = 60) -> list[str]:
+    """Append this start to the file; return the starts within the window, this one included."""
+    import json
+    now = datetime.now(UTC)
+    try:
+        starts = json.loads(path.read_text()) if path.exists() else []
+    except (OSError, ValueError):
+        starts = []
+    recent = [t for t in starts
+              if (now - datetime.fromisoformat(t)).total_seconds() < window_minutes * 60]
+    recent.append(now.isoformat())
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(recent))
+    except OSError:
+        pass
+    return recent
+
+
 class AppRunner:
     def __init__(self) -> None:
         self.notifier = TelegramNotifier()
@@ -1128,51 +1147,75 @@ class AppRunner:
 
     async def _v2_backtest_job(self) -> None:
         """
-        Download what the v2 backtest needs from data.binance.vision (5m, 15m,
-        4h, 1d klines and funding for the watchlist's crypto, resumable), then
-        run the backtest and save the report for /v2. Both halves run in a
-        worker thread so the paper tick is never held up.
+        Download the v2 test data from data.binance.vision and run the v2
+        backtest — in a SEPARATE process, never inside the engine.
+
+        The first version ran it in a worker thread of the engine itself.
+        Two years of 5m bars for seven coins was more than the box's memory,
+        the kernel killed the whole engine, systemd restarted it, the restart
+        found no report and scheduled the test again: a restart every ~10
+        minutes. Now the child runs at the lowest CPU priority with its OOM
+        score raised to the maximum, so if memory runs out the kernel kills
+        the test, not the engine; it has a time limit; and an attempt file
+        stops any retry until the next daily slot.
         """
         if not settings.v2_backtest_enabled or self._v2_bt_state.get("running"):
             return
-        import argparse
         import json
+        import os
+        import sys
 
         from analysis.instruments import spec_for
-        from analysis.v2_report import run_backtest
-        from analysis.v2_setups import V2Config
-        from scripts.load_binance_lake import load
 
+        out = Path(settings.v2_reports_dir)
+        out.mkdir(parents=True, exist_ok=True)
+        attempt = out / "backtest_v2_attempt.json"
+        attempt.write_text(json.dumps({"started": datetime.now(UTC).isoformat()}))
         self._v2_bt_state = {"running": True, "started": datetime.now(UTC).isoformat(),
-                             "stage": "downloading"}
+                             "stage": "downloading and testing"}
+        symbols = [s.upper() for s in await self.crypto_store.get_symbols()
+                   if spec_for(s).kind == "crypto"]
+
+        def _sacrificial():
+            # Runs in the child just before exec: lowest priority, first to
+            # be killed on memory pressure. Raising one's own score needs no
+            # privilege.
+            os.nice(19)
+            try:
+                with open("/proc/self/oom_score_adj", "w") as fh:
+                    fh.write("1000")
+            except OSError:
+                pass
+
+        cmd = [sys.executable, "-m", "scripts.backtest_v2", "--latest",
+               "--symbols", ",".join(symbols), "--years", str(settings.v2_backtest_years),
+               "--root", settings.v2_lake_dir, "--reports", settings.v2_reports_dir]
+        if settings.v2_backtest_download:
+            cmd.append("--download")
+        if not settings.session_filter_enabled:
+            cmd.append("--no-session")
+        env = dict(os.environ, OPENBLAS_NUM_THREADS="1", OMP_NUM_THREADS="1",
+                   MKL_NUM_THREADS="1")
         try:
-            symbols = [s.upper() for s in await self.crypto_store.get_symbols()
-                       if spec_for(s).kind == "crypto"]
-            args = argparse.Namespace(
-                market="um", kinds="klines,fundingRate", intervals="5m,15m,4h,1d",
-                symbols=",".join(symbols), years=settings.v2_backtest_years + 0.15, days=0,
-                since="", root=settings.v2_lake_dir, concurrency=4, dry_run=False)
-            await asyncio.to_thread(asyncio.run, load(args))
-            self._v2_bt_state["stage"] = "testing"
-            cfg = V2Config(session_filter=settings.session_filter_enabled,
-                           session_start_utc=settings.session_start_utc,
-                           session_end_utc=settings.session_end_utc,
-                           weekdays_only=settings.session_weekdays_only)
-            report = await asyncio.to_thread(
-                run_backtest, symbols, settings.v2_backtest_years, cfg,
-                root=settings.v2_lake_dir, log=lambda m: log.info("v2_backtest", msg=m))
-            out = Path(settings.v2_reports_dir)
-            out.mkdir(parents=True, exist_ok=True)
-            text = json.dumps(report, default=str)
-            (out / f"backtest_v2_{datetime.now(UTC):%Y%m%d_%H%M%S}.json").write_text(text)
-            (out / "backtest_v2_latest.json").write_text(text)
-            s = report["overall"]["stats"]
-            log.info("v2_backtest_done", trades=s.get("trades", 0),
-                     win_rate=s.get("win_rate"), expectancy_r=s.get("expectancy_r"),
-                     promote=report["overall"]["promote_to_paper"])
+            proc = await asyncio.create_subprocess_exec(
+                *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT,
+                preexec_fn=_sacrificial, env=env)
+            try:
+                output, _ = await asyncio.wait_for(
+                    proc.communicate(), timeout=settings.v2_backtest_timeout_minutes * 60)
+            except TimeoutError:
+                proc.kill()
+                await proc.wait()
+                raise RuntimeError(f"timed out after {settings.v2_backtest_timeout_minutes} min")
+            tail = output.decode(errors="replace")[-1500:]
+            if proc.returncode != 0:
+                why = ("killed by the kernel (out of memory?)" if proc.returncode == -9
+                       else f"exit code {proc.returncode}")
+                raise RuntimeError(f"{why}: {tail[-300:]}")
+            log.info("v2_backtest_done", output=tail[-600:])
             self._v2_bt_state = {"running": False, "finished": datetime.now(UTC).isoformat()}
         except Exception as exc:
-            log.exception("v2_backtest_failed")
+            log.error("v2_backtest_failed", error=str(exc)[:400])
             self._v2_bt_state = {"running": False, "error": str(exc)[:300],
                                  "finished": datetime.now(UTC).isoformat()}
 
@@ -1516,8 +1559,12 @@ class AppRunner:
             id="v2_backtest",
             max_instances=1,
         )
-        if not Path(settings.v2_reports_dir, "backtest_v2_latest.json").exists():
+        reports = Path(settings.v2_reports_dir)
+        if (not (reports / "backtest_v2_latest.json").exists()
+                and not (reports / "backtest_v2_attempt.json").exists()):
             # First deploy: do not wait until tomorrow for the first answer.
+            # Only once: if that attempt fails, the daily slot retries, never
+            # a restart (that is how a crash turned into a restart loop).
             self.scheduler.add_job(
                 self._v2_backtest_job, "date",
                 run_date=datetime.now(UTC) + timedelta(minutes=3), id="v2_backtest_first")
@@ -1610,13 +1657,25 @@ class AppRunner:
                        f"({'active' if settings.twelvedata_api_key else 'no key'})\n"
                        f"News Sentiment: CryptoPanic "
                        f"({'active' if settings.cryptopanic_auth_token else 'no token'})")
-        await self.notifier.send_text(
-            "🪙 Crypto Signal Engine started.\n"
-            f"{sources}\n"
-            "Paper Trading: Active in background\n"
-            f"AI Sentinel: {'Active' if settings.groq_api_key else 'Disabled (no key)'}",
-            parse_mode=ParseMode.HTML,
-        )
+        starts = _record_start(Path(settings.v2_reports_dir).parent / "engine_starts.json")
+        if len(starts) <= 1:
+            await self.notifier.send_text(
+                "🪙 Crypto Signal Engine started.\n"
+                f"{sources}\n"
+                "Paper Trading: Active in background\n"
+                f"AI Sentinel: {'Active' if settings.groq_api_key else 'Disabled (no key)'}",
+                parse_mode=ParseMode.HTML,
+            )
+        elif len(starts) in (3, 10, 30):
+            # A restart loop used to send this message every ten minutes for
+            # hours. Now repeats inside an hour are silent, and a loop is
+            # reported as the fault it is.
+            await self.notifier.send_text(
+                f"⚠️ Engine restarted {len(starts)} times in the last hour. "
+                "It is crashing: check <code>sudo journalctl -u crypto-engine -n 200</code> "
+                "and <code>sudo dmesg | grep -i oom</code>.",
+                parse_mode=ParseMode.HTML,
+            )
         log.info("scheduler_started", crypto_symbols_count=crypto_count,
                  binance_only_mode=settings.binance_only_mode)
 

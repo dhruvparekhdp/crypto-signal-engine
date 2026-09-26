@@ -244,20 +244,31 @@ def walk_forward(trades: list[TradeResult], months: int = 2) -> list[dict]:
 
 
 def monte_carlo(rs: list[float], risk_pct: float = 0.5, runs: int = 10_000,
-                seed: int = 1) -> dict:
-    """Resample the trade sequence: 5th-percentile final equity and 95th-percentile drawdown."""
+                seed: int = 1, batch: int = 250) -> dict:
+    """
+    Resample the trade sequence: 5th-percentile final equity and 95th-percentile
+    drawdown. Simulated in batches: all 10,000 paths at once is runs x trades
+    floats per array — with 5,000 trades, 400 MB each and ~1.6 GB at peak,
+    which is what took the server down (every restart re-ran it).
+    """
     if len(rs) < 10:
         return {}
     rng = np.random.default_rng(seed)
-    a = np.asarray(rs)
-    sims = rng.choice(a, size=(runs, len(a)), replace=True)
-    growth = np.cumprod(1 + sims * risk_pct / 100.0, axis=1)
-    peak = np.maximum.accumulate(growth, axis=1)
-    dd = ((peak - growth) / peak).max(axis=1)
+    a = np.asarray(rs, dtype=np.float64)
+    finals, dds = [], []
+    for start in range(0, runs, batch):
+        n = min(batch, runs - start)
+        growth = np.cumprod(1 + rng.choice(a, size=(n, len(a)), replace=True)
+                            * risk_pct / 100.0, axis=1)
+        peak = np.maximum.accumulate(growth, axis=1)
+        dds.append(((peak - growth) / peak).max(axis=1))
+        finals.append(growth[:, -1].copy())   # a view would keep the whole batch alive
+        del growth, peak
+    final, dd = np.concatenate(finals), np.concatenate(dds)
     return {
         "risk_pct_per_trade": risk_pct,
-        "final_equity_p5": round(float(np.percentile(growth[:, -1], 5)), 3),
-        "final_equity_p50": round(float(np.percentile(growth[:, -1], 50)), 3),
+        "final_equity_p5": round(float(np.percentile(final, 5)), 3),
+        "final_equity_p50": round(float(np.percentile(final, 50)), 3),
         "max_drawdown_p95_pct": round(float(np.percentile(dd, 95) * 100), 1),
     }
 
@@ -266,8 +277,8 @@ GATES = {"min_trades": 200, "min_expectancy_r": 0.15, "min_profit_factor": 1.3,
          "min_positive_windows": 0.60}
 
 
-def grade(trades: list[TradeResult]) -> dict:
-    """Stats, walk-forward, Monte Carlo and the pass/fail of every gate."""
+def grade(trades: list[TradeResult], mc: bool = True) -> dict:
+    """Stats, walk-forward, Monte Carlo (unless mc=False) and every gate's pass/fail."""
     rs = [t.r for t in trades]
     s = stats(rs)
     wf = walk_forward(trades)
@@ -280,7 +291,7 @@ def grade(trades: list[TradeResult]) -> dict:
     }
     s.update(after_tax_business(trades))
     return {"stats": s, "positive_windows": round(pos, 2), "windows": wf,
-            "monte_carlo": monte_carlo(rs), "gates": checks,
+            "monte_carlo": monte_carlo(rs) if mc else {}, "gates": checks,
             "promote_to_paper": all(checks.values())}
 
 

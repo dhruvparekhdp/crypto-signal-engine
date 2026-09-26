@@ -17,6 +17,7 @@ from tests.test_v2 import market
 
 class TestServerBacktest(unittest.TestCase):
     def test_job_writes_a_report_the_page_can_read(self):
+        """Runs the real child process on a synthetic lake (download off)."""
         with tempfile.TemporaryDirectory() as d:
             lake, reports = Path(d, "lake"), Path(d, "reports")
             end = pd.Timestamp.now("UTC").tz_localize(None).normalize()
@@ -38,7 +39,7 @@ class TestServerBacktest(unittest.TestCase):
                 with patch.object(settings, "v2_lake_dir", str(lake)), \
                      patch.object(settings, "v2_reports_dir", str(reports)), \
                      patch.object(settings, "v2_backtest_years", 0.2), \
-                     patch("scripts.load_binance_lake.load", AsyncMock(return_value=0)):
+                     patch.object(settings, "v2_backtest_download", False):
                     await job()
                     self.assertFalse(runner._v2_bt_state.get("running"))
                     self.assertNotIn("error", runner._v2_bt_state)
@@ -59,3 +60,16 @@ class TestServerBacktest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestRestartLoopIsReported(unittest.TestCase):
+    def test_starts_within_the_hour_are_counted(self):
+        from scheduler.runner import _record_start
+        with tempfile.TemporaryDirectory() as d:
+            f = Path(d, "starts.json")
+            self.assertEqual(len(_record_start(f)), 1)
+            self.assertEqual(len(_record_start(f)), 2)
+            f.write_text(json.dumps(["2020-01-01T00:00:00+00:00"]))    # old start drops out
+            self.assertEqual(len(_record_start(f)), 1)
+            f.write_text("not json")
+            self.assertEqual(len(_record_start(f)), 1)

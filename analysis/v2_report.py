@@ -19,6 +19,8 @@ from analysis.v2_backtest import ExecConfig, grade, simulate, trades_to_rows
 from analysis.v2_setups import SETUP_NAMES, V2Config, generate
 from collectors.binance_lake import read
 
+OHLCV = ["ts", "open", "high", "low", "close", "volume"]
+
 
 def _small(g: dict) -> dict:
     """A grade without the per-window list, for compact breakdowns."""
@@ -36,19 +38,23 @@ def run_backtest(symbols: list[str], years: float = 2.0, cfg: V2Config = V2Confi
     all_trades, per_symbol, missing = [], {}, []
     for sym in symbols:
         sym = sym.upper()
-        frames = {iv: read("klines", sym, warm, end, interval=iv, root=root)
-                  for iv in ("5m", "15m", "4h", "1d")}
+        # Only the columns the setups use: the archive's other seven columns
+        # more than doubled the memory of two years of 5m bars.
+        frames = {iv: read("klines", sym, warm, end, interval=iv, root=root,
+                           columns=OHLCV) for iv in ("5m", "15m", "4h", "1d")}
         if frames["5m"].empty or frames["15m"].empty:
             missing.append(sym)
             log(f"{sym}: no 5m/15m klines in the lake")
             continue
-        funding = read("fundingRate", sym, warm, end, root=root)
+        funding = read("fundingRate", sym, warm, end, root=root,
+                       columns=["ts", "last_funding_rate"])
         cands = [c for c in generate(sym.lower(), frames["5m"], frames["15m"], frames["4h"],
                                      frames["1d"], funding, cfg) if c.ts >= start]
         trades = simulate(cands, frames["5m"], ex)
         all_trades += trades
-        per_symbol[sym] = _small(grade(trades))
+        per_symbol[sym] = _small(grade(trades, mc=False))
         log(f"{sym}: {len(cands)} candidates, {len(trades)} filled trades")
+        del frames, funding, cands
 
     report = {
         "generated": datetime.now(UTC).isoformat(),
@@ -61,10 +67,11 @@ def run_backtest(symbols: list[str], years: float = 2.0, cfg: V2Config = V2Confi
         "setups": {c: dict(grade([t for t in all_trades if t.setup == c]),
                            name=SETUP_NAMES[c]) for c in cfg.setups},
         "by_symbol": per_symbol,
-        "by_side": {s: _small(grade([t for t in all_trades if t.side == s]))
+        "by_side": {s: _small(grade([t for t in all_trades if t.side == s], mc=False))
                     for s in ("long", "short")},
         "by_setup_side": {f"{c}_{s}": _small(grade([t for t in all_trades
-                                                   if t.setup == c and t.side == s]))
+                                                   if t.setup == c and t.side == s],
+                                                  mc=False))
                           for c in cfg.setups for s in ("long", "short")},
         "overall": grade(all_trades),
         "trades": trades_to_rows(all_trades),

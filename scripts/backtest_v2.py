@@ -53,7 +53,21 @@ def main() -> int:
     ap.add_argument("--no-session", action="store_true", help="Trade all hours and days")
     ap.add_argument("--root", default="data/lake")
     ap.add_argument("--reports", default="data/reports")
+    ap.add_argument("--download", action="store_true",
+                    help="First fetch what is missing from data.binance.vision")
+    ap.add_argument("--latest", action="store_true",
+                    help="Also write backtest_v2_latest.json (what /v2 shows)")
     args = ap.parse_args()
+
+    if args.download:
+        import asyncio
+        from argparse import Namespace
+
+        from scripts.load_binance_lake import load
+        asyncio.run(load(Namespace(
+            market="um", kinds="klines,fundingRate", intervals="5m,15m,4h,1d",
+            symbols=args.symbols, years=args.years + 0.15, days=0, since="",
+            root=args.root, concurrency=4, dry_run=False)))
 
     cfg = V2Config(setups=tuple(s.strip().upper() for s in args.setups.split(",")),
                    session_filter=not args.no_session)
@@ -84,7 +98,10 @@ def main() -> int:
     runs = len(list(out.glob("backtest_v2_*.json"))) + 1
     report["variants_tried_so_far"] = runs
     path = out / f"backtest_v2_{datetime.now(UTC):%Y%m%d_%H%M%S}.json"
-    path.write_text(json.dumps(report, default=str))
+    text = json.dumps(report, default=str)
+    path.write_text(text)
+    if args.latest:
+        (out / "backtest_v2_latest.json").write_text(text)
     print(f"\nrun #{runs} on record; report: {path}")
     return 0
 

@@ -149,6 +149,8 @@ class Settings(BaseSettings):
     v2_backtest_hour_utc: int = 2
     v2_lake_dir: str = "data/lake"
     v2_reports_dir: str = "data/reports"
+    v2_backtest_timeout_minutes: int = 45
+    v2_backtest_download: bool = True     # fetch missing data before each run
     # The database keeps this many days; older rows go to gzipped JSON files
     # under cold_storage_dir (storage/cold_storage.py), never deleted outright.
     db_retention_days: int = 365
