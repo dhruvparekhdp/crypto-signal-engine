@@ -119,3 +119,37 @@ class TestStore(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestRobustness(unittest.TestCase):
+    def test_a_corrupt_month_is_set_aside_not_fatal(self):
+        raw = b"1704067200000,1,2,0.5,1.5,10,0,15,3,4,6,0\n"
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            part = Part("um", "klines", "BTCUSDT", "1m", "2024-01")
+            path = write_month(root, part, [parse_csv("klines", raw)])
+            path.write_bytes(b"half a parquet")                 # killed mid-write
+            self.assertTrue(read("klines", "BTCUSDT", "2024-01-01", "2024-02-01",
+                                 interval="1m", root=root).empty)
+            self.assertTrue(path.with_name(path.name + ".corrupt").exists())
+            write_month(root, part, [parse_csv("klines", raw)])  # recovers
+            self.assertEqual(len(read("klines", "BTCUSDT", "2024-01-01", "2024-02-01",
+                                      interval="1m", root=root)), 1)
+            self.assertFalse(any(p.suffix == ".tmp" for p in path.parent.iterdir()))
+
+    def test_a_just_finished_month_comes_as_daily_files(self):
+        from unittest.mock import patch
+
+        import collectors.binance_lake as lake
+        class Day(date):
+            @classmethod
+            def today(cls):
+                return date(2026, 10, 3)
+        with patch.object(lake, "date", Day):
+            parts = plan("um", "klines", "BTCUSDT", "1h", date(2026, 9, 1), date(2026, 10, 2))
+            self.assertTrue(all(p.daily for p in parts))          # Sept monthly not out yet
+            self.assertEqual(plan("um", "fundingRate", "BTCUSDT", "", date(2026, 9, 1),
+                                  date(2026, 10, 2)), [])         # REST top-up covers it
+            parts = plan("um", "klines", "BTCUSDT", "1h", date(2026, 7, 1), date(2026, 10, 2))
+            self.assertIn("2026-07", [p.period for p in parts])
+            self.assertIn("2026-08", [p.period for p in parts])

@@ -30,7 +30,7 @@ import argparse
 import asyncio
 import sys
 from collections import defaultdict
-from datetime import date, timedelta
+from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 
 import httpx
@@ -102,6 +102,35 @@ async def _fetch(client, sem, part: Part):
         return part, parse_csv(part.kind, csv)
 
 
+async def _funding_top_up(client: httpx.AsyncClient, root: Path, symbol: str) -> int:
+    """
+    Funding for the last ~60 days from the REST API. The archive only has
+    monthly funding files, so without this the current month (and the one
+    before, until Binance publishes it) had no funding and the backtest's
+    funding filter was silently off for the most recent weeks.
+    """
+    import pandas as pd
+    start = int((datetime.now(UTC) - timedelta(days=62)).timestamp() * 1000)
+    try:
+        r = await client.get("https://fapi.binance.com/fapi/v1/fundingRate",
+                             params={"symbol": symbol, "startTime": start, "limit": 1000})
+        if r.status_code != 200:
+            return 0
+        rows = r.json()
+    except (httpx.HTTPError, ValueError):
+        return 0
+    if not rows:
+        return 0
+    df = pd.DataFrame({
+        "calc_time": [int(x["fundingTime"]) for x in rows],
+        "funding_interval_hours": float("nan"),
+        "last_funding_rate": [float(x["fundingRate"]) for x in rows]})
+    df["ts"] = pd.to_datetime(df["calc_time"], unit="ms")
+    for month, g in df.groupby(df["ts"].dt.strftime("%Y-%m")):
+        write_month(root, Part("um", "fundingRate", symbol, "", month), [g])
+    return len(df)
+
+
 async def load(args) -> int:
     symbols = ([s.strip().upper() for s in args.symbols.split(",") if s.strip()]
                or await _watchlist())
@@ -154,6 +183,7 @@ async def load(args) -> int:
                                                return_exceptions=True)
                 frames, finished = [], []
                 recent = (end - timedelta(days=3)).isoformat()
+                month_recent = (end - timedelta(days=62)).strftime("%Y-%m")
                 for r in results:
                     if isinstance(r, Exception):
                         failures += 1
@@ -164,14 +194,20 @@ async def load(args) -> int:
                         frames.append(df)
                         got_rows += len(df)
                         finished.append(part.period)
-                    elif not (part.daily and part.period >= recent):
+                    elif not (part.daily and part.period >= recent) and not (
+                            not part.daily and part.period >= month_recent):
                         # Missing and old: the pair was not listed then. A
-                        # missing file from the last few days may still be
+                        # missing file from the last few days (or a monthly
+                        # file for the last ~2 months) may still be
                         # published, so it is tried again next run.
                         finished.append(part.period)
                 write_month(root, mparts[0], frames)
                 _mark(root, mparts[0], finished)
             print(f"{sym:10} {kind:18} {iv or '-':4} +{got_rows:,} rows")
+        if args.market == "um" and "fundingRate" in kinds:
+            for sym in symbols:
+                got = await _funding_top_up(client, root, sym)
+                print(f"{sym:10} fundingRate (REST, recent) +{got} rows")
     if failures:
         print(f"{failures} files failed; re-run to retry them", file=sys.stderr)
         return 1

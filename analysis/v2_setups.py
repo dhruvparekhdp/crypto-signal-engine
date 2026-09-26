@@ -94,13 +94,19 @@ def daily_bias(k1d: pd.DataFrame) -> pd.DataFrame:
     return d
 
 
+FUNDING_STD_FLOOR = 0.00005
+
+
 def funding_z(funding: pd.DataFrame | None, window: int = 90) -> pd.DataFrame | None:
     """Z-score of each funding print against the previous `window` prints (~30 days)."""
     if funding is None or funding.empty:
         return None
     f = funding[["ts", "last_funding_rate"]].sort_values("ts").reset_index(drop=True)
     past = f["last_funding_rate"].shift(1).rolling(window, min_periods=window // 3)
-    f["z"] = (f["last_funding_rate"] - past.mean()) / past.std()
+    # Most pairs sit at exactly 0.01% for weeks, so the spread is 0 and a
+    # one-tick change scored +-infinity, blocking a whole side. The floor
+    # (0.005% per 8h) means only a real move in funding counts as crowding.
+    f["z"] = (f["last_funding_rate"] - past.mean()) / past.std().clip(lower=FUNDING_STD_FLOOR)
     return f
 
 

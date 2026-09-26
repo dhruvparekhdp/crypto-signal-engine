@@ -1,7 +1,6 @@
 """At most a year in the database; older rows move to JSON files, never lost."""
 
 import asyncio
-import gzip
 import json
 import os
 import tempfile
@@ -22,13 +21,32 @@ class TestFiles(unittest.TestCase):
             # a crash between write and delete means the next run writes again
             append_rows(root, "crypto_signal_log", rows[:1], "timestamp")
             files = sorted(p.name for p in (root / "crypto_signal_log").iterdir())
-            self.assertEqual(files, ["2024-01.jsonl.gz", "2024-02.jsonl.gz"])
-            with gzip.open(root / "crypto_signal_log" / "2024-01.jsonl.gz", "rt") as fh:
-                self.assertEqual(len(fh.readlines()), 2)       # both appended members
+            self.assertEqual([f[:7] for f in files], ["2024-01", "2024-01", "2024-02"])
+            self.assertFalse(any(f.endswith(".tmp") for f in files))
             got = list(read_rows(root, "crypto_signal_log"))
             self.assertEqual([r["id"] for r in got], [1, 2])
             got = list(read_rows(root, "crypto_signal_log", start=datetime(2024, 1, 20)))
             self.assertEqual([r["id"] for r in got], [2])
+
+    def test_a_crash_mid_write_loses_nothing_already_written(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            append_rows(root, "t", [{"id": 1, "created_at": "2024-01-05T10:00:00"}],
+                        "created_at")
+            # a batch killed mid-write leaves only its .tmp, never a broken file
+            (root / "t" / "2024-01.9-9.1.jsonl.gz.tmp").write_bytes(b"\x1f\x8b garbage")
+            append_rows(root, "t", [{"id": 2, "created_at": "2024-01-06T10:00:00"}],
+                        "created_at")
+            self.assertEqual([r["id"] for r in read_rows(root, "t")], [1, 2])
+
+    def test_reused_ids_are_not_mistaken_for_repeats(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            append_rows(root, "t", [{"id": 1, "created_at": "2024-01-05T10:00:00"}],
+                        "created_at")
+            append_rows(root, "t", [{"id": 1, "created_at": "2024-03-05T10:00:00"}],
+                        "created_at")
+            self.assertEqual(len(list(read_rows(root, "t"))), 2)
 
 
 class TestOffload(unittest.TestCase):

@@ -21,6 +21,19 @@ from collectors.binance_lake import read
 
 OHLCV = ["ts", "open", "high", "low", "close", "volume"]
 
+VARIANTS = {
+    "base": ExecConfig(),
+    "taker_entry": ExecConfig(entry_mode="taker"),
+    "breakeven": ExecConfig(breakeven_at_r=1.25),
+    "partial": ExecConfig(partial_at_r=1.5),
+}
+VARIANT_LABELS = {
+    "base": "Limit entry, full target",
+    "taker_entry": "Market entry at next open",
+    "breakeven": "Limit entry, stop to breakeven at +1.25R",
+    "partial": "Limit entry, half off at +1.5R, rest to target",
+}
+
 
 def _small(g: dict) -> dict:
     """A grade without the per-window list, for compact breakdowns."""
@@ -44,6 +57,7 @@ def run_backtest(symbols: list[str], years: float = 2.0, cfg: V2Config = V2Confi
     all_trades, per_symbol, missing = [], {}, []
     from collections import defaultdict
     bench: dict[str, list] = defaultdict(list)
+    variant_trades: dict[str, list] = defaultdict(list)
     for sym in symbols:
         sym = sym.upper()
         # Only the columns the setups use: the archive's other seven columns
@@ -60,6 +74,9 @@ def run_backtest(symbols: list[str], years: float = 2.0, cfg: V2Config = V2Confi
                                      frames["1d"], funding, cfg) if c.ts >= start]
         trades = simulate(cands, frames["5m"], ex)
         all_trades += trades
+        for name, vex in VARIANTS.items():
+            variant_trades[name] += (trades if name == "base"
+                                     else simulate(cands, frames["5m"], vex))
         if benchmarks:
             from analysis.ft_bench import STRATEGIES, resample, run_strategy
             for st in STRATEGIES:
@@ -89,7 +106,16 @@ def run_backtest(symbols: list[str], years: float = 2.0, cfg: V2Config = V2Confi
                                                    if t.setup == c and t.side == s],
                                                   mc=False))
                           for c in cfg.setups for s in ("long", "short")},
-        "overall": grade(all_trades),
+        "overall": grade(all_trades, n_trials=len(VARIANTS)),
+        # The same candidates under each execution variant: what the limit
+        # entry costs (vs taker), and what breakeven / partial exits do to
+        # win rate AND expectancy. Every variant counts as a trial.
+        "variants": {name: {
+            "label": VARIANT_LABELS[name],
+            "overall": _small(grade(vt, mc=False, n_trials=len(VARIANTS))),
+            "setups": {c: grade([t for t in vt if t.setup == c], mc=False,
+                                n_trials=len(VARIANTS))["stats"] for c in cfg.setups}}
+            for name, vt in variant_trades.items()},
         # Freqtrade community strategies on the same data and costs (1x spot,
         # long-only, percent per trade): the bar v2 has to clear.
         "benchmarks": _bench_summary(bench),

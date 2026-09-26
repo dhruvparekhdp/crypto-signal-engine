@@ -1136,7 +1136,10 @@ class AppRunner:
                 async with AsyncSessionFactory() as session:
                     repo = Repository(session)
                     rows = await repo.open_v2_shadows(sym)
-                    cands, updates = step(sym, frames, funding, rows, now, cfg)
+                    # generate() is CPU work; off the event loop so the
+                    # paper tick and the web pages never wait on it.
+                    cands, updates = await asyncio.to_thread(
+                        step, sym, frames, funding, rows, now, cfg)
                     for u in updates:
                         await repo.update_v2_shadow(u.row_id, **u.fields)
                         closed += u.fields.get("status") == "closed"

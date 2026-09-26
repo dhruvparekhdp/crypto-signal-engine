@@ -43,6 +43,15 @@ class ExecConfig:
     entry_bars: int = 3
     time_stop_bars: int = 24             # 2 hours of 5m bars
     time_stop_min_r: float = 0.5
+    # Variants, compared side by side in the report (research, 26 Sep):
+    # "maker" = post-only limit at the trigger close that must trade through
+    # (misses the strongest moves by construction); "taker" = market entry at
+    # the next bar's open, the counterfactual for every signal.
+    entry_mode: str = "maker"
+    breakeven_at_r: float | None = None  # move stop to entry + fees once +xR is seen
+    partial_at_r: float | None = None    # book `partial_frac` at +xR, rest to target
+    partial_frac: float = 0.5
+    entry_slip: float = 0.0002           # a market entry crosses the spread too
 
 
 @dataclass
@@ -62,57 +71,86 @@ class TradeResult:
     bars: int
 
 
-def _resolve(cand: Candidate, ts, h, lo, c, close_times, ex: ExecConfig):
+def _resolve(cand: Candidate, ts, h, lo, c, close_times, ex: ExecConfig, o=None):
     """
     ("cancelled" | "open" | "closed", TradeResult or None) for one candidate
     against 5m bars. "open" means the data ends before the story does:
     either the limit could still fill, or the filled trade is still running.
+
+    Within a bar the order of events is unknown, so the conservative reading
+    is taken everywhere: the stop is checked first; a target is never hit on
+    the fill bar; a breakeven or partial-profit stop move only takes effect
+    from the NEXT bar.
     """
     decided = np.datetime64(cand.ts.to_datetime64())
     start = int(np.searchsorted(ts, decided, side="left"))    # first bar opening at/after
     long = cand.side == "long"
-    risk = abs(cand.entry - cand.stop)
+    sign = 1.0 if long else -1.0
+    n = len(ts)
+    # 1. Entry.
+    if ex.entry_mode == "taker":
+        if start >= n or o is None:
+            return "open", None
+        fill, entry, entry_fee = start, float(o[start]) * (1 + sign * ex.entry_slip), ex.taker
+        if sign * (entry - cand.stop) <= 0 or sign * (cand.target - entry) <= 0:
+            return "cancelled", None          # opened beyond the stop or the target
+    else:
+        fill, entry, entry_fee = None, cand.entry, ex.maker
+        for b in range(start, min(start + ex.entry_bars, n)):
+            if (long and lo[b] < cand.entry) or (not long and h[b] > cand.entry):
+                fill = b
+                break
+        if fill is None:
+            return ("open", None) if n - start < ex.entry_bars else ("cancelled", None)
+    risk = abs(entry - cand.stop)
     if risk <= 0:
         return "cancelled", None
-    n = len(ts)
-    # 1. Does the resting limit fill (trade through it) within entry_bars?
-    fill = None
-    for b in range(start, min(start + ex.entry_bars, n)):
-        if (long and lo[b] < cand.entry) or (not long and h[b] > cand.entry):
-            fill = b
-            break
-    if fill is None:
-        return ("open", None) if n - start < ex.entry_bars else ("cancelled", None)
-    # 2. Manage from the fill bar on.
-    exit_px, reason, end = None, "", fill
+    breakeven = entry * (1 + sign * (entry_fee + ex.taker))
+    # 2. Manage from the fill bar on. `legs` = (fraction, exit price, exit fee).
+    stop, legs, left, moved = cand.stop, [], 1.0, False
+    reason, end = "", fill
     for b in range(fill, n):
-        hit_stop = lo[b] <= cand.stop if long else h[b] >= cand.stop
-        hit_target = h[b] >= cand.target if long else lo[b] <= cand.target
-        # On the fill bar itself only the stop counts: the bar's order of
-        # events is unknown, so a same-bar target is never assumed.
-        if hit_stop:
-            exit_px = cand.stop * (1 - ex.stop_slip if long else 1 + ex.stop_slip)
-            reason, end = "stop", b
+        if (lo[b] <= stop) if long else (h[b] >= stop):
+            legs.append((left, stop * (1 - sign * ex.stop_slip), ex.taker))
+            reason, end, left = ("breakeven" if moved else "stop"), b, 0.0
             break
-        if hit_target and b > fill:
-            exit_px, reason, end = cand.target, "target", b
-            break
-        if b - fill >= ex.time_stop_bars:
-            r_now = ((c[b] - cand.entry) if long else (cand.entry - c[b])) / risk
-            if r_now < ex.time_stop_min_r:
-                exit_px, reason, end = c[b], "time", b
+        if b > fill:
+            p_px = entry + sign * (ex.partial_at_r or 0) * risk
+            # Only a partial that sits BEFORE the target: past it, the target
+            # fills first and there is nothing left to take a partial from.
+            if ex.partial_at_r and left == 1.0 and sign * (cand.target - p_px) > 0:
+                if (h[b] >= p_px) if long else (lo[b] <= p_px):
+                    legs.append((ex.partial_frac, p_px, ex.maker))
+                    left = 1.0 - ex.partial_frac
+            if (h[b] >= cand.target) if long else (lo[b] <= cand.target):
+                legs.append((left, cand.target, ex.maker))
+                reason, end, left = "target", b, 0.0
                 break
-    if exit_px is None:
+        if b - fill >= ex.time_stop_bars:
+            r_now = sign * (c[b] - entry) / risk
+            if r_now < ex.time_stop_min_r:
+                legs.append((left, c[b], ex.taker))
+                reason, end, left = "time", b, 0.0
+                break
+        # Stop moves take effect from the next bar.
+        best = h[b] if long else lo[b]
+        if not moved and (
+                (ex.breakeven_at_r and sign * (best - entry) >= ex.breakeven_at_r * risk)
+                or (ex.partial_at_r and left < 1.0)):
+            stop = max(stop, breakeven) if long else min(stop, breakeven)
+            moved = True
+    if left > 0:
         return "open", None
-    move = (exit_px - cand.entry) / cand.entry * (1 if long else -1)
     hours = (end - fill + 1) * 5 / 60
-    costs = ex.maker + (ex.maker if reason == "target" else ex.taker) \
-        + ex.funding_per_8h * hours / 8
-    r = (move - costs) / (risk / cand.entry)
+    gross = sum(f * sign * (px - entry) / entry for f, px, _ in legs)
+    costs = entry_fee + sum(f * fee for f, _, fee in legs) + ex.funding_per_8h * hours / 8
+    r = (gross - costs) / (risk / entry)
+    if len(legs) > 1:
+        reason = "partial+" + reason
     return "closed", TradeResult(
         cand.symbol, cand.setup, cand.side, str(cand.ts), str(pd.Timestamp(ts[fill])),
-        str(pd.Timestamp(close_times[end])), cand.entry, cand.stop, cand.target,
-        float(exit_px), reason, round(float(r), 4), end - fill + 1)
+        str(pd.Timestamp(close_times[end])), float(entry), cand.stop, cand.target,
+        float(legs[-1][1]), reason, round(float(r), 4), end - fill + 1)
 
 
 def _arrays(k5: pd.DataFrame):
@@ -126,7 +164,7 @@ def resolve_one(cand: Candidate, k5: pd.DataFrame, ex: ExecConfig = ExecConfig()
     """Live shadow use: where one candidate stands against the bars so far."""
     if k5.empty:
         return "open", None
-    return _resolve(cand, *_arrays(k5), ex)
+    return _resolve(cand, *_arrays(k5), ex, o=k5["open"].to_numpy(dtype=float))
 
 
 def simulate(cands: list[Candidate], k5: pd.DataFrame,
@@ -135,13 +173,15 @@ def simulate(cands: list[Candidate], k5: pd.DataFrame,
     if not cands:
         return []
     ts, h, lo, c, close_times = _arrays(k5)
+    o = k5.reset_index(drop=True)["open"].to_numpy(dtype=float)
     busy_until = np.datetime64("1970-01-01")
     out: list[TradeResult] = []
     for cand in sorted(cands, key=lambda x: x.ts):
         if np.datetime64(cand.ts.to_datetime64()) < busy_until:
             continue
-        status, trade = _resolve(cand, ts, h, lo, c, close_times, ex)
-        if status == "open" and trade is None and _filled(cand, ts, h, lo, ex):
+        status, trade = _resolve(cand, ts, h, lo, c, close_times, ex, o=o)
+        if status == "open" and trade is None and (
+                ex.entry_mode == "taker" or _filled(cand, ts, h, lo, ex)):
             break                       # data ran out with the trade open
         if trade is None:
             continue
@@ -200,6 +240,33 @@ def after_tax_business(trades) -> dict:
             "expectancy_after_tax_business_r": round(total / len(trades), 3)}
 
 
+def deflated_sharpe(rs, n_trials: int = 1) -> float | None:
+    """
+    Probability the per-trade Sharpe ratio is above what the best of
+    `n_trials` variants would show by luck (Bailey & Lopez de Prado 2014).
+    With one trial it is the Probabilistic Sharpe Ratio against zero.
+    Skew and fat tails widen the doubt. >= 0.95 is the usual bar.
+    """
+    from statistics import NormalDist
+    a = np.asarray(rs, dtype=float)
+    n = len(a)
+    if n < 30 or a.std(ddof=1) == 0:
+        return None
+    sr = a.mean() / a.std(ddof=1)
+    z = (a - a.mean()) / a.std(ddof=0)
+    skew, kurt = float((z ** 3).mean()), float((z ** 4).mean())
+    nd = NormalDist()
+    sr0 = 0.0
+    if n_trials > 1:
+        g = 0.5772156649
+        sr0 = (1 / np.sqrt(n - 1)) * ((1 - g) * nd.inv_cdf(1 - 1 / n_trials)
+                                      + g * nd.inv_cdf(1 - 1 / (n_trials * np.e)))
+    denom = 1 - skew * sr + (kurt - 1) / 4 * sr ** 2
+    if denom <= 0:
+        return None
+    return round(nd.cdf((sr - sr0) * np.sqrt(n - 1) / np.sqrt(denom)), 3)
+
+
 def stats(rs: list[float]) -> dict:
     if not rs:
         return {"trades": 0}
@@ -220,6 +287,10 @@ def stats(rs: list[float]) -> dict:
         "profit_factor": (round(float(wins.sum() / -losses.sum()), 3)
                           if len(losses) and losses.sum() < 0 else None),
         "total_r": round(float(a.sum()), 2),
+        # How many standard errors the average is from zero. ~575 trades are
+        # needed to see +0.15R at t=3 with a typical 1.25R spread.
+        "t_stat": (round(float(a.mean() / (a.std(ddof=1) / np.sqrt(len(a)))), 2)
+                   if len(a) > 1 and a.std(ddof=1) > 0 else None),
         # USDT-settled futures (Binance USD-M): commonly treated as VDA —
         # 30% + 4% cess on EACH winning trade, losses set off against nothing.
         "expectancy_after_tax_vda_r": round(float(np.where(a > 0, a * (1 - TAX_RATE),
@@ -274,13 +345,19 @@ def monte_carlo(rs: list[float], risk_pct: float = 0.5, runs: int = 10_000,
 
 
 GATES = {"min_trades": 200, "min_expectancy_r": 0.15, "min_profit_factor": 1.3,
-         "min_positive_windows": 0.60}
+         "min_positive_windows": 0.60, "min_deflated_sharpe": 0.95}
 
 
-def grade(trades: list[TradeResult], mc: bool = True) -> dict:
-    """Stats, walk-forward, Monte Carlo (unless mc=False) and every gate's pass/fail."""
+def grade(trades: list[TradeResult], mc: bool = True, n_trials: int = 1) -> dict:
+    """
+    Stats, walk-forward, Monte Carlo (unless mc=False) and every gate's
+    pass/fail. `n_trials` is how many variants were tried on this data; the
+    deflated Sharpe gate gets stricter as it grows.
+    """
     rs = [t.r for t in trades]
     s = stats(rs)
+    s["deflated_sharpe"] = deflated_sharpe(rs, n_trials)
+    s["n_trials"] = n_trials
     wf = walk_forward(trades)
     pos = sum(1 for w in wf if w["total_r"] > 0) / len(wf) if wf else 0.0
     checks = {
@@ -288,6 +365,7 @@ def grade(trades: list[TradeResult], mc: bool = True) -> dict:
         "expectancy": s.get("expectancy_r", -1) >= GATES["min_expectancy_r"],
         "profit_factor": (s.get("profit_factor") or 0) >= GATES["min_profit_factor"],
         "windows_positive": pos >= GATES["min_positive_windows"],
+        "deflated_sharpe": (s["deflated_sharpe"] or 0) >= GATES["min_deflated_sharpe"],
     }
     s.update(after_tax_business(trades))
     return {"stats": s, "positive_windows": round(pos, 2), "windows": wf,

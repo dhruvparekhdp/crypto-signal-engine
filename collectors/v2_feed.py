@@ -26,6 +26,7 @@ log = structlog.get_logger()
 LIMITS = {"5m": 1000, "15m": 1000, "1h": 500, "4h": 300, "1d": 120}
 MINUTES = {"5m": 5, "15m": 15, "1h": 60, "4h": 240, "1d": 1440}
 FUNDING_URL = "https://fapi.binance.com/fapi/v1/fundingRate"
+FUTURES_KLINES = "https://fapi.binance.com/fapi/v1/klines"
 
 
 def to_frame(rows: list[dict], minutes: int, now: datetime) -> pd.DataFrame:
@@ -42,10 +43,25 @@ def to_frame(rows: list[dict], minutes: int, now: datetime) -> pd.DataFrame:
 
 async def _klines(client: httpx.AsyncClient, symbol: str, interval: str,
                   end: datetime | None) -> list[dict]:
+    """
+    USD-M FUTURES klines first — the backtest's lake is futures data, and
+    live shadow must see the same market (volume, wicks and previous-day
+    levels all differ from spot). Spot is only a fallback when fapi cannot
+    be reached, and is logged, because it makes shadow and backtest differ.
+    """
     params = {"symbol": venue_symbol(symbol), "interval": interval,
               "limit": LIMITS[interval]}
     if end is not None:
+        if end.tzinfo is None:          # naive means UTC here, never server-local
+            end = end.replace(tzinfo=UTC)
         params["endTime"] = int(end.timestamp() * 1000)
+    try:
+        r = await client.get(FUTURES_KLINES, params=params)
+        if r.status_code == 200:
+            return parse_klines(r.json())
+    except httpx.HTTPError:
+        pass
+    log.warning("v2_feed_futures_unavailable_using_spot", symbol=symbol, interval=interval)
     for host in KLINE_HOSTS:
         try:
             r = await client.get(f"{host}/api/v3/klines", params=params)
@@ -59,6 +75,8 @@ async def _klines(client: httpx.AsyncClient, symbol: str, interval: str,
 async def fetch_frames(symbol: str, end: datetime | None = None,
                        intervals=("5m", "15m", "4h", "1d")) -> dict[str, pd.DataFrame]:
     """{interval: closed-bar DataFrame}. Empty frames when Binance cannot be reached."""
+    if end is not None and end.tzinfo is None:
+        end = end.replace(tzinfo=UTC)
     now = end or datetime.now(UTC)
     out: dict[str, pd.DataFrame] = {}
     async with httpx.AsyncClient(timeout=15.0) as client:

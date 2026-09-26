@@ -46,9 +46,11 @@ async def api_v2_shadow(request: web.Request) -> web.Response:
     closed = [r for r in rows if r.status == "closed"]
     by_setup = {}
     for code in sorted({r.setup for r in closed}):
-        g = grade([_T(r) for r in closed if r.setup == code])
+        g = grade([_T(r) for r in closed if r.setup == code], mc=False)
         by_setup[code] = {"stats": g["stats"], "gates": g["gates"]}
-    overall = grade([_T(r) for r in closed]) if closed else None
+    # No Monte Carlo here: this endpoint is public and runs on the engine's
+    # event loop, where 10,000 simulated paths per request stalled the tick.
+    overall = grade([_T(r) for r in closed], mc=False) if closed else None
     body = {
         "days": days,
         "counts": {s: sum(1 for r in rows if r.status == s)
@@ -118,10 +120,12 @@ async def journal_features(symbol: str, at: datetime) -> dict:
 
 
 def _float(v, default=0.0) -> float:
+    import math
     try:
-        return float(v)
+        f = float(v)
     except (TypeError, ValueError):
         return default
+    return f if math.isfinite(f) else default
 
 
 def _when(v) -> datetime | None:
@@ -257,6 +261,16 @@ async function loadBacktest(){
     h+=row(k.replace('_',' '),g);});
   Object.entries(r.by_symbol||{}).forEach(([k,g])=>{h+=row(k,g);});
   h+='</table></div>';
+  const vs=r.variants||{};
+  if(Object.keys(vs).length){
+    h+='<h2 style="margin-top:16px">Same signals, different execution</h2>'
+      +'<p class="muted" style="font-size:12px;margin-bottom:8px">What the limit entry costs '
+      +'versus a market entry, and what breakeven or half-profit exits do to win rate AND '
+      +'profit per trade. Deflated Sharpe accounts for trying all four.</p>'
+      +'<div class="tbl"><table><tr><th></th><th>Trades</th><th>Win</th><th>Per trade</th>'
+      +'<th>Avg win / loss</th><th>PF</th><th>Windows up</th><th>Gate</th></tr>';
+    Object.values(vs).forEach(v=>{h+=row(v.label,v.overall);});
+    h+='</table></div>'; }
   const bm=r.benchmarks||{};
   if(Object.keys(bm).length){
     h+='<h2 style="margin-top:16px">Freqtrade community strategies, same data and costs</h2>'

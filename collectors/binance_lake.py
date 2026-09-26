@@ -33,6 +33,7 @@ from __future__ import annotations
 import calendar
 import hashlib
 import io
+import os
 import zipfile
 from dataclasses import dataclass
 from datetime import date, timedelta
@@ -74,6 +75,7 @@ DAILY_ONLY = {"metrics", "bookDepth", "bookTicker"}
 MONTHLY_ONLY = {"fundingRate"}
 FUTURES_ONLY = {"markPriceKlines", "premiumIndexKlines", "indexPriceKlines", "fundingRate",
                 "metrics", "bookDepth", "bookTicker"}
+MONTHLY_LAG_DAYS = 10     # monthly archives appear days after the month ends
 INTERVALS = ["1s", "1m", "3m", "5m", "15m", "30m", "1h", "2h", "4h", "6h", "8h", "12h",
              "1d", "3d", "1w", "1mo"]
 
@@ -136,6 +138,12 @@ def plan(market: str, kind: str, symbol: str, interval: str, start: date,
     Complete months use the monthly file; the current month (whose monthly
     file does not exist yet) uses daily files up to yesterday. Kinds that
     Binance only publishes daily are daily throughout.
+
+    A month that ended less than `MONTHLY_LAG_DAYS` ago is also fetched as
+    daily files: Binance publishes the monthly file days after the month
+    ends, and asking for it too early used to record the month as missing
+    for good. Monthly-only kinds (funding) skip such a month here; the
+    loader tops them up from the REST API instead.
     """
     if market == "spot" and kind in FUTURES_ONLY:
         raise ValueError(f"{kind} exists for futures only")
@@ -150,7 +158,7 @@ def plan(market: str, kind: str, symbol: str, interval: str, start: date,
     parts: list[Part] = []
     for m in _months(start, end):
         last = date(m.year, m.month, calendar.monthrange(m.year, m.month)[1])
-        whole_month_past = last < date.today().replace(day=1)
+        whole_month_past = last <= date.today() - timedelta(days=MONTHLY_LAG_DAYS)
         if kind in DAILY_ONLY or (not whole_month_past and kind not in MONTHLY_ONLY):
             d = max(m, start)
             while d <= min(last, end):
@@ -226,15 +234,32 @@ def write_month(root: Path, part: Part, frames: list[pd.DataFrame]) -> Path | No
         return None
     path = lake_path(root, part.market, part.kind, part.symbol, part.interval, part.month)
     path.parent.mkdir(parents=True, exist_ok=True)
-    if path.exists():
-        frames.insert(0, pd.read_parquet(path))
+    existing = _read_parquet(path)
+    if existing is not None:
+        frames.insert(0, existing)
     df = pd.concat(frames, ignore_index=True)
     key = ["ts", "percentage"] if part.kind == "bookDepth" else ["ts"]
     if part.kind in ("aggTrades", "trades"):
         key = [df.columns[0]]
     df = df.drop_duplicates(subset=key, keep="last").sort_values(key).reset_index(drop=True)
-    df.to_parquet(path, index=False, compression="zstd")
+    # Write aside, then rename: a process killed mid-write (the backtest
+    # child is the first thing the kernel kills) must never leave a
+    # half-written month that breaks every later read.
+    tmp = path.with_name(path.name + ".tmp")
+    df.to_parquet(tmp, index=False, compression="zstd")
+    os.replace(tmp, path)
     return path
+
+
+def _read_parquet(path: Path, columns: list[str] | None = None) -> pd.DataFrame | None:
+    """The file, or None if absent or unreadable (unreadable is renamed aside)."""
+    if not path.exists():
+        return None
+    try:
+        return pd.read_parquet(path, columns=columns)
+    except Exception:
+        os.replace(path, path.with_name(path.name + ".corrupt"))
+        return None
 
 
 def read(kind: str, symbol: str, start, end, interval: str = "", market: str = "um",
@@ -244,8 +269,9 @@ def read(kind: str, symbol: str, start, end, interval: str = "", market: str = "
     frames = []
     for m in _months(start.date(), end.date()):
         p = lake_path(root, market, kind, symbol, interval, m.strftime("%Y-%m"))
-        if p.exists():
-            frames.append(pd.read_parquet(p, columns=columns))
+        df_m = _read_parquet(p, columns)
+        if df_m is not None:
+            frames.append(df_m)
     if not frames:
         return pd.DataFrame()
     df = pd.concat(frames, ignore_index=True)

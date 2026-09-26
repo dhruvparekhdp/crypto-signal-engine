@@ -149,3 +149,73 @@ class TestGenerate(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestVariants(unittest.TestCase):
+    """Entry and exit options: each conservative about the order inside a bar."""
+
+    def test_taker_entry_fills_at_next_open_and_pays_taker(self):
+        k5 = bars([(100.5, 100.6, 100.4, 100.5), (100.5, 102.5, 100.4, 102.2)])
+        ex = ExecConfig(entry_mode="taker")
+        (t,) = simulate([cand()], k5, ex)
+        e = 100.5 * (1 + ex.entry_slip)
+        self.assertAlmostEqual(t.entry, e)               # the open plus spread, not the limit
+        self.assertEqual(t.reason, "target")
+        costs = ex.taker + ex.maker + ex.funding_per_8h * (2 * 5 / 60) / 8
+        self.assertAlmostEqual(t.r, ((102 - e) / e - costs) / ((e - 99.0) / e), places=4)
+        # maker version never fills: price never trades below 100
+        self.assertEqual(simulate([cand()], k5), [])
+
+    def test_taker_entry_past_the_target_is_cancelled(self):
+        k5 = bars([(102.5, 102.6, 102.4, 102.5)] * 3)
+        self.assertEqual(simulate([cand()], k5, ExecConfig(entry_mode="taker")), [])
+
+    def test_breakeven_moves_the_stop_from_the_next_bar(self):
+        rows = [(100.2, 100.3, 99.9, 100.1),            # fill
+                (100.1, 101.4, 100.0, 101.3),           # +1.4R seen -> BE from next bar
+                (101.3, 101.4, 99.5, 99.6)]             # would have been a -0.4R, now BE
+        (t,) = simulate([cand()], bars(rows), ExecConfig(breakeven_at_r=1.25))
+        self.assertEqual(t.reason, "breakeven")
+        self.assertGreater(t.r, -0.2)
+        (base,) = simulate([cand()], bars(rows + [(99.6, 99.7, 98.5, 98.6)]))
+        self.assertEqual(base.reason, "stop")
+
+    def test_partial_then_target(self):
+        rows = [(100.2, 100.3, 99.9, 100.1),
+                (100.1, 101.6, 100.0, 101.5),           # +1.5R: half booked
+                (101.5, 102.2, 101.4, 102.1)]           # target 102 for the rest
+        ex = ExecConfig(partial_at_r=1.5)
+        (t,) = simulate([cand()], bars(rows), ex)
+        self.assertEqual(t.reason, "partial+target")
+        gross = 0.5 * 0.015 + 0.5 * 0.02
+        costs = ex.maker + ex.maker + ex.funding_per_8h * (3 * 5 / 60) / 8
+        self.assertAlmostEqual(t.r, (gross - costs) / 0.01, places=4)
+
+
+class TestPartialBeyondTarget(unittest.TestCase):
+    def test_a_partial_past_the_target_is_never_taken(self):
+        rows = [(100.2, 100.3, 99.9, 100.1), (100.1, 102.6, 100.0, 102.5)]
+        (t,) = simulate([cand(target=101.5)], bars(rows), ExecConfig(partial_at_r=2.0))
+        self.assertEqual(t.reason, "target")                     # 1.5R target, no partial
+
+
+class TestDeflatedSharpe(unittest.TestCase):
+    def test_more_trials_demand_more(self):
+        from analysis.v2_backtest import deflated_sharpe
+        rs = list(np.random.default_rng(2).normal(0.12, 1.2, 400))
+        one, many = deflated_sharpe(rs, 1), deflated_sharpe(rs, 50)
+        self.assertGreater(one, many)
+        self.assertIsNone(deflated_sharpe(rs[:10]))
+        self.assertLess(deflated_sharpe(list(np.random.default_rng(3).normal(0, 1, 400)), 4),
+                        0.95)
+
+
+class TestFundingZ(unittest.TestCase):
+    def test_a_one_tick_change_after_flat_funding_is_not_crowding(self):
+        from analysis.v2_setups import funding_z
+        rates = [0.0001] * 100 + [0.000101, 0.00009, 0.0006]
+        f = funding_z(pd.DataFrame({"ts": pd.date_range("2024-01-01", periods=103, freq="8h"),
+                                    "last_funding_rate": rates}))
+        self.assertLess(abs(f["z"].iloc[100]), 2)
+        self.assertLess(abs(f["z"].iloc[101]), 2)
+        self.assertGreater(f["z"].iloc[102], 2)        # a real jump still counts

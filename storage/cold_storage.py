@@ -27,6 +27,7 @@ from __future__ import annotations
 import gzip
 import json
 import os
+import time
 from collections import defaultdict
 from collections.abc import Iterator
 from datetime import UTC, date, datetime, timedelta
@@ -79,21 +80,41 @@ def file_for(root: Path, table: str, when: datetime) -> Path:
 
 
 def append_rows(root: Path, table: str, rows: list[dict], time_col: str) -> int:
-    """Append rows to their month files and flush them to disk. Returns rows written."""
-    by_file: dict[Path, list[dict]] = defaultdict(list)
+    """
+    Write rows to NEW files, one per month in the batch, and make them durable.
+    Returns rows written.
+
+    Each batch gets its own file ({YYYY-MM}.{first}-{last}.jsonl.gz), written
+    under a temporary name, fsynced, then renamed. Appending gzip members to
+    one month file (the first version) meant a crash mid-write left a broken
+    member that stopped every reader before the rows written after it — rows
+    already deleted from the database.
+    """
+    by_month: dict[str, list[dict]] = defaultdict(list)
     for r in rows:
         when = datetime.fromisoformat(r[time_col]) if r.get(time_col) else datetime(1970, 1, 1)
-        by_file[file_for(root, table, when)].append(r)
-    for path, items in by_file.items():
-        path.parent.mkdir(parents=True, exist_ok=True)
-        # Appending a gzip member to an existing file is valid gzip; readers
-        # (gzip.open, zcat) see one continuous stream.
-        with open(path, "ab") as raw:
-            with gzip.GzipFile(fileobj=raw, mode="ab") as gz:
+        by_month[f"{when:%Y-%m}"].append(r)
+    folder = Path(root) / table
+    folder.mkdir(parents=True, exist_ok=True)
+    for month, items in by_month.items():
+        ids = [r.get("id", 0) or 0 for r in items]
+        # Unique per write: a re-run after a crash writes the same ids again
+        # and must add a file, never replace one.
+        path = folder / f"{month}.{min(ids)}-{max(ids)}.{time.time_ns()}.jsonl.gz"
+        tmp = path.with_name(path.name + ".tmp")
+        with open(tmp, "wb") as raw:
+            with gzip.GzipFile(fileobj=raw, mode="wb") as gz:
                 for r in items:
                     gz.write((json.dumps(r, separators=(",", ":")) + "\n").encode())
             raw.flush()
             os.fsync(raw.fileno())
+        os.replace(tmp, path)
+    try:
+        dir_fd = os.open(folder, os.O_RDONLY)
+        os.fsync(dir_fd)                   # the rename itself is durable too
+        os.close(dir_fd)
+    except OSError:
+        pass
     return len(rows)
 
 
@@ -104,6 +125,8 @@ def read_rows(root: Path, table: str, start: datetime | None = None,
     if not folder.exists():
         return
     time_col = TIME_COLUMN.get(table)
+    # (id, time) rather than id alone: SQLite reuses ids once a table has
+    # been emptied, and two different rows must not collapse into one.
     seen: set = set()
     for path in sorted(folder.glob("*.jsonl.gz")):
         month = path.name[:7]
@@ -114,9 +137,11 @@ def read_rows(root: Path, table: str, start: datetime | None = None,
         with gzip.open(path, "rt") as fh:
             for line in fh:
                 r = json.loads(line)
-                if r.get("id") in seen:
+                key = ((r.get("id"), r.get(time_col)) if time_col
+                       else json.dumps(r, sort_keys=True))
+                if key in seen:
                     continue
-                seen.add(r.get("id"))
+                seen.add(key)
                 if time_col and r.get(time_col):
                     t = datetime.fromisoformat(r[time_col])
                     if (start and t < start) or (end and t >= end):
