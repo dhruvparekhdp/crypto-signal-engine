@@ -116,6 +116,36 @@ def _trade_changes(before: dict, pos, cycle_id: int, now: datetime, price: float
     return out
 
 
+def _code_version() -> tuple[str, str]:
+    """(short commit, subject) of the running code, or ('unknown', '')."""
+    import html
+    import subprocess
+    try:
+        out = subprocess.run(
+            ["git", "-C", str(Path(__file__).resolve().parent.parent), "log", "-1",
+             "--format=%h%x09%s"], capture_output=True, text=True, timeout=5).stdout.strip()
+        sha, _, subject = out.partition("\t")
+        return (sha or "unknown"), html.escape(subject[:120])
+    except Exception:
+        return "unknown", ""
+
+
+def _version_changed(path: Path, sha: str) -> bool:
+    """True when this start runs different code from the last one (a deploy)."""
+    try:
+        previous = path.read_text().strip() if path.exists() else ""
+    except OSError:
+        previous = ""
+    if sha == "unknown" or sha == previous:
+        return False
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(sha)
+    except OSError:
+        pass
+    return True
+
+
 def _record_start(path: Path, window_minutes: int = 60) -> list[str]:
     """Append this start to the file; return the starts within the window, this one included."""
     import json
@@ -1871,8 +1901,20 @@ class AppRunner:
                        f"({'active' if settings.twelvedata_api_key else 'no key'})\n"
                        f"News Sentiment: CryptoPanic "
                        f"({'active' if settings.cryptopanic_auth_token else 'no token'})")
-        starts = _record_start(Path(settings.v2_reports_dir).parent / "engine_starts.json")
-        if len(starts) <= 1:
+        data_dir = Path(settings.v2_reports_dir).parent
+        starts = _record_start(data_dir / "engine_starts.json")
+        sha, subject = _code_version()
+        if _version_changed(data_dir / "engine_version.txt", sha):
+            # A deploy: always say so, however soon after the last restart.
+            # (Silencing restarts within the hour, to stop a crash loop's
+            # spam, also silenced back-to-back deploys.)
+            await self.notifier.send_text(
+                f"🚀 <b>Deployed</b> <code>{sha}</code>: {subject}\n"
+                f"{sources}\n"
+                f"AI Sentinel: {'Active' if settings.groq_api_key else 'Disabled (no key)'}",
+                parse_mode=ParseMode.HTML,
+            )
+        elif len(starts) <= 1:
             await self.notifier.send_text(
                 "🪙 Crypto Signal Engine started.\n"
                 f"{sources}\n"

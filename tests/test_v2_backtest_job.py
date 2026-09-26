@@ -73,3 +73,16 @@ class TestRestartLoopIsReported(unittest.TestCase):
             self.assertEqual(len(_record_start(f)), 1)
             f.write_text("not json")
             self.assertEqual(len(_record_start(f)), 1)
+
+
+class TestDeployIsAnnounced(unittest.TestCase):
+    def test_new_code_is_a_deploy_same_code_is_a_restart(self):
+        from scheduler.runner import _code_version, _version_changed
+        with tempfile.TemporaryDirectory() as d:
+            f = Path(d, "v.txt")
+            self.assertTrue(_version_changed(f, "abc1234"))      # first start
+            self.assertFalse(_version_changed(f, "abc1234"))     # crash restart
+            self.assertTrue(_version_changed(f, "def5678"))      # deploy
+            self.assertFalse(_version_changed(f, "unknown"))
+        sha, _ = _code_version()
+        self.assertTrue(sha)
