@@ -226,19 +226,25 @@ V2_HTML = """<!DOCTYPE html><html lang="en"><head><meta charset="utf-8">
 const NAMES={A:'Trend pullback',B:'Sweep & reclaim',C:'Range fade',D:'Breakout-retest'};
 function gates(g){return Object.entries(g||{}).map(([k,v])=>'<span class="'+(v?'ok':'no')+'">'
   +esc(k)+(v?' ✓':' ✗')+'</span>').join(' · ');}
+// No losing trade yet: the profit factor is infinite, not missing.
+function pf(s){ return s.profit_factor ?? (s.trades && s.avg_loss_r===0 ? '∞' : '—'); }
+// Below 30 trades the gates say nothing (one window "positive", a PF of
+// infinity): show progress towards the sample instead of green ticks.
 function statCard(title,s,g){ if(!s||!s.trades) return '<div class="stat"><span class="muted">'
   +esc(title)+'</span><b>—</b><span class="muted">no closed trades</span></div>';
+  const early = s.trades < 30;
   return '<div class="stat"><span class="muted">'+esc(title)+'</span><b class="'
   +(s.expectancy_r>=0?'pos':'neg')+'">'+(s.expectancy_r>=0?'+':'')+s.expectancy_r+'R</b>'
   +'<span class="muted">'+s.trades+' trades · win '+Math.round(s.win_rate*100)+'% · PF '
-  +(s.profit_factor??'—')+'</span><div style="font-size:11px;margin-top:4px">'+gates(g)
+  +pf(s)+'</span><div style="font-size:11px;margin-top:4px">'
+  +(early?'<span class="muted">Too few trades to judge: '+s.trades+' of 200 needed</span>':gates(g))
   +'</div></div>'; }
 function row(label,g){ const s=(g||{}).stats||{}; if(!s.trades) return '<tr><td>'+esc(label)
   +'</td><td colspan="7" class="muted">no trades</td></tr>';
   return '<tr><td>'+esc(label)+'</td><td>'+s.trades+'</td><td>'+Math.round(s.win_rate*100)+'%</td>'
   +'<td class="'+(s.expectancy_r>=0?'pos':'neg')+'">'
   +(s.expectancy_r>=0?'+':'')+s.expectancy_r+'R</td>'
-  +'<td>+'+s.avg_win_r+'R / '+s.avg_loss_r+'R</td><td>'+(s.profit_factor??'—')+'</td>'
+  +'<td>+'+s.avg_win_r+'R / '+s.avg_loss_r+'R</td><td>'+pf(s)+'</td>'
   +'<td>'+Math.round((g.positive_windows||0)*100)+'%</td><td>'
   +(g.promote_to_paper?'<span class="ok">PROMOTE</span>':'<span class="muted">hold</span>')
   +'</td></tr>'; }
