@@ -803,6 +803,27 @@ class Repository:
             select(MoveAttribution).order_by(MoveAttribution.created_at.desc()).limit(limit))
         return list(res.scalars().all())
 
+    async def recent_served_by(self, table, at_col, model_col, phase=None,
+                               phase_col=None, n: int = 20) -> dict:
+        """
+        The last `n` rows' `model` (a "provider/model" string) and when, for
+        one AI role — which provider actually answered lately, not just which
+        one is configured. `settings.llm_chain_*` says what a role WOULD try;
+        this says what it DID get, so a rate-limited primary that is silently
+        being caught by a fallback (or not) is visible instead of assumed.
+        """
+        q = select(model_col, at_col).order_by(at_col.desc()).limit(n)
+        if phase is not None:
+            q = q.where(phase_col == phase)
+        rows = (await self.session.execute(q)).all()
+        served = [m for m, _ in rows if m]
+        return {
+            "last_served_by": served[0] if served else None,
+            "last_at": rows[0][1].isoformat() if rows else None,
+            "checked": len(rows),
+            "used": sorted({m.split("/")[0] for m in served}) if served else [],
+        }
+
     async def save_history_events(self, symbol: str, events: list[dict],
                                   timeframe: str = "1h") -> int:
         """Insert scanned events, skipping ones already stored. Returns how many were new."""

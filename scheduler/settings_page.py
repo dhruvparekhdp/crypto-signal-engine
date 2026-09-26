@@ -27,6 +27,44 @@ async def _admin(request: web.Request):
     return check_bearer_auth(request, _SETTINGS.api_auth_token)
 
 
+async def _served_by(session_factory, role: str, table, at_col, model_col,
+                     phase=None, phase_col=None) -> dict:
+    from storage.repository import Repository
+    async with session_factory() as session:
+        return await Repository(session).recent_served_by(
+            table, at_col, model_col, phase=phase, phase_col=phase_col)
+
+
+async def _recent_activity(session_factory) -> dict:
+    """
+    Which provider actually answered each role lately — not the configured
+    chain, the last few real calls. One session per role, run together: six
+    sequential round trips at this database's ~1.4s each would have made
+    the page slower than the fix for /api/paper and /api/pipeline was worth.
+    """
+    import asyncio
+
+    from storage.models import MarketBriefing, MoveAttribution, NewsSentiment, SignalReview
+    jobs = {
+        "pre_trade": (SignalReview, SignalReview.created_at, SignalReview.model,
+                     "pre", SignalReview.phase),
+        "post_trade": (SignalReview, SignalReview.created_at, SignalReview.model,
+                       "post", SignalReview.phase),
+        "position_review": (SignalReview, SignalReview.created_at, SignalReview.model,
+                            "hold", SignalReview.phase),
+        "briefing": (MarketBriefing, MarketBriefing.created_at, MarketBriefing.model, None, None),
+        "attribution": (MoveAttribution, MoveAttribution.created_at, MoveAttribution.model,
+                        None, None),
+        "news_scoring": (NewsSentiment, NewsSentiment.received_at, NewsSentiment.model,
+                         None, None),
+    }
+    results = await asyncio.gather(
+        *(_served_by(session_factory, role, *spec) for role, spec in jobs.items()),
+        return_exceptions=True)
+    return {role: (r if isinstance(r, dict) else {"last_served_by": None, "error": str(r)})
+           for role, r in zip(jobs, results, strict=True)}
+
+
 def settings_api(runner):
     async def get(request: web.Request) -> web.Response:
         from collectors.llm_client import chain_for
@@ -39,11 +77,13 @@ def settings_api(runner):
         roles = ("pre_trade", "position_review", "post_trade", "briefing", "attribution",
                  "news_scoring", "history")
         models = {r: [f"{p}:{m}" for p, m in chain_for(r)] for r in roles}
+        activity = await _recent_activity(AsyncSessionFactory)
         live_sources = sorted(k for k, v in (getattr(runner, "collector_enabled", {}) or {}).items()
                               if v)
         if settings.binance_klines_enabled:
             live_sources.insert(0, "binance_klines")
         return web.json_response({"fields": describe(settings, stored), "models": models,
+                                  "models_activity": activity,
                                   "sources_on": live_sources})
 
     async def post(request: web.Request) -> web.Response:
@@ -318,10 +358,20 @@ async function load(){
     +'<div class="b">'+(f.live?'':'<span class="tag acc">restart</span>')
     +(f.source==='saved'?'<span class="tag">saved</span>':'<span class="tag">default</span>')
     +'</div></div><div>'+control(f)+'</div></div>').join('')+'</div></details>').join('');
-  document.getElementById('models').innerHTML=Object.entries(d.models||{}).map(([role,chain])=>
-    '<div class="row inset"><div><div class="l">'+esc(role.replace(/_/g,' '))+'</div><div class="h">'
-    +(chain.length?esc(chain.join(' → ')):'no model configured')+'</div></div><div></div></div>').join('')
-    +'<p class="small muted">Set in .env (LLM_CHAIN_*): the first model that answers is used.</p>';
+  const act=d.models_activity||{};
+  document.getElementById('models').innerHTML=Object.entries(d.models||{}).map(([role,chain])=>{
+    const a=act[role]||{};
+    const last=a.last_served_by?'Last answered by <b>'+esc(a.last_served_by)+'</b>'
+      +(a.last_at?' ('+fmtAgo(a.last_at)+')':'')
+      +(a.checked?' — of its last '+a.checked+', used: '+esc((a.used||[]).join(', ')):'')
+      :'No calls recorded yet for this role.';
+    return '<div class="row inset"><div><div class="l">'+esc(role.replace(/_/g,' '))+'</div><div class="h">'
+      +(chain.length?esc(chain.join(' → ')):'no model configured')
+      +'</div><div class="h" style="margin-top:4px">'+last+'</div></div><div></div></div>';
+  }).join('')
+    +'<p class="small muted">Chain order (LLM_CHAIN_*) is set in .env; the keys those providers '
+    +'use are in the API keys section above. "Last answered by" is what actually served the most '
+    +'recent calls, not just what is configured — the way to see whether a fallback is firing.</p>';
   PAPER=await fetch('/api/paper/config').then(r=>r.json()).catch(()=>({}));
   const P=[['enabled','Paper trading on','bool'],['starting_wallet','Starting wallet (₹)','num'],
     ['target_wallet','Target wallet (₹)','num'],['leverage','Base leverage','num'],
