@@ -214,3 +214,61 @@ def calendar_text(now: datetime) -> str:
     if not items:
         return head + " No scheduled market events nearby."
     return head + "\n" + "\n".join(f"- [L{c.level}] {c.name} ({c.when})" for c in items)
+
+
+# ── History, for the backtest's news blackout ────────────────────────────────
+#
+# FOMC statement days 2024-2026 from federalreserve.gov (statement 14:00 ET).
+# Jobs reports by BLS's own rule: the third Friday after the reference week
+# (the Sun-Sat week containing the 12th), 08:30 ET. The rule reproduces the
+# scheduled 2026 dates above exactly; it misses the 2025 shutdown delays and
+# rare holiday moves, which only means a few windows land a week off. CPI
+# has no rule and its schedule could not be verified from here, so it is
+# not in the history.
+
+FOMC_DAYS = (
+    "2024-01-31", "2024-03-20", "2024-05-01", "2024-06-12", "2024-07-31", "2024-09-18",
+    "2024-11-07", "2024-12-18",
+    "2025-01-29", "2025-03-19", "2025-05-07", "2025-06-18", "2025-07-30", "2025-09-17",
+    "2025-10-29", "2025-12-10",
+    "2026-01-28", "2026-03-18", "2026-04-29", "2026-06-17", "2026-07-29", "2026-09-16",
+    "2026-10-28", "2026-12-09",
+)
+
+
+def _et_to_utc(day, hour: int, minute: int) -> datetime:
+    """A US Eastern wall-clock time on `day` as naive UTC (DST-aware)."""
+    from datetime import UTC
+    from zoneinfo import ZoneInfo
+    local = datetime(day.year, day.month, day.day, hour, minute,
+                     tzinfo=ZoneInfo("America/New_York"))
+    return local.astimezone(UTC).replace(tzinfo=None)
+
+
+def nfp_day(year: int, month: int):
+    """Release day of the jobs report for the PREVIOUS month, by the BLS rule."""
+    from datetime import date
+    ref_year, ref_month = (year, month - 1) if month > 1 else (year - 1, 12)
+    twelfth = date(ref_year, ref_month, 12)
+    saturday = twelfth + timedelta(days=(5 - twelfth.weekday()) % 7)
+    first_friday = saturday + timedelta(days=6)
+    return first_friday + timedelta(days=14)
+
+
+def historical_events(start: datetime, end: datetime) -> list[Event]:
+    """FOMC and jobs-report events between start and end (naive UTC)."""
+    from datetime import date
+    out = [Event(_et_to_utc(date.fromisoformat(d), 14, 0), "fomc", "FOMC")
+           for d in FOMC_DAYS]
+    y, m = start.year, start.month
+    while (y, m) <= (end.year, end.month):
+        out.append(Event(_et_to_utc(nfp_day(y, m), 8, 30), "nfp", "US jobs report"))
+        y, m = (y, m + 1) if m < 12 else (y + 1, 1)
+    return sorted((e for e in out if start <= e.at <= end), key=lambda e: e.at)
+
+
+def blackout_windows(start: datetime, end: datetime) -> list[tuple[datetime, datetime]]:
+    """(from, until) no-entry windows around the historical events."""
+    return [(e.at - timedelta(minutes=WINDOWS[e.kind][0]),
+             e.at + timedelta(minutes=WINDOWS[e.kind][1]))
+            for e in historical_events(start, end)]

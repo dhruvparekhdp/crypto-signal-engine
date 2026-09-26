@@ -56,6 +56,19 @@ class V2Config:
     range_min_bars: int = 24
     retest_max_bars: int = 8
     stop_atr_buffer: float = 0.25
+    # Research variants (26 Sep), all off by default and measured side by
+    # side in the report. Thresholds are round numbers, not tuned.
+    premium_discount: bool = False   # A/D: long only in the lower half of the 15m swing
+                                     # range, short only in the upper half
+    htf_strict: bool = False         # the 4h structure must AGREE (or be a range with
+                                     # the daily on side), not merely not oppose
+    news_blackout: bool = False      # no entries around FOMC and US jobs reports
+    swing_alternate: bool = False    # alternating swings on 15m ...
+    min_swing_atr: float = 0.0       # ... at least this many ATR apart (0.75 in the variant)
+    displacement_atr: float = 0.0    # D: the 15m break bar's body >= this x ATR
+    entry_depth: float = 0.0         # limit this fraction of the trigger bar deeper
+    regime_routing: bool = False     # A/D only when 15m choppiness < 50, C only when > 50;
+                                     # nothing when 15m ATR% is above its 95th percentile
 
 
 @dataclass
@@ -112,6 +125,16 @@ def funding_z(funding: pd.DataFrame | None, window: int = 90) -> pd.DataFrame | 
 
 # ── Candidate generation ─────────────────────────────────────────────────────
 
+def choppiness(df: pd.DataFrame, n: int = 14) -> pd.Series:
+    """Choppiness index: ~100 = sideways, ~0 = one-way. 50 splits trend from range."""
+    prev = df["close"].shift(1)
+    tr = pd.concat([df["high"] - df["low"], (df["high"] - prev).abs(),
+                    (df["low"] - prev).abs()], axis=1).max(axis=1)
+    span = df["high"].rolling(n).max() - df["low"].rolling(n).min()
+    return (100 * np.log10(tr.rolling(n).sum() / span.replace(0, np.nan))
+            / np.log10(n)).reset_index(drop=True)
+
+
 def _in_session(ts: pd.Timestamp, cfg: V2Config) -> bool:
     if cfg.weekdays_only and ts.weekday() >= 5:
         return False
@@ -155,7 +178,8 @@ def generate(symbol: str, k5: pd.DataFrame, k15: pd.DataFrame, k4h: pd.DataFrame
     s5 = structure_states(k5)
     ev5 = s5["event"].to_numpy()
 
-    s15 = structure_states(k15)
+    s15 = structure_states(k15, alternate=cfg.swing_alternate,
+                           min_swing_atr=cfg.min_swing_atr)
     a15 = atr(k15).to_numpy()
     j15 = align(close5, k15, 15)
     st15 = s15["state"].to_numpy()
@@ -183,6 +207,20 @@ def generate(symbol: str, k5: pd.DataFrame, k15: pd.DataFrame, k4h: pd.DataFrame
     vwap = ((tp * k5["volume"]).groupby(day).cumsum()
             / k5["volume"].groupby(day).cumsum().replace(0, np.nan)).to_numpy()
 
+    o15, c15 = k15["open"].to_numpy(), k15["close"].to_numpy()
+    chop = choppiness(k15).to_numpy() if cfg.regime_routing else None
+    hot = None
+    if cfg.regime_routing:
+        atr_pct = pd.Series(a15) / k15["close"].reset_index(drop=True)
+        hot = (atr_pct > atr_pct.rolling(2880, min_periods=500).quantile(0.95)).to_numpy()
+    blackout = None
+    if cfg.news_blackout and len(k5):
+        from analysis.event_calendar import blackout_windows
+        wins = blackout_windows(pd.Timestamp(close5[0]).to_pydatetime(),
+                                pd.Timestamp(close5[-1]).to_pydatetime())
+        blackout = (np.array([np.datetime64(a) for a, _ in wins], dtype="datetime64[ns]"),
+                    np.array([np.datetime64(b) for _, b in wins], dtype="datetime64[ns]"))
+
     out: list[Candidate] = []
     for i in range(30, len(k5)):
         j = j15[i]
@@ -191,6 +229,14 @@ def generate(symbol: str, k5: pd.DataFrame, k15: pd.DataFrame, k4h: pd.DataFrame
         t = pd.Timestamp(close5[i])
         if cfg.session_filter and not _in_session(t, cfg):
             continue
+        if blackout is not None and len(blackout[0]):
+            w = np.searchsorted(blackout[0], close5[i], side="right") - 1
+            if w >= 0 and close5[i] <= blackout[1][w]:
+                continue
+        if hot is not None and hot[j]:
+            continue
+        trend_ok = chop is None or (not np.isnan(chop[j]) and chop[j] < 50)
+        range_ok = chop is None or (not np.isnan(chop[j]) and chop[j] > 50)
 
         # Higher-timeframe bias.
         allow_long = allow_short = True
@@ -201,6 +247,9 @@ def generate(symbol: str, k5: pd.DataFrame, k15: pd.DataFrame, k4h: pd.DataFrame
                 allow_long = False
             if not below and four == "up":
                 allow_short = False
+            if cfg.htf_strict:
+                allow_long = allow_long and (four == "up" or (four == "range" and not below))
+                allow_short = allow_short and (four == "down" or (four == "range" and below))
         if fz is not None and jf[i] >= 0:
             z = fz["z"].iloc[jf[i]]
             if not np.isnan(z):
@@ -226,10 +275,24 @@ def generate(symbol: str, k5: pd.DataFrame, k15: pd.DataFrame, k4h: pd.DataFrame
         bull_trigger = (bull_engulf or bull_pin or ev5[i] == "choch_up") and vol_ok
         bear_trigger = (bear_engulf or bear_pin or ev5[i] == "choch_down") and vol_ok
         entry = c[i]
+        swing_range = sh15[j] - sl15[j] if not (np.isnan(sh15[j]) or np.isnan(sl15[j])) else 0
 
         def add(setup, side, stop, target, **notes):
-            if setup in cfg.setups and _passes_costs(side, entry, stop, target, cfg):
-                out.append(Candidate(t, symbol, setup, side, float(entry), float(stop),
+            if setup not in cfg.setups:
+                return
+            px = entry
+            if cfg.entry_depth > 0:
+                px = entry - cfg.entry_depth * rng if side == "long" \
+                    else entry + cfg.entry_depth * rng
+            if cfg.premium_discount and setup in ("A", "D") and swing_range > 0:
+                where = (px - sl15[j]) / swing_range
+                if (side == "long" and where > 0.5) or (side == "short" and where < 0.5):
+                    return
+            if cfg.regime_routing and ((setup in ("A", "D") and not trend_ok)
+                                       or (setup == "C" and not range_ok)):
+                return
+            if _passes_costs(side, px, stop, target, cfg):
+                out.append(Candidate(t, symbol, setup, side, float(px), float(stop),
                                      float(target), notes))
 
         # A. trend pullback to the last higher low / lower high, or VWAP.
@@ -277,13 +340,15 @@ def generate(symbol: str, k5: pd.DataFrame, k15: pd.DataFrame, k4h: pd.DataFrame
         # D. retest of a level the 15m just broke.
         if since15[j] <= cfg.retest_max_bars:
             k = j - int(since15[j])
-            if ev15[k] in ("bos_up", "choch_up") and allow_long:
+            strong = cfg.displacement_atr <= 0 or (
+                not np.isnan(a15[k]) and abs(c15[k] - o15[k]) >= cfg.displacement_atr * a15[k])
+            if ev15[k] in ("bos_up", "choch_up") and allow_long and strong:
                 level = sh15[k]
                 if not np.isnan(level) and lo[i] <= level + 0.1 * atr15 \
                         and lo[i] >= level - 0.5 * atr15 and c[i] > level and green:
                     stop = lo[i] - 0.1 * atr15
                     add("D", "long", stop, entry + 2 * (entry - stop), level=float(level))
-            if ev15[k] in ("bos_down", "choch_down") and allow_short:
+            if ev15[k] in ("bos_down", "choch_down") and allow_short and strong:
                 level = sl15[k]
                 if not np.isnan(level) and h[i] >= level - 0.1 * atr15 \
                         and h[i] <= level + 0.5 * atr15 and c[i] < level and red:

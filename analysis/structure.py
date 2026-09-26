@@ -67,7 +67,8 @@ def swings(df: pd.DataFrame, k: int = 2) -> list[SwingPoint]:
 
 # ── Market structure state machine ───────────────────────────────────────────
 
-def structure_states(df: pd.DataFrame, k: int = 2, buffer_atr: float = 0.0) -> pd.DataFrame:
+def structure_states(df: pd.DataFrame, k: int = 2, buffer_atr: float = 0.0,
+                     alternate: bool = False, min_swing_atr: float = 0.0) -> pd.DataFrame:
     """
     Per bar: state ("up" / "down" / "range"), event ("bos_up", "bos_down",
     "choch_up", "choch_down" or ""), last confirmed swing high / low, the
@@ -78,10 +79,18 @@ def structure_states(df: pd.DataFrame, k: int = 2, buffer_atr: float = 0.0) -> p
     CHoCH  close beyond the last swing AGAINST the trend (character change)
     From range, the first break sets the state. A swing that has been broken
     is not broken again until a new swing forms.
+
+    alternate / min_swing_atr (research, 26 Sep; LuxAlgo and the smc library
+    do this): swings must alternate high-low-high. A second high in a row
+    only counts if it is higher, and then REPLACES the first (a lower one is
+    ignored); lows mirrored. A swing closer than `min_swing_atr` x ATR to
+    the opposite swing is noise and is ignored. Both are applied in confirm
+    order, so they stay causal.
     """
     n = len(df)
     close = df["close"].to_numpy()
-    a = atr(df).to_numpy() if buffer_atr > 0 else np.zeros(n)
+    a = atr(df).to_numpy() if (buffer_atr > 0 or min_swing_atr > 0) else np.zeros(n)
+    last_kind, last_kept = "", np.nan
     by_confirm: dict[int, list[SwingPoint]] = {}
     for s in swings(df, k):
         by_confirm.setdefault(s.confirm, []).append(s)
@@ -94,12 +103,28 @@ def structure_states(df: pd.DataFrame, k: int = 2, buffer_atr: float = 0.0) -> p
     rows = []
     for i in range(n):
         for s in by_confirm.get(i, []):
+            replace = False
+            if alternate:
+                if s.kind == last_kind:
+                    more = s.price > last_kept if s.kind == "high" else s.price < last_kept
+                    if not more:
+                        continue
+                    replace = True
+                elif (min_swing_atr > 0 and not np.isnan(last_kept)
+                      and not np.isnan(a[s.idx])
+                      and abs(s.price - last_kept) < min_swing_atr * a[s.idx]):
+                    continue
+                last_kind, last_kept = s.kind, s.price
             if s.kind == "high":
-                prev_sh, last_sh, sh_broken = last_sh, s.price, False
+                if not replace:
+                    prev_sh = last_sh
+                last_sh, sh_broken = s.price, False
                 if not np.isnan(prev_sh) and s.price < prev_sh:
                     lh = s.price
             else:
-                prev_sl, last_sl, sl_broken = last_sl, s.price, False
+                if not replace:
+                    prev_sl = last_sl
+                last_sl, sl_broken = s.price, False
                 if not np.isnan(prev_sl) and s.price > prev_sl:
                     hl = s.price
         buf = (a[i] * buffer_atr) if buffer_atr > 0 and not np.isnan(a[i]) else 0.0

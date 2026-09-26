@@ -27,6 +27,22 @@ VARIANTS = {
     "breakeven": ExecConfig(breakeven_at_r=1.25),
     "partial": ExecConfig(partial_at_r=1.5),
 }
+# Setup variants (research items 2-8): same execution, different filters.
+SETUP_VARIANTS = {
+    "premium_discount": ({"premium_discount": True}, "Buy low / sell high in the swing"),
+    "htf_strict": ({"htf_strict": True}, "4h trend must agree"),
+    "news_blackout": ({"news_blackout": True}, "No entries around FOMC / jobs report"),
+    "clean_swings": ({"swing_alternate": True, "min_swing_atr": 0.75},
+                     "Alternating swings, >= 0.75 ATR"),
+    "displacement": ({"displacement_atr": 0.8}, "Breakout bar body >= 0.8 ATR (D)"),
+    "deeper_entry": ({"entry_depth": 0.25}, "Limit 25% deeper into the trigger bar"),
+    "regime": ({"regime_routing": True}, "Trend setups in trends, range in ranges"),
+    "all_filters": ({"premium_discount": True, "htf_strict": True, "news_blackout": True,
+                     "swing_alternate": True, "min_swing_atr": 0.75, "regime_routing": True},
+                    "All filters together (not entry depth)"),
+}
+TRIALS = 4 + len(SETUP_VARIANTS)       # execution variants + setup variants
+
 VARIANT_LABELS = {
     "base": "Limit entry, full target",
     "taker_entry": "Market entry at next open",
@@ -50,7 +66,7 @@ def _bench_summary(bench: dict) -> dict:
 
 def run_backtest(symbols: list[str], years: float = 2.0, cfg: V2Config = V2Config(),
                  ex: ExecConfig = ExecConfig(), root: str = "data/lake",
-                 log=print, benchmarks: bool = True) -> dict:
+                 log=print, benchmarks: bool = True, setup_variants: bool = True) -> dict:
     end = pd.Timestamp.now("UTC").tz_localize(None).normalize()
     start = end - pd.Timedelta(days=int(years * 365))
     warm = start - pd.Timedelta(days=40)     # indicators need history before the window
@@ -58,6 +74,7 @@ def run_backtest(symbols: list[str], years: float = 2.0, cfg: V2Config = V2Confi
     from collections import defaultdict
     bench: dict[str, list] = defaultdict(list)
     variant_trades: dict[str, list] = defaultdict(list)
+    setup_trades: dict[str, list] = defaultdict(list)
     for sym in symbols:
         sym = sym.upper()
         # Only the columns the setups use: the archive's other seven columns
@@ -77,6 +94,13 @@ def run_backtest(symbols: list[str], years: float = 2.0, cfg: V2Config = V2Confi
         for name, vex in VARIANTS.items():
             variant_trades[name] += (trades if name == "base"
                                      else simulate(cands, frames["5m"], vex))
+        if setup_variants:
+            for name, (flags, _) in SETUP_VARIANTS.items():
+                vcfg = replace(cfg, **flags)
+                vc = [c for c in generate(sym.lower(), frames["5m"], frames["15m"],
+                                          frames["4h"], frames["1d"], funding, vcfg)
+                      if c.ts >= start]
+                setup_trades[name] += simulate(vc, frames["5m"], ex)
         if benchmarks:
             from analysis.ft_bench import STRATEGIES, resample, run_strategy
             for st in STRATEGIES:
@@ -106,16 +130,23 @@ def run_backtest(symbols: list[str], years: float = 2.0, cfg: V2Config = V2Confi
                                                    if t.setup == c and t.side == s],
                                                   mc=False))
                           for c in cfg.setups for s in ("long", "short")},
-        "overall": grade(all_trades, n_trials=len(VARIANTS)),
+        "overall": grade(all_trades, n_trials=TRIALS),
         # The same candidates under each execution variant: what the limit
         # entry costs (vs taker), and what breakeven / partial exits do to
         # win rate AND expectancy. Every variant counts as a trial.
         "variants": {name: {
             "label": VARIANT_LABELS[name],
-            "overall": _small(grade(vt, mc=False, n_trials=len(VARIANTS))),
+            "overall": _small(grade(vt, mc=False, n_trials=TRIALS)),
             "setups": {c: grade([t for t in vt if t.setup == c], mc=False,
-                                n_trials=len(VARIANTS))["stats"] for c in cfg.setups}}
+                                n_trials=TRIALS)["stats"] for c in cfg.setups}}
             for name, vt in variant_trades.items()},
+        # One research filter at a time (and all together), base execution.
+        "setup_variants": {name: {
+            "label": SETUP_VARIANTS[name][1],
+            "overall": _small(grade(vt, mc=False, n_trials=TRIALS)),
+            "setups": {c: grade([t for t in vt if t.setup == c], mc=False,
+                                n_trials=TRIALS)["stats"] for c in cfg.setups}}
+            for name, vt in setup_trades.items()},
         # Freqtrade community strategies on the same data and costs (1x spot,
         # long-only, percent per trade): the bar v2 has to clear.
         "benchmarks": _bench_summary(bench),

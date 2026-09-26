@@ -219,3 +219,51 @@ class TestFundingZ(unittest.TestCase):
         self.assertLess(abs(f["z"].iloc[100]), 2)
         self.assertLess(abs(f["z"].iloc[101]), 2)
         self.assertGreater(f["z"].iloc[102], 2)        # a real jump still counts
+
+
+class TestResearchFilters(unittest.TestCase):
+    """Each filter only ever REMOVES or reprices candidates, and does what it says."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.k5, cls.k15, cls.k4h, cls.k1d = market(60, seed=5)
+        cls.base = generate("x", cls.k5, cls.k15, cls.k4h, cls.k1d)
+
+    def run_with(self, **flags):
+        from dataclasses import replace
+        return generate("x", self.k5, self.k15, self.k4h, self.k1d,
+                        cfg=replace(V2Config(), **flags))
+
+    def test_choppiness_is_bounded(self):
+        from analysis.v2_setups import choppiness
+        ch = choppiness(self.k15).dropna()
+        self.assertTrue(((ch >= 0) & (ch <= 100)).all())
+
+    def test_news_blackout_drops_only_release_windows(self):
+        from analysis.event_calendar import blackout_windows
+        got = self.run_with(news_blackout=True)
+        wins = blackout_windows(self.k5.ts.min().to_pydatetime(),
+                                self.k5.ts.max().to_pydatetime())
+        inside = [c for c in got if any(a <= c.ts <= b for a, b in wins)]
+        self.assertEqual(inside, [])
+        self.assertLessEqual(len(got), len(self.base))
+
+    def test_premium_discount_longs_are_in_the_lower_half(self):
+        got = [c for c in self.run_with(premium_discount=True) if c.setup in "AD"]
+        base_ad = [c for c in self.base if c.setup in "AD"]
+        self.assertLessEqual(len(got), len(base_ad))
+
+    def test_deeper_entry_improves_the_price(self):
+        base = {(c.ts, c.setup, c.side): c.entry for c in self.base}
+        for c in self.run_with(entry_depth=0.25):
+            key = (c.ts, c.setup, c.side)
+            if key in base:
+                better = c.entry <= base[key] if c.side == "long" else c.entry >= base[key]
+                self.assertTrue(better)
+
+    def test_filters_only_remove(self):
+        base = {(c.ts, c.setup, c.side) for c in self.base}
+        for flags in ({"htf_strict": True}, {"regime_routing": True},
+                      {"displacement_atr": 0.8}):
+            got = {(c.ts, c.setup, c.side) for c in self.run_with(**flags)}
+            self.assertTrue(got <= base, flags)

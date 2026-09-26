@@ -271,6 +271,17 @@ async function loadBacktest(){
       +'<th>Avg win / loss</th><th>PF</th><th>Windows up</th><th>Gate</th></tr>';
     Object.values(vs).forEach(v=>{h+=row(v.label,v.overall);});
     h+='</table></div>'; }
+  const sv=r.setup_variants||{};
+  if(Object.keys(sv).length){
+    h+='<h2 style="margin-top:16px">Research filters, one at a time</h2>'
+      +'<p class="muted" style="font-size:12px;margin-bottom:8px">Each row changes one rule from '
+      +'the research and re-runs everything. A filter is worth keeping only if profit per '
+      +'trade rises, not just win rate.</p>'
+      +'<div class="tbl"><table><tr><th></th><th>Trades</th><th>Win</th><th>Per trade</th>'
+      +'<th>Avg win / loss</th><th>PF</th><th>Windows up</th><th>Gate</th></tr>'
+      +row('Base (for comparison)',r.overall);
+    Object.values(sv).forEach(v=>{h+=row(v.label,v.overall);});
+    h+='</table></div>'; }
   const bm=r.benchmarks||{};
   if(Object.keys(bm).length){
     h+='<h2 style="margin-top:16px">Freqtrade community strategies, same data and costs</h2>'

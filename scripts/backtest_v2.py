@@ -90,6 +90,9 @@ def main() -> int:
     print("\n  Execution variants, same candidates:")
     for name, v in report.get("variants", {}).items():
         print(_line(v["label"][:22], v["overall"]))
+    print("\n  Research filters, one at a time (base execution):")
+    for name, v in report.get("setup_variants", {}).items():
+        print(_line(v["label"][:22], v["overall"]))
     print("\n  Freqtrade community strategies, same data and costs (1x, long-only, per trade):")
     for name, b in report.get("benchmarks", {}).items():
         if not b.get("trades"):
