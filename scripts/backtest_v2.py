@@ -87,6 +87,15 @@ def main() -> int:
         print(_line(f"  {sym}", g))
     g = report["overall"]
     print(_line("ALL", g))
+    print("\n  Freqtrade community strategies, same data and costs (1x, long-only, per trade):")
+    for name, b in report.get("benchmarks", {}).items():
+        if not b.get("trades"):
+            print(f"  {name:22} no trades")
+            continue
+        print(f"  {name:22} {b['trades']:5} trades  win {b['win_rate'] * 100:5.1f}%  "
+              f"avg {b['avg_pct']:+.3f}%  win {b['avg_win_pct']:+.2f}% / loss "
+              f"{b['avg_loss_pct']:+.2f}%  PF {b['profit_factor']}  "
+              f"compounded {b['compounded_pct']:+.1f}%  [{b['timeframe']}]")
     if g["monte_carlo"]:
         mc = g["monte_carlo"]
         print(f"\n  Monte Carlo at {mc['risk_pct_per_trade']}% risk/trade: median final "

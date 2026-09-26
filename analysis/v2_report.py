@@ -29,13 +29,21 @@ def _small(g: dict) -> dict:
             "promote_to_paper": g["promote_to_paper"]}
 
 
+def _bench_summary(bench: dict) -> dict:
+    from analysis.ft_bench import STRATEGIES, summarise
+    return {st.name: dict(summarise(bench.get(st.name, [])), timeframe=st.timeframe,
+                          source=st.source) for st in STRATEGIES}
+
+
 def run_backtest(symbols: list[str], years: float = 2.0, cfg: V2Config = V2Config(),
                  ex: ExecConfig = ExecConfig(), root: str = "data/lake",
-                 log=print) -> dict:
+                 log=print, benchmarks: bool = True) -> dict:
     end = pd.Timestamp.now("UTC").tz_localize(None).normalize()
     start = end - pd.Timedelta(days=int(years * 365))
     warm = start - pd.Timedelta(days=40)     # indicators need history before the window
     all_trades, per_symbol, missing = [], {}, []
+    from collections import defaultdict
+    bench: dict[str, list] = defaultdict(list)
     for sym in symbols:
         sym = sym.upper()
         # Only the columns the setups use: the archive's other seven columns
@@ -52,6 +60,14 @@ def run_backtest(symbols: list[str], years: float = 2.0, cfg: V2Config = V2Confi
                                      frames["1d"], funding, cfg) if c.ts >= start]
         trades = simulate(cands, frames["5m"], ex)
         all_trades += trades
+        if benchmarks:
+            from analysis.ft_bench import STRATEGIES, resample, run_strategy
+            for st in STRATEGIES:
+                df = resample(frames["15m"], "1h") if st.timeframe == "1h" \
+                    else frames[st.timeframe]
+                bench[st.name] += [t for t in run_strategy(st, df, fee=ex.taker,
+                                                           stop_slip=ex.stop_slip)
+                                   if pd.Timestamp(t["entry_at"]) >= start]
         per_symbol[sym] = _small(grade(trades, mc=False))
         log(f"{sym}: {len(cands)} candidates, {len(trades)} filled trades")
         del frames, funding, cands
@@ -74,6 +90,9 @@ def run_backtest(symbols: list[str], years: float = 2.0, cfg: V2Config = V2Confi
                                                   mc=False))
                           for c in cfg.setups for s in ("long", "short")},
         "overall": grade(all_trades),
+        # Freqtrade community strategies on the same data and costs (1x spot,
+        # long-only, percent per trade): the bar v2 has to clear.
+        "benchmarks": _bench_summary(bench),
         "trades": trades_to_rows(all_trades),
     }
     return report

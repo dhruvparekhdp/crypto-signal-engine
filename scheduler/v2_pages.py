@@ -231,10 +231,12 @@ function statCard(title,s,g){ if(!s||!s.trades) return '<div class="stat"><span 
 function row(label,g){ const s=(g||{}).stats||{}; if(!s.trades) return '<tr><td>'+esc(label)
   +'</td><td colspan="7" class="muted">no trades</td></tr>';
   return '<tr><td>'+esc(label)+'</td><td>'+s.trades+'</td><td>'+Math.round(s.win_rate*100)+'%</td>'
-  +'<td class="'+(s.expectancy_r>=0?'pos':'neg')+'">'+(s.expectancy_r>=0?'+':'')+s.expectancy_r+'R</td>'
+  +'<td class="'+(s.expectancy_r>=0?'pos':'neg')+'">'
+  +(s.expectancy_r>=0?'+':'')+s.expectancy_r+'R</td>'
   +'<td>+'+s.avg_win_r+'R / '+s.avg_loss_r+'R</td><td>'+(s.profit_factor??'—')+'</td>'
   +'<td>'+Math.round((g.positive_windows||0)*100)+'%</td><td>'
-  +(g.promote_to_paper?'<span class="ok">PROMOTE</span>':'<span class="muted">hold</span>')+'</td></tr>'; }
+  +(g.promote_to_paper?'<span class="ok">PROMOTE</span>':'<span class="muted">hold</span>')
+  +'</td></tr>'; }
 async function loadBacktest(){
   const d=await (await fetch('/api/v2/backtest')).json(); const r=d.report, st=d.state||{};
   const busy=st.running?' · <b>running now ('+esc(st.stage||'')+')</b>':'';
@@ -254,7 +256,22 @@ async function loadBacktest(){
   Object.entries(r.by_setup_side||{}).forEach(([k,g])=>{ if((g.stats||{}).trades)
     h+=row(k.replace('_',' '),g);});
   Object.entries(r.by_symbol||{}).forEach(([k,g])=>{h+=row(k,g);});
-  h+='</table></div><p style="margin-top:10px"><button class="nav-btn" onclick="runBt()">'
+  h+='</table></div>';
+  const bm=r.benchmarks||{};
+  if(Object.keys(bm).length){
+    h+='<h2 style="margin-top:16px">Freqtrade community strategies, same data and costs</h2>'
+      +'<p class="muted" style="font-size:12px;margin-bottom:8px">Published rules from '
+      +'freqtrade-strategies, long-only at 1x, per trade after fees. The bar v2 has to clear.</p>'
+      +'<div class="tbl"><table><tr><th>Strategy</th><th>TF</th><th>Trades</th><th>Win</th>'
+      +'<th>Per trade</th><th>Avg win / loss</th><th>PF</th><th>Compounded</th></tr>';
+    Object.entries(bm).forEach(([k,b])=>{ h+='<tr><td>'+esc(k)+'</td><td>'+esc(b.timeframe)+'</td>'
+      +(b.trades?'<td>'+b.trades+'</td><td>'+Math.round(b.win_rate*100)+'%</td><td class="'
+      +(b.avg_pct>=0?'pos':'neg')+'">'+(b.avg_pct>=0?'+':'')+b.avg_pct+'%</td><td>+'
+      +b.avg_win_pct+'% / '+b.avg_loss_pct+'%</td><td>'+(b.profit_factor??'—')+'</td><td>'
+      +(b.compounded_pct>=0?'+':'')+b.compounded_pct+'%</td>'
+      :'<td colspan="6" class="muted">no trades</td>')+'</tr>'; });
+    h+='</table></div>'; }
+  h+='<p style="margin-top:10px"><button class="nav-btn" onclick="runBt()">'
     +'Run again now (admin)</button></p></section>';
   return h; }
 async function runBt(){ const r=await fetch('/api/v2/backtest/run',{method:'POST'});
