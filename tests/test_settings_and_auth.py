@@ -166,3 +166,44 @@ async def test_settings_api_endpoints(mem_sessionmaker):
 
         finally:
             await client.close()
+
+
+@pytest.mark.asyncio
+async def test_update_paper_config_does_not_re_read_after_committing():
+    """
+    27 Sep: update_paper_config() called session.refresh(cfg) right after
+    committing changes it had just made with plain setattr() — a second
+    round trip to re-read values already correct in memory (the session
+    factory runs with expire_on_commit=False, so nothing invalidates them
+    on commit). On a slow database this was a third of a Settings save.
+
+    Counted at the engine's own event hook (every real statement sent to
+    the database), not by wrapping Session.execute — Session-level ORM
+    calls (get(), refresh()) do not all route through the same method, so
+    only counting at the connection is reliable.
+    """
+    from sqlalchemy import event
+    from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+    sm = async_sessionmaker(engine, expire_on_commit=False)
+    try:
+        async with sm() as session:
+            await Repository(session).get_paper_config()   # seed the row first
+
+        statements = []
+        event.listen(engine.sync_engine, "before_cursor_execute",
+                     lambda *a: statements.append(a[2]))
+
+        async with sm() as session:
+            cfg = await Repository(session).update_paper_config(starting_wallet=1234.0)
+        assert cfg.starting_wallet == 1234.0    # correct without a refresh
+
+        selects = [s for s in statements if s.strip().upper().startswith("SELECT")]
+        # One SELECT to find the row (get_paper_config) — no second SELECT
+        # afterwards to re-read what update_paper_config had just written.
+        assert len(selects) == 1
+    finally:
+        await engine.dispose()

@@ -340,10 +340,15 @@ function markP(k,v){paperChanges[k]=v;document.getElementById('p-'+k).classList.
 function bar(){const n=Object.keys(changes).length+Object.keys(paperChanges).length;
   document.getElementById('dirty').textContent=n?n+' unsaved change'+(n>1?'s':''):'No changes';
   document.getElementById('save').disabled=!n;}
-async function load(){
-  const d=await fetch('/api/app-settings').then(r=>r.json());
-  FIELDS=d.fields;
-  document.getElementById('sources').innerHTML=(d.sources_on||[]).map(s=>'<span>'+esc(s)+'</span>').join('');
+const PAPER_FIELDS=[['enabled','Paper trading on','bool'],['starting_wallet','Starting wallet (₹)','num'],
+  ['target_wallet','Target wallet (₹)','num'],['leverage','Base leverage','num'],
+  ['max_leverage','Max leverage','num'],['min_confidence','Min confidence','num'],
+  ['max_concurrent','Max open trades','num'],['max_hold_minutes','Max hold (min)','num'],
+  ['sizing_floor_pct','Position size at weak confidence (0-1 of wallet)','num'],
+  ['sizing_ceiling_pct','Position size at strong confidence (0-1 of wallet)','num'],
+  ['trailing_enabled','Trailing stop','bool'],['alert_telegram','Telegram alerts','bool']];
+function renderGroups(){
+  document.getElementById('sources').innerHTML=(LAST_SOURCES_ON||[]).map(s=>'<span>'+esc(s)+'</span>').join('');
   const groups={}; FIELDS.forEach(f=>(groups[f.group_label]=groups[f.group_label]||[]).push(f));
   const icons={'Market data':'📡','Signals':'📈','Exits (profit lock)':'🔒','Protections':'🛡️','AI':'🤖','v2 strategy':'🧭','Storage':'🗄️','API keys':'🔑'};
   const groupNote={'API keys':'Paste a new key and save — leave a box blank to keep '
@@ -358,6 +363,8 @@ async function load(){
     +'<div class="b">'+(f.live?'':'<span class="tag acc">restart</span>')
     +(f.source==='saved'?'<span class="tag">saved</span>':'<span class="tag">default</span>')
     +'</div></div><div>'+control(f)+'</div></div>').join('')+'</div></details>').join('');
+}
+function renderModels(d){
   const act=d.models_activity||{};
   document.getElementById('models').innerHTML=Object.entries(d.models||{}).map(([role,chain])=>{
     const a=act[role]||{};
@@ -372,32 +379,50 @@ async function load(){
     +'<p class="small muted">Chain order (LLM_CHAIN_*) is set in .env; the keys those providers '
     +'use are in the API keys section above. "Last answered by" is what actually served the most '
     +'recent calls, not just what is configured — the way to see whether a fallback is firing.</p>';
-  PAPER=await fetch('/api/paper/config').then(r=>r.json()).catch(()=>({}));
-  const P=[['enabled','Paper trading on','bool'],['starting_wallet','Starting wallet (₹)','num'],
-    ['target_wallet','Target wallet (₹)','num'],['leverage','Base leverage','num'],
-    ['max_leverage','Max leverage','num'],['min_confidence','Min confidence','num'],
-    ['max_concurrent','Max open trades','num'],['max_hold_minutes','Max hold (min)','num'],
-    ['sizing_floor_pct','Position size at weak confidence (0-1 of wallet)','num'],
-    ['sizing_ceiling_pct','Position size at strong confidence (0-1 of wallet)','num'],
-    ['trailing_enabled','Trailing stop','bool'],['alert_telegram','Telegram alerts','bool']];
-  document.getElementById('paper').innerHTML=P.map(([k,l,t])=>'<div class="row inset" id="p-'+k+'"><div>'
+}
+function renderPaper(){
+  document.getElementById('paper').innerHTML=PAPER_FIELDS.map(([k,l,t])=>'<div class="row inset" id="p-'+k+'"><div>'
     +'<div class="l">'+l+'</div></div><div>'+(t==='bool'
       ?'<label class="sw"><input type="checkbox"'+(PAPER[k]?' checked':'')+' onchange="markP(\''+k+'\',this.checked)"><span></span></label>'
       :'<input class="num inset" type="number" step="any" value="'+esc(PAPER[k])+'" onchange="markP(\''+k+'\',Number(this.value))">')
     +'</div></div>').join('');
 }
+let LAST_SOURCES_ON=[];
+async function load(){
+  const d=await fetch('/api/app-settings').then(r=>r.json());
+  FIELDS=d.fields; LAST_SOURCES_ON=d.sources_on;
+  renderGroups();
+  renderModels(d);
+  PAPER=await fetch('/api/paper/config').then(r=>r.json()).catch(()=>({}));
+  renderPaper();
+}
 async function save(){
+  // Patch what the server now has straight into local state and re-render
+  // from it — no re-fetch. GET /api/app-settings alone runs six queries
+  // (last-answered-by per AI role) that have nothing to do with a plain
+  // settings save; re-running it and GET /api/paper/config after every
+  // save, on a database this slow, was most of a 20-second wait for two
+  // numbers that had already just been sent.
   let msg=[];
   if(Object.keys(changes).length){
     const r=await fetch('/api/app-settings',{method:'POST',headers:H(),body:JSON.stringify({values:changes})});
     const d=await r.json();
     if(!r.ok){toast(r.status===401?'Log in first':(d.error||'Not saved'));return;}
-    msg.push('Saved '+d.applied.length+(d.needs_restart.length?' ('+d.needs_restart.length+' after restart)':''));}
+    msg.push('Saved '+d.applied.length+(d.needs_restart.length?' ('+d.needs_restart.length+' after restart)':''));
+    for(const k of d.applied){
+      const f=FIELDS.find(x=>x.key===k); if(!f) continue;
+      f.source='saved';
+      if(f.kind==='secret') f.is_set=true; else f.value=changes[k];
+    }
+  }
   if(Object.keys(paperChanges).length){
     const r=await fetch('/api/paper/config',{method:'POST',headers:H(),body:JSON.stringify(paperChanges)});
     if(!r.ok){toast(r.status===401?'Log in first':'Paper settings not saved');return;}
-    msg.push('paper settings saved');}
-  changes={};paperChanges={};bar();await load();toast(msg.join(', '));}
+    msg.push('paper settings saved');
+    Object.assign(PAPER,paperChanges);}
+  changes={};paperChanges={};bar();
+  renderGroups();renderPaper();
+  toast(msg.join(', '));}
 async function perf(){
   const r=await fetch('/api/debug/perf',{headers:H()}); if(!r.ok) return;
   const d=await r.json(); const el=document.getElementById('perf');

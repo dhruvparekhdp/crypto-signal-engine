@@ -197,6 +197,69 @@ class TestApi(unittest.TestCase):
 
         asyncio.run(run())
 
+    def test_saving_several_settings_at_once_is_one_round_trip_not_n(self):
+        """
+        27 Sep: save_app_settings() looked up each changed key with its own
+        session.get() — one database round trip per setting before a single
+        row was written. On a database with a ~1.5s round trip, saving five
+        settings and five paper-config fields in one click cost most of a
+        20-second wait. Batched into one SELECT ... WHERE key IN (...).
+        """
+        os.environ["DATABASE_URL"] = f"sqlite+aiosqlite:///{tempfile.mktemp(suffix='.db')}"
+
+        async def run():
+            import storage.database as database
+            from storage.database import AsyncSessionFactory, init_db
+            from storage.repository import Repository
+
+            await init_db()
+            # One key pre-existing (an update), two new (an insert) — the
+            # mixed case the old per-key loop and the new batched one must
+            # agree on.
+            async with AsyncSessionFactory() as s:
+                await Repository(s).save_app_settings({"session_end_utc": 20})
+
+            executes = []
+            async with AsyncSessionFactory() as s:
+                real_execute = s.execute
+                async def counting_execute(*a, **k):
+                    executes.append(1)
+                    return await real_execute(*a, **k)
+                s.execute = counting_execute
+                await Repository(s).save_app_settings(
+                    {"session_end_utc": 22, "crypto_min_confidence": 0.6,
+                     "high_conviction_only": True})
+            # One SELECT for the batch lookup — not one per key (would be 3).
+            self.assertEqual(len(executes), 1)
+
+            async with AsyncSessionFactory() as s:
+                stored = await Repository(s).get_app_settings()
+            self.assertEqual(stored["session_end_utc"], 22)             # updated
+            self.assertEqual(stored["crypto_min_confidence"], 0.6)      # inserted
+            self.assertEqual(stored["high_conviction_only"], True)      # inserted
+
+            await database.engine.dispose()
+
+        asyncio.run(run())
+
+    def test_saving_nothing_touches_the_database_not_at_all(self):
+        os.environ["DATABASE_URL"] = f"sqlite+aiosqlite:///{tempfile.mktemp(suffix='.db')}"
+
+        async def run():
+            import storage.database as database
+            from storage.database import AsyncSessionFactory, init_db
+            from storage.repository import Repository
+
+            await init_db()
+            async with AsyncSessionFactory() as s:
+                executed = []
+                s.execute = lambda *a, **k: executed.append(1)
+                await Repository(s).save_app_settings({})
+            self.assertEqual(executed, [])
+            await database.engine.dispose()
+
+        asyncio.run(run())
+
 
 if __name__ == "__main__":
     unittest.main()

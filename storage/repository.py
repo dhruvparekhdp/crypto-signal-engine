@@ -581,12 +581,18 @@ class Repository:
         return cfg
 
     async def update_paper_config(self, **kwargs) -> PaperTradingConfig:
+        """
+        No refresh() after the commit: every field just set with setattr()
+        is already correct in memory (none of them are server-computed), so
+        the refresh was a second round trip to re-read exactly what this
+        call had just written — on a database this slow, that alone was a
+        third of a Settings save.
+        """
         cfg = await self.get_paper_config()
         for k, v in kwargs.items():
             if hasattr(cfg, k) and v is not None:
                 setattr(cfg, k, v)
         await self.session.commit()
-        await self.session.refresh(cfg)
         return cfg
 
     # ── Strategy & Runtime Config ──────────────────────────────────────────
@@ -959,11 +965,23 @@ class Repository:
         return out
 
     async def save_app_settings(self, values: dict) -> None:
+        """
+        One SELECT for every changed key, one commit — not one SELECT per
+        key. The old loop paid this database's round trip once per setting,
+        so five changed settings on one Settings page save cost six round
+        trips (five lookups plus the commit) before a single row was
+        written; saving five settings and five paper-config fields in the
+        same click was most of a 20-second save.
+        """
         import json
 
         from storage.models import AppSetting
+        if not values:
+            return
+        existing = {row.key: row for row in (await self.session.execute(
+            select(AppSetting).where(AppSetting.key.in_(values.keys())))).scalars()}
         for key, value in values.items():
-            row = await self.session.get(AppSetting, key)
+            row = existing.get(key)
             if row is None:
                 self.session.add(AppSetting(key=key, value=json.dumps(value)))
             else:
