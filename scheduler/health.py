@@ -744,6 +744,32 @@ async def _api_debug_coindcx(runner, request: web.Request) -> web.Response:
                         content_type="application/json")
 
 
+async def _paper_db_snapshot() -> dict:
+    """
+    The part of /api/paper that only changes when a trade opens, closes, or
+    the tick runs — cached for a few seconds. Mark price and everything
+    computed from it is never in here: that has to be the live price on
+    every single request, cache or not, or "unrealised P&L" would be
+    lying by however far the market moved since the cache was filled.
+    """
+    from storage.database import AsyncSessionFactory
+    from storage.repository import Repository
+
+    async def fetch():
+        async with AsyncSessionFactory() as session:
+            repo = Repository(session)
+            cycle = await repo.get_running_cycle()
+            if cycle is None:
+                return {"cycle": None, "recent": await repo.get_recent_cycles(limit=5)}
+            rows = await repo.get_open_positions(cycle.id)
+            trades = await repo.get_cycle_trades(cycle.id, limit=200)
+            running = await repo.running_cycles()
+            return {"cycle": cycle, "rows": rows, "trades": trades, "running": running}
+
+    from scheduler import cache
+    return await cache.cached("paper_db_snapshot", 4.0, fetch)
+
+
 async def _api_paper(runner, request: web.Request) -> web.Response:
     """
     Live state of the paper-trading cycle: wallet, open positions, trade log.
@@ -753,29 +779,23 @@ async def _api_paper(runner, request: web.Request) -> web.Response:
     every position look better than closing it would actually be.
     """
     from analysis.paper_cycle import config_for_cycle, fees_for, summarise
-    from storage.database import AsyncSessionFactory
-    from storage.repository import Repository
 
-    async with AsyncSessionFactory() as session:
-        repo = Repository(session)
-        cycle = await repo.get_running_cycle()
-        if cycle is None:
-            recent = await repo.get_recent_cycles(limit=5)
-            return web.Response(
-                text=json.dumps({
-                    "running": False,
-                    "enabled": _SETTINGS.paper_trading_enabled,
-                    "past_cycles": [_cycle_row(c) for c in recent],
-                }),
-                content_type="application/json")
+    snap = await _paper_db_snapshot()
+    cycle = snap["cycle"]
+    if cycle is None:
+        return web.Response(
+            text=json.dumps({
+                "running": False,
+                "enabled": _SETTINGS.paper_trading_enabled,
+                "past_cycles": [_cycle_row(c) for c in snap["recent"]],
+            }),
+            content_type="application/json")
 
-        rows = await repo.get_open_positions(cycle.id)
-        trades = await repo.get_cycle_trades(cycle.id, limit=200)
-        cfg = config_for_cycle(cycle)
-        # More than one cycle claiming to be running means trades are being
-        # split across them: the page reads the newest and a trade announced
-        # on Telegram can be missing here with nothing to explain it.
-        running = await repo.running_cycles()
+    # More than one cycle claiming to be running means trades are being
+    # split across them: the page reads the newest and a trade announced
+    # on Telegram can be missing here with nothing to explain it.
+    rows, trades, running = snap["rows"], snap["trades"], snap["running"]
+    cfg = config_for_cycle(cycle)
 
     states = {st.symbol: st for st in await runner.crypto_store.get_all()}
     positions = []
@@ -5458,13 +5478,16 @@ async def _compress_middleware(request: web.Request, handler):
 
 async def _api_debug_perf(runner, request: web.Request) -> web.Response:
     """GET /api/debug/perf — slowest routes, slowest jobs, event-loop stalls, DB ping."""
+    from scheduler import cache
     from scheduler.perf import report
     if not await _verify_admin_session(request):
         from scheduler.security import check_bearer_auth
         denied = check_bearer_auth(request, _SETTINGS.api_auth_token)
         if denied is not None:
             return denied
-    return web.json_response(report())
+    body = report()
+    body["cache_age_s"] = cache.stats()
+    return web.json_response(body)
 
 
 async def make_app(runner) -> web.Application:

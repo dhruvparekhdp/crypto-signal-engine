@@ -112,6 +112,14 @@ class TestOverrides(unittest.TestCase):
 
 
 class TestApi(unittest.TestCase):
+    def setUp(self):
+        # GET /api/app-settings caches its DB-backed part for a few seconds
+        # (scheduler/cache.py) — a process-wide dict, so a value another
+        # test cached moments ago would otherwise leak into this one's
+        # supposedly fresh read.
+        from scheduler import cache
+        cache.clear()
+
     def test_save_is_stored_applied_and_reaches_the_runner(self):
         os.environ["DATABASE_URL"] = f"sqlite+aiosqlite:///{tempfile.mktemp(suffix='.db')}"
 

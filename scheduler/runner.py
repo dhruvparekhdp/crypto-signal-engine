@@ -594,6 +594,10 @@ class AppRunner:
                         await self.notifier.send_text(
                             format_cycle_end(cycle, outcome, summarise(trades, wallet, cfg)),
                             parse_mode=ParseMode.HTML)
+            # A just-opened or just-closed trade should show up the moment
+            # this tick commits, not after /api/paper's cache expires.
+            from scheduler import cache
+            cache.invalidate("paper_db_snapshot")
         except Exception:
             log.exception("paper_trading_job_failed")
 

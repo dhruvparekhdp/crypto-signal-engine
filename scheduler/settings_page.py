@@ -65,19 +65,37 @@ async def _recent_activity(session_factory) -> dict:
            for role, r in zip(jobs, results, strict=True)}
 
 
+async def _settings_db_read(session_factory) -> dict:
+    """
+    Both DB-backed pieces of /api/app-settings — saved overrides and which
+    AI provider last answered each role — cached a few seconds. Everything
+    else in the response (settings.<field>, chain_for()) reads the live
+    Python objects directly, no DB and no cache needed: apply() already
+    updates them the instant a save lands, so they are never stale.
+    """
+    from storage.repository import Repository
+
+    async def fetch():
+        async with session_factory() as session:
+            stored = await Repository(session).get_app_settings()
+        return {"stored": stored, "activity": await _recent_activity(session_factory)}
+
+    from scheduler import cache
+    return await cache.cached("app_settings_db", 8.0, fetch)
+
+
 def settings_api(runner):
     async def get(request: web.Request) -> web.Response:
         from collectors.llm_client import chain_for
         from config.overrides import describe
         from config.settings import settings
         from storage.database import AsyncSessionFactory
-        from storage.repository import Repository
-        async with AsyncSessionFactory() as session:
-            stored = await Repository(session).get_app_settings()
+
+        db = await _settings_db_read(AsyncSessionFactory)
+        stored, activity = db["stored"], db["activity"]
         roles = ("pre_trade", "position_review", "post_trade", "briefing", "attribution",
                  "news_scoring", "history")
         models = {r: [f"{p}:{m}" for p, m in chain_for(r)] for r in roles}
-        activity = await _recent_activity(AsyncSessionFactory)
         live_sources = sorted(k for k, v in (getattr(runner, "collector_enabled", {}) or {}).items()
                               if v)
         if settings.binance_klines_enabled:
@@ -116,8 +134,11 @@ def settings_api(runner):
             values[key] = coerced
         if errors:
             return web.json_response({"error": "; ".join(errors)}, status=400)
-        async with AsyncSessionFactory() as session:
-            await Repository(session).save_app_settings(values)
+        if values:
+            async with AsyncSessionFactory() as session:
+                await Repository(session).save_app_settings(values)
+            from scheduler import cache
+            cache.invalidate("app_settings_db")   # a save must be visible now, not in up to 8s
         applied = apply(settings, values)
         if hasattr(runner, "on_settings_changed"):
             runner.on_settings_changed(applied)

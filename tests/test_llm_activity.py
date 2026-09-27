@@ -71,7 +71,8 @@ class TestSettingsPageShowsRecentActivity(unittest.TestCase):
         async def go():
             from types import SimpleNamespace
 
-            from scheduler import settings_page
+            from scheduler import cache, settings_page
+            cache.clear()   # GET /api/app-settings caches its DB read briefly
 
             await init_db()
             sym = f"activity{uuid.uuid4().hex[:8]}usdt"
