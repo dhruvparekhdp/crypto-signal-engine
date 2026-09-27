@@ -3334,6 +3334,8 @@ async def _api_paper_config_get(runner, request: web.Request) -> web.Response:
             "max_leverage": cfg.max_leverage,
             "usdt_inr": cfg.usdt_inr,
             "alert_telegram": cfg.alert_telegram,
+            "sizing_floor_pct": cfg.sizing_floor_pct,
+            "sizing_ceiling_pct": cfg.sizing_ceiling_pct,
         })
 
 
@@ -3365,6 +3367,10 @@ async def _api_paper_config_post(runner, request: web.Request) -> web.Response:
                 max_leverage=float(body["max_leverage"]) if "max_leverage" in body else None,
                 usdt_inr=float(body["usdt_inr"]) if "usdt_inr" in body else None,
                 alert_telegram=bool(body["alert_telegram"]) if "alert_telegram" in body else None,
+                sizing_floor_pct=(float(body["sizing_floor_pct"])
+                                  if "sizing_floor_pct" in body else None),
+                sizing_ceiling_pct=(float(body["sizing_ceiling_pct"])
+                                    if "sizing_ceiling_pct" in body else None),
             )
             return web.json_response({"ok": True, "enabled": cfg.enabled, "starting_wallet": cfg.starting_wallet})
     except Exception as exc:

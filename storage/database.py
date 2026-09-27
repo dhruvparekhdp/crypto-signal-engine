@@ -97,13 +97,14 @@ async def init_db() -> None:
                 await repo.set_admin_password(admin_pwd.strip())
 
 
-async def _migrate_columns(conn) -> None:
-    """
-    Idempotent column migrations — ADD COLUMN IF NOT EXISTS for every column
-    added after the initial table creation. Safe to run on every startup.
-    PostgreSQL 9.6+ supports IF NOT EXISTS on ADD COLUMN.
-    """
-    migrations = [
+# A module-level list, not a local inside _migrate_columns, so a test can
+# assert on the actual strings the app will run — SQLite has never
+# supported "ADD COLUMN IF NOT EXISTS" at all (any version), so nothing
+# short of PostgreSQL can execute these to prove they are right; the
+# nearest a test gets is reading the real list, not scraping source text
+# for a substring that may not even be one Python string once concatenated
+# literals and comments are accounted for.
+_COLUMN_MIGRATIONS: list[str] = [
         # crypto_snapshots table
         """CREATE TABLE IF NOT EXISTS crypto_snapshots (
             id SERIAL PRIMARY KEY,
@@ -143,6 +144,10 @@ async def _migrate_columns(conn) -> None:
         "ALTER TABLE paper_cycles ADD COLUMN IF NOT EXISTS scaled_leverage BOOLEAN DEFAULT FALSE",
         "ALTER TABLE paper_cycles ADD COLUMN IF NOT EXISTS ladder_enabled BOOLEAN DEFAULT FALSE",
         "ALTER TABLE paper_cycles ADD COLUMN IF NOT EXISTS ladder_tight BOOLEAN DEFAULT FALSE",
+        "ALTER TABLE paper_cycles ADD COLUMN IF NOT EXISTS "
+        "sizing_floor_pct FLOAT DEFAULT 0.25",
+        "ALTER TABLE paper_cycles ADD COLUMN IF NOT EXISTS "
+        "sizing_ceiling_pct FLOAT DEFAULT 0.25",
         # paper_trading_config table — user configurable paper trading settings in DB
         """CREATE TABLE IF NOT EXISTS paper_trading_config (
             id INTEGER PRIMARY KEY,
@@ -197,6 +202,14 @@ async def _migrate_columns(conn) -> None:
         "CREATE INDEX IF NOT EXISTS ix_signal_reviews_briefing_id ON signal_reviews (briefing_id)",
         "INSERT INTO paper_trading_config (id) VALUES (1) ON CONFLICT (id) DO NOTHING",
         "ALTER TABLE paper_trading_config ADD COLUMN IF NOT EXISTS enabled BOOLEAN DEFAULT TRUE",
+        # Position sizing (27 Sep): margin % at the weak/strong end of the
+        # confidence scale, was hardcoded at 16.7%-50% and invisible on
+        # /settings. Both default to 0.25 — a flat 25% of wallet per trade
+        # until the owner widens the band again.
+        "ALTER TABLE paper_trading_config ADD COLUMN IF NOT EXISTS "
+        "sizing_floor_pct FLOAT DEFAULT 0.25",
+        "ALTER TABLE paper_trading_config ADD COLUMN IF NOT EXISTS "
+        "sizing_ceiling_pct FLOAT DEFAULT 0.25",
         # admin_auth table — password hash + salt + active session
         """CREATE TABLE IF NOT EXISTS admin_auth (
             id INTEGER PRIMARY KEY,
@@ -228,8 +241,16 @@ async def _migrate_columns(conn) -> None:
         # meantime was destroy the evidence: the exact rows worth studying were
         # gone before anyone could read them, on a schedule nobody remembered.
         # Bad rows are a diagnosis problem, not a startup chore.
-    ]
-    for sql in migrations:
+]
+
+
+async def _migrate_columns(conn) -> None:
+    """
+    Idempotent column migrations — ADD COLUMN IF NOT EXISTS for every column
+    added after the initial table creation. Safe to run on every startup.
+    PostgreSQL 9.6+ supports IF NOT EXISTS on ADD COLUMN.
+    """
+    for sql in _COLUMN_MIGRATIONS:
         try:
             await conn.execute(__import__("sqlalchemy").text(sql))
             await conn.commit()

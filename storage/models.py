@@ -261,6 +261,11 @@ class PaperCycle(Base):
     # Profit ladder: ratchet the stop as ROE crosses rungs.
     ladder_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
     ladder_tight: Mapped[bool] = mapped_column(Boolean, default=False)
+    # Position sizing (scaled_sizing above): margin % of wallet at the
+    # weak/strong end of the confidence scale. Stored per cycle, same
+    # reasoning as leverage above — an old cycle still says how it sized.
+    sizing_floor_pct: Mapped[float] = mapped_column(Float, default=0.25)
+    sizing_ceiling_pct: Mapped[float] = mapped_column(Float, default=0.25)
 
     # running | hit_target | busted | stopped
     status: Mapped[str] = mapped_column(String, default="running", index=True)
@@ -293,6 +298,11 @@ class PaperTradingConfig(Base):
     max_leverage: Mapped[float] = mapped_column(Float, default=25.0)
     usdt_inr: Mapped[float] = mapped_column(Float, default=102.0)
     alert_telegram: Mapped[bool] = mapped_column(Boolean, default=True)
+    # Share of wallet committed as margin at the weakest/strongest confidence
+    # scaled_sizing allows (analysis.paper_trading.SizingConfig). Equal means
+    # flat sizing — every trade the same %, confidence stops scaling it.
+    sizing_floor_pct: Mapped[float] = mapped_column(Float, default=0.25)
+    sizing_ceiling_pct: Mapped[float] = mapped_column(Float, default=0.25)
 
 
 # Columns that must never leave the database: not in a backup, not in the

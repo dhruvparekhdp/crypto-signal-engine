@@ -334,6 +334,8 @@ class AppRunner:
             scaled_leverage=pcfg.scaled_leverage,
             ladder_enabled=pcfg.ladder_enabled,
             ladder_tight=pcfg.ladder_tight,
+            sizing_floor_pct=pcfg.sizing_floor_pct,
+            sizing_ceiling_pct=pcfg.sizing_ceiling_pct,
         )
         log.info("paper_cycle_started", cycle_id=cycle.id,
                  wallet=cycle.starting_wallet, leverage=cycle.leverage)

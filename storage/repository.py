@@ -379,6 +379,8 @@ class Repository:
         scaled_leverage: bool = False,
         ladder_enabled: bool = False,
         ladder_tight: bool = False,
+        sizing_floor_pct: float = 0.25,
+        sizing_ceiling_pct: float = 0.25,
     ) -> PaperCycle:
         """
         Begin a cycle, recording the configuration it runs under.
@@ -402,6 +404,8 @@ class Repository:
             scaled_leverage=scaled_leverage,
             ladder_enabled=ladder_enabled,
             ladder_tight=ladder_tight,
+            sizing_floor_pct=sizing_floor_pct,
+            sizing_ceiling_pct=sizing_ceiling_pct,
             status="running",
         )
         self.session.add(cycle)

@@ -70,7 +70,9 @@ def config_for_cycle(row) -> CycleConfig:
         stop_pct_of_margin=row.stop_pct_of_margin,
         reward_risk=row.reward_risk,
         min_confidence=row.min_confidence,
-        sizing=SizingConfig() if row.scaled_sizing else None,
+        sizing=(SizingConfig(floor_margin_pct=row.sizing_floor_pct,
+                            ceiling_margin_pct=row.sizing_ceiling_pct)
+               if row.scaled_sizing else None),
         leverage_scaling=(LeverageConfig(ceiling_leverage=row.leverage)
                           if getattr(row, "scaled_leverage", False) else None),
         # The runner preset when trailing is on: arm at 0.75R, ride 1R behind

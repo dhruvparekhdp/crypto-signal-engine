@@ -377,6 +377,8 @@ async function load(){
     ['target_wallet','Target wallet (₹)','num'],['leverage','Base leverage','num'],
     ['max_leverage','Max leverage','num'],['min_confidence','Min confidence','num'],
     ['max_concurrent','Max open trades','num'],['max_hold_minutes','Max hold (min)','num'],
+    ['sizing_floor_pct','Position size at weak confidence (0-1 of wallet)','num'],
+    ['sizing_ceiling_pct','Position size at strong confidence (0-1 of wallet)','num'],
     ['trailing_enabled','Trailing stop','bool'],['alert_telegram','Telegram alerts','bool']];
   document.getElementById('paper').innerHTML=P.map(([k,l,t])=>'<div class="row inset" id="p-'+k+'"><div>'
     +'<div class="l">'+l+'</div></div><div>'+(t==='bool'
