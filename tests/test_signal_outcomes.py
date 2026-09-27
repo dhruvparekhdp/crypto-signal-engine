@@ -87,6 +87,72 @@ class TestResolutionRules(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(counts["pending"], 1)
 
 
+class TestStillRunningIsLeftPending(unittest.IsolatedAsyncioTestCase):
+    """
+    27 Sep: the same ETHUSDT signal kept crashing resolve_signal_outcomes
+    every run — a NotNullViolationError on "outcome". The loop that checks
+    each candle for a target/stop hit had no branch for "neither happened
+    and we're not past max hold yet either" — it fell out of the loop with
+    outcome still None and tried to write that to a column that rejects
+    NULL. A signal that is simply still running must stay pending, not
+    crash the job that would otherwise resolve everything after it.
+    """
+
+    async def test_a_genuinely_still_running_signal_does_not_crash_the_job(self):
+        import os
+        import tempfile
+        import types
+        from unittest.mock import AsyncMock, patch
+
+        os.environ["DATABASE_URL"] = f"sqlite+aiosqlite:///{tempfile.mktemp(suffix='.db')}"
+
+        import scheduler.runner as runner_mod
+        from analysis.crypto_state import CryptoState, OHLCVCandle
+        from scheduler.runner import AppRunner
+        from storage.database import AsyncSessionFactory, init_db
+        from storage.repository import Repository
+
+        await init_db()
+        async with AsyncSessionFactory() as s:
+            repo = Repository(s)
+            await repo.log_crypto_signal(
+                symbol="ethusdt", signal_type="confluence", direction="long",
+                trigger_description="4 of 5 independent checks agree on a",
+                confidence=0.80, current_price=1900.0, target_price=1919.0,
+                stop_loss=1881.0, edge_pct=1.0, stake_pct=1.0, timeframe="1h")
+            row = (await repo.crypto_signals_between(1))[0]
+            row.timestamp = datetime.now(UTC).replace(tzinfo=None) - timedelta(minutes=8)
+            await s.commit()
+            signal_id = row.id
+
+        # Candles since the signal: price drifting, nowhere near either
+        # level, well inside the default 240-minute max hold.
+        now = datetime.now(UTC)
+        candles = [OHLCVCandle(open=1900.0 + i, high=1902.0 + i, low=1898.0 + i,
+                               close=1900.5 + i, volume=10.0,
+                               timestamp=now - timedelta(minutes=7 - i), is_closed=True)
+                  for i in range(7)]
+        state = CryptoState(symbol="ethusdt", base_asset="ETH", current_price=1907.0,
+                            candles_1m=candles)
+        fake = types.SimpleNamespace(
+            crypto_store=types.SimpleNamespace(get_all=AsyncMock(return_value=[state])))
+
+        # The job swallows every exception itself, so a bare call "not
+        # raising" proves nothing — it never would have. Watch its own
+        # crash log instead: that is the thing the owner actually saw fire
+        # in Telegram every 30 minutes.
+        with patch.object(runner_mod.log, "exception") as crashed:
+            await AppRunner._resolve_signal_outcomes_job(fake)
+            await AppRunner._resolve_signal_outcomes_job(fake)   # safe to retry
+        crashed.assert_not_called()
+
+        from storage.models import CryptoSignalLog
+        async with AsyncSessionFactory() as s:
+            still = await s.get(CryptoSignalLog, signal_id)   # this run's row,
+            self.assertIsNotNone(still)                       # not another test's
+        self.assertEqual(still.outcome, "pending")
+
+
 class TestPessimisticTieBreak(unittest.TestCase):
     """
     The rule that keeps the number honest, asserted against the source: a bar

@@ -849,6 +849,17 @@ class AppRunner:
                         outcome = "expired"
                         pnl = (after[-1].close - sig.current_price) / sig.current_price * 100
 
+                    if outcome is None:
+                        # Still genuinely running: no bar hit target or stop,
+                        # and the newest one hasn't reached max hold yet
+                        # either. Nothing to record — leave it pending for
+                        # the next pass. Falling through used to call
+                        # resolve_crypto_signal(sig.id, None, ...), which
+                        # the database rejects (outcome is NOT NULL) and
+                        # crashed this job on the same signal every run
+                        # until it aged past its own history window.
+                        continue
+
                     await repo.resolve_crypto_signal(
                         sig.id, outcome, round(pnl * (1 if long_ else -1), 4))
                     resolved += 1
