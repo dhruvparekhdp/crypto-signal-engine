@@ -65,12 +65,26 @@ async def _api_crypto_coins(runner, request: web.Request) -> web.Response:
 
 async def _api_crypto_signals(runner, request: web.Request) -> web.Response:
     """Return recent crypto trade signals."""
+    from config.settings import settings
     from scheduler.pipeline import REASON_WORDS
     from storage.database import AsyncSessionFactory
     from storage.repository import Repository
     async with AsyncSessionFactory() as session:
         repo = Repository(session)
         rows = await repo.get_recent_crypto_signals(hours=24)
+        # Mirror review's per-signal "review trail" — every round for the
+        # primary and its mirror. Only fetched for round-0 primary rows
+        # (mirror_of_log_id 0, review_round 0): a mirror's own round-0 row
+        # and every re-review row are reached through that same trail, not
+        # shown as a second top-level card.
+        trails: dict[int, list] = {}
+        if settings.mirror_review_enabled:
+            for r in rows:
+                if (r.candidate_role == "primary" and r.mirror_of_log_id == 0
+                        and r.review_round == 0):
+                    trail_rows = await repo.get_review_trail(r.id)
+                    if len(trail_rows) > 1:
+                        trails[r.id] = trail_rows
     signals = [
         {
             "id": r.id,
@@ -96,10 +110,52 @@ async def _api_crypto_signals(runner, request: web.Request) -> web.Response:
             "skip_reason": r.skip_reason or None,
             "skip_reason_text": (REASON_WORDS.get(r.skip_reason, r.skip_reason.replace("_", " "))
                                  if r.skip_reason else None),
+            # Mirror review: the primary + mirror candidates' full review
+            # trail, only present when the feature produced one for this
+            # signal. Absent (not just empty) otherwise, so the page can
+            # tell "no trail" from "feature off".
+            **({"review_trail": [_review_trail_row(t, REASON_WORDS) for t in trails[r.id]]}
+               if r.id in trails else {}),
         }
         for r in rows
     ]
     return web.Response(text=json.dumps(signals), content_type="application/json")
+
+
+def _review_trail_row(t, reason_words: dict) -> dict:
+    """
+    One row of a signal's mirror-review trail — see _api_crypto_signals.
+
+    Status is read off the row itself: a rejection_reason means the
+    candidate stopped tracking without a trade; otherwise skip_reason set
+    (paper trading off, below the paper floor, etc — the ordinary "why no
+    trade" reasons) or an outcome other than "pending" both mean this exact
+    row is the one a trade opened from; anything else is still tracking.
+    """
+    role = "Mirror" if t.candidate_role == "mirror" else "Primary"
+    label = f"{role} ({t.direction.capitalize()})"
+    if t.rejection_reason:
+        status = "Rejected — " + reason_words.get(t.rejection_reason, t.rejection_reason)
+    elif t.skip_reason == "mirror_review_tracking":
+        status = "Still tracking"
+    else:
+        # Cleared skip_reason (opened), or a real "why no trade" reason from
+        # the ordinary paper-trading pipeline (below its floor, book full,
+        # etc) — either way this candidate won its round and was queued.
+        status = "Traded" if not t.skip_reason else (
+            "Not traded — " + reason_words.get(t.skip_reason, t.skip_reason))
+    return {
+        "label": label,
+        "candidate_role": t.candidate_role,
+        "direction": t.direction,
+        "review_round": t.review_round,
+        "confidence": round(t.confidence * 100),
+        "timestamp": _iso(t.timestamp),
+        "rejection_reason": t.rejection_reason or None,
+        "rejection_reason_text": (reason_words.get(t.rejection_reason, t.rejection_reason)
+                                  if t.rejection_reason else None),
+        "status": status,
+    }
 
 
 
@@ -1448,6 +1504,19 @@ footer{text-align:center;padding:16px;color:#334155;font-size:11px;border-top:1p
 .sig-act.off{background:var(--panel);color:var(--muted2);border:1px solid var(--line)}
 .sig-warn{background:var(--neg-t);border:1px solid var(--neg-t2);
   border-radius:8px;padding:9px 11px;font-size:10px;color:var(--neg);line-height:1.5}
+.sig-trail-toggle{margin-top:8px;font-size:10px;color:var(--accent-soft);cursor:pointer;
+  user-select:none;padding:4px 0}
+.sig-trail-toggle:hover{text-decoration:underline}
+.sig-review-trail{display:none;flex-direction:column;gap:5px;margin-top:4px;
+  border-top:1px solid var(--line);padding-top:6px}
+.sig-review-trail.open{display:flex}
+.trail-row{display:flex;flex-wrap:wrap;gap:8px;align-items:center;font-size:10px;
+  color:var(--muted2);background:var(--panel);border:1px solid var(--line);
+  border-radius:6px;padding:5px 8px}
+.trail-role{font-weight:600;color:var(--text)}
+.trail-status{margin-left:auto;font-weight:600}
+.trail-status.ok{color:var(--pos)}
+.trail-status.bad{color:var(--neg)}
 
 /* A little colour elsewhere, so the page is not one flat field of slate. */
 .card{background:linear-gradient(180deg,var(--panel) 0%,var(--panel2) 100%)}
@@ -2920,7 +2989,34 @@ function renderCryptoSignalCard(s){
         ? 'It costs more to open and close than the move can win, so this loses money when it succeeds.'
         : `It would keep only ${(100-100/xcost).toFixed(0)}% of what it earns.`}
       The bot will not take a trade under ${MIN_TARGET_PCT.toFixed(3)}%.</div>`}
+
+    ${renderReviewTrail(s)}
   </div>`;
+}
+
+// Mirror review's per-signal expandable "Review trail" — same collapsed-by-
+// default, click-to-open pattern as the rest of the Signals page's warning
+// blocks, just toggled instead of always shown since a trail can run to
+// six rows (primary + mirror, three rounds each) on top of an already
+// dense card.
+function renderReviewTrail(s){
+  const trail = s.review_trail;
+  if(!trail || !trail.length) return '';
+  const domId = 'trail-' + s.id;
+  const rows = trail.map(t => `<div class="trail-row">
+      <span class="trail-role">${esc(t.label)}</span>
+      <span class="trail-round">round ${t.review_round}</span>
+      <span class="trail-conf">${t.confidence}% confidence</span>
+      <span class="trail-when">${fmtSignalTime(t.timestamp)}</span>
+      <span class="trail-status ${
+        /^Traded/.test(t.status)?'ok':(/^Rejected/.test(t.status)?'bad':'')
+      }">${esc(t.status)}</span>
+    </div>`).join('');
+  return `<div class="sig-trail-toggle"
+      onclick="document.getElementById('${domId}').classList.toggle('open')">
+      Review trail (${trail.length} rounds) ▾
+    </div>
+    <div class="sig-review-trail" id="${domId}">${rows}</div>`;
 }
 
 // The exit, in prices, because the venue's TP/SL box takes prices. A 2x

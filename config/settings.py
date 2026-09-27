@@ -343,6 +343,27 @@ class Settings(BaseSettings):
     # take effect until the next reconnect, same as the kline interval.
     binance_liquidation_stream_enabled: bool = True
     binance_large_trade_stream_enabled: bool = True
+    # Mirror review (27 Sep): for every fired signal, also synthesise the
+    # opposite-direction candidate and give the AI reviewer a second look at
+    # it in parallel. A candidate that isn't already strong enough to open
+    # on round 0 is tracked and re-reviewed as the market moves, up to
+    # mirror_review_max_rounds more times, before it wins, is rejected, or
+    # times out against its own timeframe. Off by default — this changes
+    # trading behaviour (a signal can now be held instead of opened
+    # immediately), unlike the purely observational phases above.
+    mirror_review_enabled: bool = False
+    # A tracked candidate is only re-reviewed once its local confidence has
+    # moved by at least this much since its last AI review.
+    mirror_review_confidence_delta_threshold: float = 0.05
+    # A tracked candidate is only re-reviewed once at least this fraction of
+    # its own timeframe has elapsed (e.g. 0.33 of a 1h signal is 20 minutes).
+    mirror_review_min_elapsed_pct: float = 0.33
+    # Hard cap on re-reviews per candidate after the initial round-0 review
+    # (so at most 1 + mirror_review_max_rounds AI calls per candidate).
+    mirror_review_max_rounds: int = 2
+    # +/- range used to jitter the mirror candidate's target/stop distances
+    # away from an exact mechanical reflection of the original.
+    mirror_target_jitter_pct: float = 0.20
     # A single trade at or above this notional (USDT) is flagged as
     # "large" — a free, crude proxy for a big (possibly institutional)
     # participant. BTCUSDT trades often several times a second; this

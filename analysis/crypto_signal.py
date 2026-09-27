@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import random
 from dataclasses import dataclass
 from datetime import datetime
 
@@ -28,6 +29,11 @@ class CryptoSignal:
     # onto the exact row the Signals page reads — set once, right after
     # logging, in scheduler/runner.py. 0 means "not logged yet".
     log_id: int = 0
+    # "primary" (the signal a detector actually fired) or "mirror" (the
+    # opposite-direction candidate synthesised alongside it when
+    # settings.mirror_review_enabled is on). Never shown alone in the UI —
+    # always paired with direction, e.g. "Primary (Long)" / "Mirror (Short)".
+    candidate_role: str = "primary"
 
 
 def compute_crypto_stake(edge_pct: float, confidence: float) -> float:
@@ -44,3 +50,56 @@ def compute_crypto_stake(edge_pct: float, confidence: float) -> float:
     quarter_kelly = raw_kelly * 0.25
 
     return round(min(max(quarter_kelly, 0.005), settings.crypto_max_stake_pct), 4)
+
+
+def make_mirror_signal(sig: CryptoSignal) -> CryptoSignal:
+    """
+    Build the opposite-direction candidate for the mirror-review feature.
+
+    Same symbol and entry price, direction flipped, target/stop distances
+    mirrored from the original but each jittered independently (roughly
+    +/- settings.mirror_target_jitter_pct) so the mirror is not a mechanical
+    exact reflection of the original — similar magnitude, not identical
+    numbers. Confidence is seeded at the ORIGINAL's pre-AI-review
+    confidence: the mirror has not been through review yet, so it starts
+    from the same place the primary started, not where the primary ended up.
+    """
+    jitter = max(0.0, float(getattr(settings, "mirror_target_jitter_pct", 0.20)))
+    lo, hi = 1.0 - jitter, 1.0 + jitter
+
+    entry = sig.current_price
+    mirror_direction = "short" if sig.direction == "long" else "long"
+
+    target_pct = abs((sig.target_price - entry) / entry) if (sig.target_price and entry) else 0.0
+    stop_pct = abs((entry - sig.stop_loss) / entry) if (sig.stop_loss and entry) else 0.0
+
+    m_target_pct = target_pct * random.uniform(lo, hi)
+    m_stop_pct = stop_pct * random.uniform(lo, hi)
+
+    if mirror_direction == "long":
+        m_target = entry * (1 + m_target_pct)
+        m_stop = entry * (1 - m_stop_pct)
+    else:
+        m_target = entry * (1 - m_target_pct)
+        m_stop = entry * (1 + m_stop_pct)
+
+    m_edge_pct = m_target_pct * 100.0
+    m_stake_pct = compute_crypto_stake(m_edge_pct, sig.confidence)
+
+    return CryptoSignal(
+        symbol=sig.symbol,
+        signal_type=sig.signal_type,
+        direction=mirror_direction,
+        trigger_description=f"Mirror of: {sig.trigger_description}",
+        confidence=sig.confidence,
+        current_price=entry,
+        target_price=m_target,
+        stop_loss=m_stop,
+        edge_pct=round(m_edge_pct, 4),
+        stake_pct=m_stake_pct,
+        timeframe=sig.timeframe,
+        sentiment_score=sig.sentiment_score,
+        indicators_summary=sig.indicators_summary,
+        timestamp=sig.timestamp,
+        candidate_role="mirror",
+    )

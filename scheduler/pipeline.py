@@ -64,6 +64,13 @@ REASON_WORDS = {
     "liquidation_too_near": "liquidation too close to the stop",
     "below_one_lot": "position smaller than one lot",
     "target_not_viable": "target too small after fees",
+    # Mirror review (27 Sep)
+    "ai_review_timed_out": "still undecided when its timeframe ran out",
+    "opposite_side_won": "the opposite direction was confirmed first",
+    "setup_invalidated": "the setup no longer holds",
+    "mirror_stop_passed": "price already past its own stop before it could confirm",
+    "mirror_target_passed": "price already past its own target before it could confirm",
+    "mirror_review_tracking": "still being reviewed — not confident enough yet either way",
 }
 
 

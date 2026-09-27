@@ -173,6 +173,19 @@ _COLUMN_MIGRATIONS: list[str] = [
         "ALTER TABLE crypto_signal_log ADD COLUMN IF NOT EXISTS suppressed_by VARCHAR DEFAULT ''",
         "ALTER TABLE crypto_signal_log ADD COLUMN IF NOT EXISTS skip_reason VARCHAR DEFAULT ''",
         "CREATE INDEX IF NOT EXISTS ix_csl_suppressed ON crypto_signal_log (suppressed_by)",
+        # Mirror review (27 Sep): primary vs mirror candidate, review-round
+        # lineage, and why a tracked candidate stopped without a trade.
+        "ALTER TABLE crypto_signal_log ADD COLUMN IF NOT EXISTS "
+        "candidate_role VARCHAR DEFAULT 'primary'",
+        "ALTER TABLE crypto_signal_log ADD COLUMN IF NOT EXISTS "
+        "mirror_of_log_id INTEGER DEFAULT 0",
+        "ALTER TABLE crypto_signal_log ADD COLUMN IF NOT EXISTS "
+        "review_round INTEGER DEFAULT 0",
+        "ALTER TABLE crypto_signal_log ADD COLUMN IF NOT EXISTS "
+        "parent_signal_id INTEGER DEFAULT 0",
+        "ALTER TABLE crypto_signal_log ADD COLUMN IF NOT EXISTS "
+        "rejection_reason VARCHAR DEFAULT ''",
+        "CREATE INDEX IF NOT EXISTS ix_csl_parent ON crypto_signal_log (parent_signal_id)",
         """CREATE TABLE IF NOT EXISTS signal_reviews (
             id SERIAL PRIMARY KEY,
             phase VARCHAR, symbol VARCHAR, signal_type VARCHAR DEFAULT '',

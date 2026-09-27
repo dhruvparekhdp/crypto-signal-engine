@@ -256,6 +256,11 @@ class Repository:
         sentiment_score: float = 0.0,
         indicators_summary: str = "",
         suppressed_by: str = "",
+        candidate_role: str = "primary",
+        mirror_of_log_id: int = 0,
+        review_round: int = 0,
+        parent_signal_id: int = 0,
+        rejection_reason: str = "",
     ) -> int:
         row = CryptoSignalLog(
             symbol=symbol,
@@ -274,6 +279,11 @@ class Repository:
             outcome="pending",
             pnl_pct=0.0,
             suppressed_by=suppressed_by,
+            candidate_role=candidate_role,
+            mirror_of_log_id=mirror_of_log_id,
+            review_round=review_round,
+            parent_signal_id=parent_signal_id,
+            rejection_reason=rejection_reason,
             timestamp=_now_utc(),
         )
         self.session.add(row)
@@ -1099,6 +1109,72 @@ class Repository:
             return
         row.skip_reason = reason
         await self.session.commit()
+
+    async def mark_signal_rejected(self, log_id: int, reason: str) -> None:
+        """A tracked mirror-review candidate stopped tracking without a
+        trade — REJECT verdict, timeout, or the opposite side winning
+        first. `reason` lands in rejection_reason, shown on the Signals
+        page's review trail through REASON_WORDS. Also clears the
+        "mirror_review_tracking" skip_reason sentinel (see
+        _handle_mirror_candidates), so a rejected row never also reads as
+        still tracking."""
+        if not log_id:
+            return
+        row = await self.session.get(CryptoSignalLog, log_id)
+        if row is None:
+            return
+        row.rejection_reason = reason
+        if row.skip_reason == "mirror_review_tracking":
+            row.skip_reason = ""
+        await self.session.commit()
+
+    async def mark_signal_traded_with_review(self, log_id: int) -> None:
+        """A tracked candidate won and its trade was queued — clears
+        skip_reason/rejection_reason so the review trail's status badge
+        reads "Traded", not a stale in-progress state."""
+        if not log_id:
+            return
+        row = await self.session.get(CryptoSignalLog, log_id)
+        if row is None:
+            return
+        row.skip_reason = ""
+        row.rejection_reason = ""
+        await self.session.commit()
+
+    async def get_review_trail(self, root_log_id: int) -> list[CryptoSignalLog]:
+        """
+        Every row sharing this signal's lineage: the primary's round-0 row,
+        its re-review rows, the mirror's round-0 row (mirror_of_log_id ==
+        root_log_id), and the mirror's own re-review rows (parent_signal_id
+        == the mirror's round-0 id). Ordered candidate_role then round, so
+        the primary's trail renders first, each in round order.
+
+        root_log_id is always a PRIMARY round-0 log_id — the id
+        scheduler/runner.py sets as sig.log_id right after logging.
+        """
+        if not root_log_id:
+            return []
+        primary_root = await self.session.get(CryptoSignalLog, root_log_id)
+        if primary_root is None:
+            return []
+        res = await self.session.execute(
+            select(CryptoSignalLog).where(
+                (CryptoSignalLog.id == root_log_id)
+                | (CryptoSignalLog.parent_signal_id == root_log_id)
+                | (CryptoSignalLog.mirror_of_log_id == root_log_id)
+            )
+        )
+        rows = list(res.scalars().all())
+        mirror_root_ids = [r.id for r in rows if r.mirror_of_log_id == root_log_id]
+        if mirror_root_ids:
+            res2 = await self.session.execute(
+                select(CryptoSignalLog).where(
+                    CryptoSignalLog.parent_signal_id.in_(mirror_root_ids)
+                )
+            )
+            rows += list(res2.scalars().all())
+        rows.sort(key=lambda r: (0 if r.candidate_role == "primary" else 1, r.review_round, r.id))
+        return rows
 
     async def crypto_signal_counts(self) -> dict:
         async def count(model, where=None):

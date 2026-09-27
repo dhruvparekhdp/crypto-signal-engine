@@ -103,7 +103,10 @@ class TestWiring(unittest.TestCase):
         self.assertIn("self._market_briefing_job,", self.SRC)
 
     def test_every_review_is_saved_with_its_news(self):
-        self.assertEqual(self.SRC.count("briefing_id=briefing_id, news_context=news"), 3)
+        # 3 original call sites, plus _ai_review_candidate (27 Sep, mirror
+        # review) — a 4th site that also wires briefing_id/news_context
+        # through, not a dropped one.
+        self.assertEqual(self.SRC.count("briefing_id=briefing_id, news_context=news"), 4)
 
 
 if __name__ == "__main__":

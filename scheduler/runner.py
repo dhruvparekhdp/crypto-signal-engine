@@ -29,8 +29,15 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from telegram.constants import ParseMode
 
 from analysis.crypto_engine import CryptoEngine
-from analysis.crypto_signal import CryptoSignal
+from analysis.crypto_signal import CryptoSignal, make_mirror_signal
 from analysis.crypto_state_store import CommodityStateStore, CryptoStateStore
+from analysis.mirror_review import (
+    TrackedCandidate,
+    TrackedPair,
+    breach_reason,
+    elapsed_pct,
+    local_confidence_estimate,
+)
 from analysis.multi_horizon_predictor import MultiHorizonPredictor
 from analysis.paper_cycle import (
     ClosedTradeView,
@@ -200,6 +207,11 @@ class AppRunner:
         self._event_bias_pending: set[str] = set()
         self.oi_collector = BinanceFuturesOICollector(self.crypto_store)
         self._pending_paper_signals: list[tuple[CryptoSignal, object]] = []
+        # Mirror review (27 Sep): primary+mirror candidate pairs held between
+        # AI reviews while settings.mirror_review_enabled is on, keyed by
+        # the primary candidate's round-0 crypto_signal_log id. Empty and
+        # untouched when the feature is off.
+        self._tracked_signal_pairs: dict[int, TrackedPair] = {}
         self.fear_greed = None
         # High-impact headlines seen by the news job, as blackout events.
         self._news_events: tuple = ()
@@ -615,7 +627,7 @@ class AppRunner:
         except Exception:
             log.exception("paper_trading_job_failed")
 
-    async def _log_signal(self, sig, suppressed_by: str = "") -> int:
+    async def _log_signal(self, sig, suppressed_by: str = "", **extra) -> int:
         """
         Record a signal, whether or not it was published.
 
@@ -623,6 +635,11 @@ class AppRunner:
         is otherwise identical, so the outcome resolver scores it the same
         way. That is what makes "what did this filter cost me" answerable
         instead of a matter of opinion.
+
+        `**extra` passes through mirror-review lineage columns
+        (mirror_of_log_id, review_round, parent_signal_id) — empty/zero for
+        every call site that predates that feature, so this is a no-op
+        unless a caller opts in.
         """
         try:
             async with AsyncSessionFactory() as session:
@@ -641,6 +658,8 @@ class AppRunner:
                     sentiment_score=sig.sentiment_score,
                     indicators_summary=sig.indicators_summary,
                     suppressed_by=suppressed_by,
+                    candidate_role=getattr(sig, "candidate_role", "primary"),
+                    **extra,
                 )
         except Exception:
             log.exception("crypto_signal_db_log_failed", symbol=sig.symbol)
@@ -654,6 +673,244 @@ class AppRunner:
                 await Repository(session).mark_signal_skipped(log_id, reason)
         except Exception:
             log.debug("signal_skip_reason_not_saved", log_id=log_id, reason=reason)
+
+    async def _mark_rejected(self, log_id: int, reason: str) -> None:
+        """A mirror-review candidate stopped tracking without a trade."""
+        try:
+            async with AsyncSessionFactory() as session:
+                await Repository(session).mark_signal_rejected(log_id, reason)
+        except Exception:
+            log.debug("signal_rejection_reason_not_saved", log_id=log_id, reason=reason)
+
+    async def _mark_traded(self, log_id: int) -> None:
+        """A mirror-review candidate won and was queued as a paper trade."""
+        try:
+            async with AsyncSessionFactory() as session:
+                await Repository(session).mark_signal_traded_with_review(log_id)
+        except Exception:
+            log.debug("signal_traded_mark_not_saved", log_id=log_id)
+
+    async def _ai_review_candidate(self, sig, state, states, scfg) -> tuple[str, str]:
+        """
+        Run one Groq AI review round on `sig` in place (mutates sig.confidence
+        and sig.ai_review) and returns (verdict, ai_summary).
+
+        The same call the original single-candidate path made, pulled out so
+        mirror review can run it independently for a primary, a mirror, and
+        any later re-review round, without duplicating the Groq/save_review
+        plumbing three times over.
+        """
+        if not (self.groq_sentinel.is_available and settings.groq_signal_review_enabled):
+            return "", ""
+        news, briefing_id = await self._news_context(sig.symbol)
+        delta, ai_summary, verdict = await self.groq_sentinel.review_signal_candidate(
+            sig, state, model=scfg.groq_model, book=states, news=news)
+        if verdict == "REJECT":
+            delta = -abs(settings.groq_reject_penalty)
+        if ai_summary:
+            sig.ai_review = ai_summary
+        try:
+            async with AsyncSessionFactory() as s2:
+                await Repository(s2).save_review(
+                    "pre", sig.symbol, signal_type=sig.signal_type,
+                    verdict=verdict, summary=ai_summary,
+                    factors=self.groq_sentinel.last_factors,
+                    confidence_delta=delta,
+                    model=self.groq_sentinel.last_model or "no_answer",
+                    latency_ms=self.groq_sentinel.last_latency_ms,
+                    briefing_id=briefing_id, news_context=news,
+                    **self._review_extras(state))
+        except Exception:
+            log.debug("mirror_review_not_saved", symbol=sig.symbol,
+                      role=getattr(sig, "candidate_role", "primary"))
+        before = sig.confidence
+        sig.confidence = max(0.50, min(0.95, round(before + delta, 4)))
+        return verdict, ai_summary
+
+    async def _settle_mirror_round(self, pair: TrackedPair, round_winners: list[TrackedCandidate],
+                                    pcfg, states: dict) -> None:
+        """
+        One or two candidates just cleared pcfg.min_confidence on the same
+        tick. Higher confidence wins outright; the loser (and anything else
+        still tracking in the pair) is marked rejected — only one direction
+        per symbol ever opens.
+        """
+        winner = max(round_winners, key=lambda c: c.signal.confidence)
+        winner.state = "traded"
+        state = states.get(winner.signal.symbol)
+        if pcfg.enabled:
+            self._pending_paper_signals.append((winner.signal, state))
+        else:
+            await self._mark_skipped(winner.log_id, "paper_trading_off")
+        await self._mark_traded(winner.log_id)
+        log.info("mirror_candidate_won", symbol=winner.signal.symbol,
+                 role=winner.signal.candidate_role, direction=winner.signal.direction,
+                 confidence=winner.signal.confidence, round=winner.review_round)
+
+        for cand in pair.candidates():
+            if cand is winner or cand.state != "tracking":
+                continue
+            cand.state = "rejected"
+            cand.rejection_reason = "opposite_side_won"
+            await self._mark_rejected(cand.log_id, "opposite_side_won")
+
+    async def _handle_mirror_candidates(self, sig, state, states, scfg, pcfg) -> None:
+        """
+        Round-0 of the mirror-review feature (settings.mirror_review_enabled):
+        build the opposite-direction candidate, review both independently,
+        and either open the stronger one immediately (today's behaviour,
+        preserved for signals already confident enough) or hold both for
+        the live re-review loop (_mirror_review_job).
+        """
+        mirror = make_mirror_signal(sig)
+        now = datetime.now(UTC)
+
+        verdict_p, summary_p = await self._ai_review_candidate(sig, state, states, scfg)
+        verdict_m, summary_m = await self._ai_review_candidate(mirror, state, states, scfg)
+
+        primary_log_id = await self._log_signal(sig)
+        sig.log_id = primary_log_id
+        mirror_log_id = await self._log_signal(mirror, mirror_of_log_id=primary_log_id)
+        mirror.log_id = mirror_log_id
+
+        if verdict_p != "REJECT":
+            msg = format_crypto_signal(sig)
+            if settings.crypto_alert_telegram:
+                await self.notifier.send_text(msg, parse_mode=ParseMode.HTML)
+
+        pair = TrackedPair()
+        for cand_sig, verdict, summary, log_id in (
+            (sig, verdict_p, summary_p, primary_log_id),
+            (mirror, verdict_m, summary_m, mirror_log_id),
+        ):
+            if verdict == "REJECT":
+                await self._mark_rejected(log_id, summary or "ai_review")
+                continue
+            cand = TrackedCandidate(signal=cand_sig, log_id=log_id, root_log_id=log_id,
+                                     last_ai_review_at=now,
+                                     last_reviewed_confidence=cand_sig.confidence)
+            if cand_sig is sig:
+                pair.primary = cand
+            else:
+                pair.mirror = cand
+
+        states_by_symbol = {st.symbol: st for st in states}
+        round_winners = [c for c in pair.candidates()
+                        if c.signal.confidence >= pcfg.min_confidence]
+        if round_winners:
+            await self._settle_mirror_round(pair, round_winners, pcfg, states_by_symbol)
+
+        for cand in pair.candidates():
+            if cand.state == "tracking":
+                # Sentinel, not a real "why no trade" reason: distinguishes
+                # a row still being tracked from one that opened (empty)
+                # on the Signals page's review trail. Cleared the moment
+                # this candidate wins or is rejected.
+                await self._mark_skipped(cand.log_id, "mirror_review_tracking")
+
+        if any(c.state == "tracking" for c in pair.candidates()):
+            self._tracked_signal_pairs[primary_log_id] = pair
+
+        log.info("mirror_candidates_processed", symbol=sig.symbol, type=sig.signal_type,
+                 primary_confidence=sig.confidence, mirror_confidence=mirror.confidence,
+                 primary_verdict=verdict_p, mirror_verdict=verdict_m)
+
+    async def _mirror_review_job(self) -> None:
+        """
+        Live re-review loop (every crypto_analysis tick): for every
+        candidate still "tracking", cheaply recompute a local confidence
+        estimate and only spend an AI call on it once enough of its own
+        timeframe has elapsed AND that local estimate has moved enough to
+        be worth a second opinion — capped at mirror_review_max_rounds
+        re-reviews per candidate (3 AI calls total, including round 0).
+        """
+        if not settings.mirror_review_enabled or not self._tracked_signal_pairs:
+            return
+        try:
+            async with AsyncSessionFactory() as session:
+                repo = Repository(session)
+                scfg = await repo.get_strategy_config()
+                pcfg = await repo.get_paper_config()
+
+            all_states = await self.crypto_store.get_all()
+            states_by_symbol = {st.symbol: st for st in all_states}
+            now = datetime.now(UTC)
+
+            finished_keys = []
+            for pair_key, pair in list(self._tracked_signal_pairs.items()):
+                round_winners: list[TrackedCandidate] = []
+
+                for cand in pair.candidates():
+                    if cand.state != "tracking":
+                        continue
+                    st = states_by_symbol.get(cand.signal.symbol)
+                    if st is None or st.current_price <= 0:
+                        continue
+
+                    ep = elapsed_pct(cand.signal, now)
+
+                    breach = breach_reason(cand.signal, st.current_price)
+                    if breach:
+                        cand.state = "rejected"
+                        cand.rejection_reason = breach
+                        await self._mark_rejected(cand.log_id, breach)
+                        continue
+
+                    if ep >= 1.0:
+                        cand.state = "rejected"
+                        cand.rejection_reason = "ai_review_timed_out"
+                        await self._mark_rejected(cand.log_id, "ai_review_timed_out")
+                        continue
+
+                    local_conf = local_confidence_estimate(cand.signal, st)
+                    moved = (abs(local_conf - cand.last_reviewed_confidence)
+                            >= settings.mirror_review_confidence_delta_threshold)
+
+                    if not (ep >= settings.mirror_review_min_elapsed_pct and moved):
+                        continue
+                    if cand.review_round >= settings.mirror_review_max_rounds:
+                        # Budget exhausted — keep tracking silently until it
+                        # either times out (ep >= 1.0, above) or the other
+                        # side confirms first.
+                        continue
+
+                    cand.signal.current_price = st.current_price
+                    cand.signal.confidence = local_conf
+                    verdict, summary = await self._ai_review_candidate(
+                        cand.signal, st, list(states_by_symbol.values()), scfg)
+                    cand.review_round += 1
+                    cand.last_ai_review_at = now
+                    cand.last_reviewed_confidence = cand.signal.confidence
+
+                    new_log_id = await self._log_signal(
+                        cand.signal,
+                        review_round=cand.review_round,
+                        parent_signal_id=cand.root_log_id,
+                        mirror_of_log_id=(pair_key if cand is pair.mirror else 0),
+                    )
+                    cand.log_id = new_log_id or cand.log_id
+
+                    if verdict == "REJECT":
+                        cand.state = "rejected"
+                        cand.rejection_reason = summary or "ai_review"
+                        await self._mark_rejected(cand.log_id, summary or "ai_review")
+                        continue
+
+                    if cand.signal.confidence >= pcfg.min_confidence:
+                        round_winners.append(cand)
+                    else:
+                        await self._mark_skipped(cand.log_id, "mirror_review_tracking")
+
+                if round_winners:
+                    await self._settle_mirror_round(pair, round_winners, pcfg, states_by_symbol)
+
+                if pair.all_settled():
+                    finished_keys.append(pair_key)
+
+            for key in finished_keys:
+                self._tracked_signal_pairs.pop(key, None)
+        except Exception:
+            log.exception("mirror_review_job_failed")
 
     async def _review_open_position(self, pos, state, cfg, now, wallet, repo):
         """
@@ -1022,6 +1279,10 @@ class AppRunner:
                                  type=sig.signal_type, confidence=sig.confidence,
                                  threshold=settings.crypto_min_confidence)
                         self.crypto_engine.forget(sig)
+                        continue
+
+                    if settings.mirror_review_enabled:
+                        await self._handle_mirror_candidates(sig, state, states, scfg, pcfg)
                         continue
 
                     # Groq AI Pre-Signal Sanity Review.
@@ -1848,6 +2109,18 @@ class AppRunner:
             id="crypto_analysis",
             max_instances=1,
             next_run_time=datetime.now(UTC),
+        )
+        # Mirror review's live re-review loop — same cadence as the
+        # detectors themselves, since it exists to react to the same market
+        # ticks. A no-op (returns immediately) while the feature is off or
+        # nothing is being tracked.
+        self.scheduler.add_job(
+            self._mirror_review_job,
+            "interval",
+            seconds=60,
+            id="mirror_review",
+            max_instances=1,
+            next_run_time=datetime.now(UTC) + timedelta(seconds=30),
         )
         self.scheduler.add_job(
             self._move_attribution_job,

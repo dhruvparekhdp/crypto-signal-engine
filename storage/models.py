@@ -218,6 +218,24 @@ class CryptoSignalLog(Base):
     # words /api/pipeline already turns into English. Empty means either
     # it was opened, or paper trading has not reached a decision on it yet.
     skip_reason: Mapped[str] = mapped_column(String, default="")
+    # Mirror review (27 Sep). "primary" or "mirror" — never shown alone in
+    # the UI, always paired with direction.
+    candidate_role: Mapped[str] = mapped_column(String, default="primary")
+    # The PRIMARY's round-0 log_id, for a row that is a mirror's round 0.
+    # 0 for a primary's own round-0 row.
+    mirror_of_log_id: Mapped[int] = mapped_column(Integer, default=0)
+    # 0 = the initial review; 1, 2, ... = a later re-review of the same
+    # candidate as the market moved.
+    review_round: Mapped[int] = mapped_column(Integer, default=0)
+    # The round-0 row's log_id for THIS candidate's own lineage (primary or
+    # mirror) — 0 for the round-0 row itself, set on every re-review row so
+    # the whole trail can be pulled back with one query.
+    parent_signal_id: Mapped[int] = mapped_column(Integer, default=0)
+    # Why a tracked candidate stopped being tracked without opening a trade
+    # — "ai_review_timed_out", "opposite_side_won", "setup_invalidated",
+    # a REJECT verdict's summary, and so on. Empty if it is still tracking
+    # or it opened as a paper trade.
+    rejection_reason: Mapped[str] = mapped_column(String, default="")
     timestamp: Mapped[datetime] = mapped_column(DateTime, index=True)
 
 

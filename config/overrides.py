@@ -91,6 +91,24 @@ FIELDS: tuple[Field, ...] = (
           "Drop signals against the daily SMA20 trend."),
     Field("crypto_volume_spike_enabled", "signals", "Volume spike signals", ""),
     Field("orderflow_enabled", "signals", "Order flow", "Use taker buy/sell flow."),
+    Field("mirror_review_enabled", "signals", "Mirror review",
+          "For every fired signal, also review the opposite direction. A candidate that "
+          "isn't strong enough to open right away is tracked and re-reviewed as the market "
+          "moves, instead of being decided once. Off keeps today's behaviour exactly.",
+          live=False),
+    Field("mirror_review_confidence_delta_threshold", "signals",
+          "Mirror re-review: confidence move",
+          "Re-review a tracked candidate only once its local confidence has moved this much.",
+          kind="float", lo=0.01, hi=0.30, live=False),
+    Field("mirror_review_min_elapsed_pct", "signals", "Mirror re-review: elapsed timeframe",
+          "Re-review only once this fraction of the signal's own timeframe has passed.",
+          kind="float", lo=0.05, hi=0.95, live=False),
+    Field("mirror_review_max_rounds", "signals", "Mirror re-review: max rounds",
+          "Hard cap on AI re-reviews per candidate after round 0.",
+          kind="int", lo=0, hi=5, live=False),
+    Field("mirror_target_jitter_pct", "signals", "Mirror target/stop jitter",
+          "+/- range used to jitter the mirror candidate's target and stop away from an "
+          "exact reflection of the original.", kind="float", lo=0.0, hi=0.50, live=False),
     # Exits
     Field("profit_lock_enabled", "exits", "Profit lock",
           "Your rule: once a trade is far enough in profit, lock a small win and trail tight."),
