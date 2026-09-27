@@ -103,6 +103,10 @@ FIELDS: tuple[Field, ...] = (
     Field("event_bias_mode", "protect", "Trade through news with the AI's bias",
           "On: during an event, Groq reads the public mood (bull / bear); trades with it go "
           "ahead, only trades against a confident bias are skipped. Off: pause all new trades."),
+    Field("calendar_caution_enabled", "protect", "Soften confidence around institutional flow",
+          "Month-end/quarter-end rebalancing, options and futures expiry, thin weekend "
+          "liquidity — a small confidence penalty, never a pause. Separate from the FOMC/"
+          "CPI/NFP pause above."),
     # Protections
     Field("protections_enabled", "protect", "Protections",
           "Master switch for everything in this group."),

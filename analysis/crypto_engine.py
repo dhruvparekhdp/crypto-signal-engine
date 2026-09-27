@@ -83,6 +83,22 @@ class CryptoEngine:
                     sig.confidence = max(0.50, sig.confidence - 0.05)
                     log.info("crypto_signal_cvd_divergence_penalty", symbol=sig.symbol, delta=net_delta, reason=reason)
 
+            # Institutional-flow windows (research phase 1, 27 Sep): month-end
+            # rebalancing, options/futures expiry, thin weekend liquidity —
+            # structural moves with no headline behind them. Softens, never
+            # vetoes: the owner's rule is trade through it, sized down, not
+            # paused. FOMC/CPI/NFP are handled elsewhere (active_blackout /
+            # event_bias_mode) and are excluded from this one on purpose.
+            if getattr(settings, "calendar_caution_enabled", True):
+                from analysis.event_calendar import caution
+                item = caution(datetime.now(UTC).replace(tzinfo=None))
+                if item is not None:
+                    penalty = {5: 0.08, 4: 0.06, 3: 0.03}.get(item.level, 0.01)
+                    sig.confidence = max(0.50, round(sig.confidence - penalty, 4))
+                    log.info("crypto_signal_calendar_caution", symbol=sig.symbol,
+                             reason=item.name, level=item.level, penalty=penalty,
+                             confidence=sig.confidence)
+
             if sig.confidence < settings.crypto_min_confidence:
                 log.debug("crypto_signal_below_threshold", symbol=sig.symbol, confidence=sig.confidence)
                 pipeline.no_setup("setup found, confidence below the minimum", sig.signal_type)

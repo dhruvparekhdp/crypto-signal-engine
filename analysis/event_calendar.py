@@ -207,6 +207,32 @@ def calendar_context(now: datetime) -> list[CalendarItem]:
     return sorted(out, key=lambda c: -c.level)
 
 
+# Names already covered by active_blackout()/event_bias_mode — a live trade
+# is paused or bias-checked around these regardless, so caution() must not
+# double up on the same release under a different mechanism.
+_HANDLED_BY_BLACKOUT = frozenset(ev.name for ev in EVENTS_2026)
+
+
+def caution(now: datetime) -> CalendarItem | None:
+    """
+    The most significant STRUCTURAL calendar item active right now —
+    rebalancing, options/futures expiry, thin weekend liquidity, earnings
+    season — for softening confidence rather than pausing trading. FOMC/
+    CPI/NFP/PCE/PPI are excluded: those already pause or bias-check trades
+    through active_blackout()/event_bias_mode, and flagging them here too
+    would just be the same release counted twice under two names.
+
+    These items exist to explain "the market moved oddly and no headline
+    said why" — a fund rebalancing book or a monthly futures roll doesn't
+    make news, but it moves price. Nobody has measured whether this
+    actually improves this bot's numbers yet; it only ever softens
+    confidence, never vetoes, so a wrong guess costs a little conviction
+    rather than a trade the market would have paid.
+    """
+    items = [c for c in calendar_context(now) if c.name not in _HANDLED_BY_BLACKOUT]
+    return items[0] if items else None
+
+
 def calendar_text(now: datetime) -> str:
     """The calendar block a prompt starts with."""
     items = calendar_context(now)

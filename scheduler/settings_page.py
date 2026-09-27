@@ -148,6 +148,15 @@ def settings_api(runner):
     return get, post
 
 
+def _calendar_caution_row(now) -> dict | None:
+    from analysis.event_calendar import caution
+    item = caution(now)
+    if item is None:
+        return None
+    penalty = {5: 0.08, 4: 0.06, 3: 0.03}.get(item.level, 0.01)
+    return {"name": item.name, "level": item.level, "when": item.when, "penalty": penalty}
+
+
 def pipeline_api(runner):
     """GET /api/pipeline — the signal funnel, and the live state of every time-based gate."""
     async def get(request: web.Request) -> web.Response:
@@ -200,6 +209,8 @@ def pipeline_api(runner):
                           "bias": (getattr(runner, "_event_biases", {}) or {}).get(
                               f"{blackout.kind}:{blackout.name}:{blackout.at}")}
                          if blackout is not None else None),
+            "calendar_caution": (_calendar_caution_row(now.replace(tzinfo=None))
+                                 if settings.calendar_caution_enabled else None),
             "book_full_with": full.symbol.upper() if full is not None else None,
             "open_positions": len(open_rows),
         }
@@ -470,10 +481,14 @@ async function funnel(){
   let info='';
   if(g.blackout && !g.blackout.bias_mode) stop.push('Paused for '+esc(g.blackout.name)+'.');
   if(g.blackout && g.blackout.bias_mode){ const b=g.blackout.bias;
-    info='<div class="row inset"><div><div class="l">Trading through news</div><div class="h">'
+    info+='<div class="row inset"><div><div class="l">Trading through news</div><div class="h">'
       +esc(g.blackout.name)+'<br>'+(b?'Bias: <b>'+esc(b.bias.toUpperCase())+'</b> ('+b.confidence
       +') · '+esc(b.reason||''):'Asking Groq for the public mood; using news sentiment meanwhile.')
       +'<br>Signals against a confident bias are skipped; the rest trade.</div></div><div></div></div>'; }
+  if(g.calendar_caution){ const c=g.calendar_caution;
+    info+='<div class="row inset"><div><div class="l">Institutional-flow window</div><div class="h">'
+      +esc(c.name)+' ('+esc(c.when)+')<br>Confidence trimmed by '+(c.penalty*100).toFixed(0)
+      +'% on new signals — never a pause.</div></div><div></div></div>'; }
   if(g.book_full_with) stop.push('Book full: premium trade open in '+esc(g.book_full_with)+'.');
   const stale=(d.feeds||[]).filter(f=>f.candle_age_s==null||f.candle_age_s>300);
   if(stale.length) stop.push('No fresh price for '+stale.map(f=>esc(f.symbol)).join(', ')+' (over 5 min old).');

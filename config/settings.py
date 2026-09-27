@@ -380,6 +380,12 @@ class Settings(BaseSettings):
     # During an event window, trade with the AI's bull/bear read of it
     # (analysis/event_bias.py) instead of pausing everything.
     event_bias_mode: bool = True
+    # Research phase 1 (27 Sep): soften confidence during structural
+    # institutional-flow windows — rebalancing, options/futures expiry,
+    # thin weekend liquidity (analysis/event_calendar.caution). Never a
+    # veto, and separate from event_blackout_enabled above, which is
+    # FOMC/CPI/NFP specifically.
+    calendar_caution_enabled: bool = True
     fear_greed_refresh_minutes: int = 60
     crypto_max_stake_pct: float = 0.02
     use_finbert: bool = False
