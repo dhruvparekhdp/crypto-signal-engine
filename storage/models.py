@@ -212,6 +212,12 @@ class CryptoSignalLog(Base):
     # ever measured on the trades it allowed can only ever look good. This is
     # the row that answers "what did blocking that cost me".
     suppressed_by: Mapped[str] = mapped_column(String, default="", index=True)
+    # Set only for a signal that DID publish (suppressed_by empty) but was
+    # then not opened as a paper trade — "confidence_below_floor",
+    # "outside_session", "book_full_premium", and so on, the same reason
+    # words /api/pipeline already turns into English. Empty means either
+    # it was opened, or paper trading has not reached a decision on it yet.
+    skip_reason: Mapped[str] = mapped_column(String, default="")
     timestamp: Mapped[datetime] = mapped_column(DateTime, index=True)
 
 

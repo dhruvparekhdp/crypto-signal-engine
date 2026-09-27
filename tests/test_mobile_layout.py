@@ -270,7 +270,17 @@ class TestSignalCards(unittest.TestCase):
 
     def test_a_refused_setup_gets_no_action_button(self):
         """A live-looking Buy on a trade the bot refuses is a mixed message."""
-        self.assertIn("viable ? (long?'Buy / Long':'Sell / Short') : 'Refused'", self.html)
+        self.assertIn("!viable ? 'Refused'", self.html)
+        self.assertIn("long?'Buy / Long':'Sell / Short'", self.html)
+
+    def test_a_signal_the_bot_skipped_says_so_instead_of_looking_ignored(self):
+        """27 Sep: a card whose cost/move numbers passed (viable) but that
+        never became a paper trade for a different reason (confidence,
+        session, protections, book full) used to look identical to one
+        still waiting its turn — no way to tell "skipped" from "pending"."""
+        self.assertIn("s.skip_reason", self.html)
+        self.assertIn("'Not traded'", self.html)
+        self.assertIn("did not become a paper", self.html)
 
     def test_a_sub_one_multiple_is_described_not_computed(self):
         """

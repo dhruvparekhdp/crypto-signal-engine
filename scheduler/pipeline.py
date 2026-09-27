@@ -43,6 +43,9 @@ EVENTS = {
 REASON_WORDS = {
     "outside_session": "outside trading hours / weekend",
     "against_news_bias": "against the news bias",
+    "news_blackout": "paused for a scheduled news / economic event",
+    "paper_trading_off": "paper trading is switched off",
+    "no_live_price": "no live price yet",
     "daily_loss_limit": "daily loss limit reached",
     "losing_streak_pause": "3 losses in a row: 2-hour pause",
     "losing_streak_day_over": "5 losses in a row: done for the day",

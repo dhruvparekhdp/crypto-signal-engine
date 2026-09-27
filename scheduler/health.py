@@ -65,6 +65,7 @@ async def _api_crypto_coins(runner, request: web.Request) -> web.Response:
 
 async def _api_crypto_signals(runner, request: web.Request) -> web.Response:
     """Return recent crypto trade signals."""
+    from scheduler.pipeline import REASON_WORDS
     from storage.database import AsyncSessionFactory
     from storage.repository import Repository
     async with AsyncSessionFactory() as session:
@@ -88,6 +89,13 @@ async def _api_crypto_signals(runner, request: web.Request) -> web.Response:
             "indicators": r.indicators_summary,
             "outcome": r.outcome,
             "timestamp": _iso(r.timestamp),
+            # Why this fired signal never became a paper trade — empty
+            # means it was opened, or paper trading has not reached a
+            # decision on it yet (both look the same from here; check
+            # /api/paper for the trade itself).
+            "skip_reason": r.skip_reason or None,
+            "skip_reason_text": (REASON_WORDS.get(r.skip_reason, r.skip_reason.replace("_", " "))
+                                 if r.skip_reason else None),
         }
         for r in rows
     ]
@@ -2898,9 +2906,14 @@ function renderCryptoSignalCard(s){
       ${rr?`<span class="pill">${rr.toFixed(2)} reward:risk</span>`:''}
       <span class="pill">${move.toFixed(3)}% move</span>
       <div style="flex-grow:1"></div>
-      <span class="sig-act ${viable?(long?'long':'short'):'off'}">${
-        viable ? (long?'Buy / Long':'Sell / Short') : 'Refused'}</span>
+      <span class="sig-act ${!viable?'off':(s.skip_reason?'off':(long?'long':'short'))}">${
+        !viable ? 'Refused' : (s.skip_reason ? 'Not traded' : (long?'Buy / Long':'Sell / Short'))}</span>
     </div>
+
+    ${(viable && s.skip_reason)?`<div class="sig-warn">Fired, but did not become a paper
+      trade: <b>${esc(s.skip_reason_text||s.skip_reason)}</b>. The cost/move numbers above
+      passed — this is a different gate (confidence, session, protections, or the book
+      already full) deciding it, not this card's own math.</div>`:''}
 
     ${viable?'':`<div class="sig-warn">Target is ${move.toFixed(3)}% away against a
       ${BREAK_EVEN_PCT.toFixed(3)}% round trip. ${xcost <= 1

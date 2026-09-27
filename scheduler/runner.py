@@ -471,6 +471,8 @@ class AppRunner:
                 if blackout is not None and pending and not settings.event_bias_mode:
                     log.info("paper_trades_blackout", event_name=blackout.name,
                              kind=blackout.kind, skipped=len(pending))
+                    for _sig, _st in pending:
+                        await self._mark_skipped(_sig.log_id, "news_blackout")
                     pending = []
                 elif blackout is not None:
                     # Trade through it with the crowd's bias (owner, 26 Sep):
@@ -508,7 +510,9 @@ class AppRunner:
                     sym: (s_.atr_14 / s_.current_price * 100 if s_.current_price > 0 else 0)
                     for sym, s_ in states.items()})
                 for sig, st in pending:
+                    log_id = sig.log_id   # captured before reprice_signal can null sig out
                     if st.current_price <= 0:
+                        await self._mark_skipped(log_id, "no_live_price")
                         continue
                     if event_bias is not None:
                         from analysis.event_bias import allows
@@ -516,16 +520,19 @@ class AppRunner:
                             log.info("paper_trade_skipped", symbol=sig.symbol,
                                      reason="against_news_bias", bias=event_bias["bias"],
                                      event_name=blackout.name)
+                            await self._mark_skipped(log_id, "against_news_bias")
                             continue
                     full = (book_full(cstate.positions, settings.premium_roe_pct)
                             if settings.premium_fills_book else None)
                     if full is not None:
                         log.info("paper_trade_skipped", symbol=sig.symbol,
                                  reason="book_full_premium", holding=full.symbol)
+                        await self._mark_skipped(log_id, "book_full_premium")
                         continue
                     sig, why_not = reprice_signal(sig, st.current_price, now, max_age)
                     if sig is None:
                         log.info("paper_trade_skipped", symbol=st.symbol, reason=why_not)
+                        await self._mark_skipped(log_id, why_not)
                         continue
                     sig = self._apply_sentiment(sig, st.funding_rate_per_8h)
                     ok, _why = should_open(sig, cfg, cstate, now)
@@ -537,12 +544,19 @@ class AppRunner:
                             is_crypto=spec_for(sig.symbol).kind == "crypto")
                     if not ok:
                         log.info("paper_trade_skipped", symbol=sig.symbol, reason=_why)
+                        await self._mark_skipped(log_id, _why)
                         continue
                     atr_pct = (st.atr_14 / st.current_price
                                if st.current_price > 0 and st.atr_14 > 0 else None)
                     pos = open_from_signal(sig, cfg, cstate, now,
                                            pcfg.usdt_inr, atr_pct, protect=protect)
                     if pos is None:
+                        # open_from_signal's own gates (stop_inside_fees,
+                        # liquidation_too_near, below_one_lot, target_not_
+                        # viable) already log a reason; margin<=0 is the one
+                        # silent case, and the only one left once this is
+                        # reached — see analysis/paper_cycle.open_from_signal.
+                        await self._mark_skipped(log_id, "no_free_margin")
                         continue
                     cstate.wallet -= pos.margin
                     wallet = cstate.wallet
@@ -631,6 +645,15 @@ class AppRunner:
         except Exception:
             log.exception("crypto_signal_db_log_failed", symbol=sig.symbol)
             return 0
+
+    async def _mark_skipped(self, log_id: int, reason: str) -> None:
+        """Never let a failure here interrupt the tick that called it — an
+        unexplained Signals card is a worse night than a missing one."""
+        try:
+            async with AsyncSessionFactory() as session:
+                await Repository(session).mark_signal_skipped(log_id, reason)
+        except Exception:
+            log.debug("signal_skip_reason_not_saved", log_id=log_id, reason=reason)
 
     async def _review_open_position(self, pos, state, cfg, now, wallet, repo):
         """
@@ -1056,10 +1079,16 @@ class AppRunner:
                     if settings.crypto_alert_telegram:
                         await self.notifier.send_text(msg, parse_mode=ParseMode.HTML)
 
+                    # Set before queuing: _paper_trading_job writes its
+                    # decision back onto this exact row (opened, or skipped
+                    # and why), which is what lets the Signals page explain
+                    # "why no trade" per signal instead of a silent card.
+                    sig.log_id = await self._log_signal(sig)
+
                     if pcfg.enabled:
                         self._pending_paper_signals.append((sig, state))
-
-                    await self._log_signal(sig)
+                    else:
+                        await self._mark_skipped(sig.log_id, "paper_trading_off")
 
                     log.info(
                         "crypto_signal_fired",

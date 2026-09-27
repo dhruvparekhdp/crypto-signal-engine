@@ -23,6 +23,11 @@ class CryptoSignal:
     indicators_summary: str
     timestamp: datetime
     ai_review: str = ""
+    # The crypto_signal_log row this signal was recorded as, so a later
+    # decision (paper trade opened, or skipped and why) can be written back
+    # onto the exact row the Signals page reads — set once, right after
+    # logging, in scheduler/runner.py. 0 means "not logged yet".
+    log_id: int = 0
 
 
 def compute_crypto_stake(edge_pct: float, confidence: float) -> float:

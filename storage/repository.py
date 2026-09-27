@@ -1085,6 +1085,21 @@ class Repository:
         row.pnl_pct = pnl_pct
         await self.session.commit()
 
+    async def mark_signal_skipped(self, log_id: int, reason: str) -> None:
+        """
+        Why a fired signal did not become a paper trade — "confidence_below_
+        floor", "book_full_premium", and so on. log_id is 0 for a signal
+        that failed to log in the first place (never happens in practice,
+        but the caller does not have to know that): a no-op, not an error.
+        """
+        if not log_id:
+            return
+        row = await self.session.get(CryptoSignalLog, log_id)
+        if row is None:
+            return
+        row.skip_reason = reason
+        await self.session.commit()
+
     async def crypto_signal_counts(self) -> dict:
         async def count(model, where=None):
             q = select(func.count()).select_from(model)
