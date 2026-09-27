@@ -39,6 +39,8 @@ SETUP_VARIANTS = {
     "clean_swings": ({"swing_alternate": True, "min_swing_atr": 0.75},
                      "Alternating swings, >= 0.75 ATR"),
     "displacement": ({"displacement_atr": 0.8}, "Breakout bar body >= 0.8 ATR (D)"),
+    "wider_d_stop": ({"stop_atr_buffer_d": 0.25},
+                     "D: retest stop 0.25 ATR beyond the level, not 0.1 (matches A)"),
     "deeper_entry": ({"entry_depth": 0.25}, "Limit 25% deeper into the trigger bar"),
     "regime": ({"regime_routing": True}, "Trend setups in trends, range in ranges"),
     "all_filters": ({"premium_discount": True, "htf_strict": True, "news_blackout": True,

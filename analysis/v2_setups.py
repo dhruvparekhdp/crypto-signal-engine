@@ -55,7 +55,17 @@ class V2Config:
     sweep_vol_mult: float = 1.5
     range_min_bars: int = 24
     retest_max_bars: int = 8
-    stop_atr_buffer: float = 0.25
+    stop_atr_buffer: float = 0.25          # used by A
+    # D used a bare 0.1 hardcoded in the rule, 2.5x tighter than A's
+    # buffer above (0.25) and half of B's (0.2 also hardcoded, in the sweep
+    # rule) — no comment ever explained why, and it is the prime suspect
+    # for D's live shadow numbers (27 Sep: 36% win, PF 0.324, worst of the
+    # four setups): a stop this close to the retest low/high is cheap for
+    # ordinary wick noise to clip even when the move continues afterward.
+    # Kept at 0.1 by default — this changes nothing until a backtest says
+    # a wider one is actually better — see SETUP_VARIANTS["wider_d_stop"]
+    # in analysis/v2_report.py, which now measures that on real data.
+    stop_atr_buffer_d: float = 0.1
     # Research variants (26 Sep), all off by default and measured side by
     # side in the report. Thresholds are round numbers, not tuned.
     premium_discount: bool = False   # A/D: long only in the lower half of the 15m swing
@@ -346,12 +356,12 @@ def generate(symbol: str, k5: pd.DataFrame, k15: pd.DataFrame, k4h: pd.DataFrame
                 level = sh15[k]
                 if not np.isnan(level) and lo[i] <= level + 0.1 * atr15 \
                         and lo[i] >= level - 0.5 * atr15 and c[i] > level and green:
-                    stop = lo[i] - 0.1 * atr15
+                    stop = lo[i] - cfg.stop_atr_buffer_d * atr15
                     add("D", "long", stop, entry + 2 * (entry - stop), level=float(level))
             if ev15[k] in ("bos_down", "choch_down") and allow_short and strong:
                 level = sl15[k]
                 if not np.isnan(level) and h[i] >= level - 0.1 * atr15 \
                         and h[i] <= level + 0.5 * atr15 and c[i] < level and red:
-                    stop = h[i] + 0.1 * atr15
+                    stop = h[i] + cfg.stop_atr_buffer_d * atr15
                     add("D", "short", stop, entry - 2 * (stop - entry), level=float(level))
     return out

@@ -268,6 +268,51 @@ class TestResearchFilters(unittest.TestCase):
             got = {(c.ts, c.setup, c.side) for c in self.run_with(**flags)}
             self.assertTrue(got <= base, flags)
 
+    def test_d_stop_buffer_is_configurable_and_only_touches_d(self):
+        """
+        D's stop used a bare 0.1 hardcoded in the rule — the prime suspect
+        for D's live shadow numbers (27 Sep: 36% win, worst of the four
+        setups) being a tighter stop than every other setup's buffer.
+        Default must stay exactly 0.1 (today's behaviour, unchanged); a
+        wider setting must widen D's stop distance and touch nothing else.
+        """
+        base_d = [c for c in self.base if c.setup == "D"]
+        self.assertTrue(base_d, "synthetic market should produce some D setups")
+        for c in base_d:
+            dist = abs(c.entry - c.stop)
+            # Recover the ATR the rule used: stop = level +/- 0.1*atr, and
+            # entry is the same bar's close, so this is exact within the
+            # bar's own range, not a separate measurement.
+            self.assertGreater(dist, 0)
+
+        wide = self.run_with(stop_atr_buffer_d=0.25)
+        wide_by_key = {(c.ts, c.side): c for c in wide if c.setup == "D"}
+        widened = touched = 0
+        for c in base_d:
+            w = wide_by_key.get((c.ts, c.side))
+            if w is None:
+                continue
+            touched += 1
+            base_dist = abs(c.entry - c.stop)
+            wide_dist = abs(w.entry - w.stop)
+            self.assertGreater(wide_dist, base_dist)
+            widened += 1
+        self.assertGreater(touched, 0)
+        self.assertEqual(widened, touched)
+
+        # Nothing outside D moved.
+        base_other = {(c.ts, c.setup, c.side, round(c.stop, 10))
+                      for c in self.base if c.setup != "D"}
+        wide_other = {(c.ts, c.setup, c.side, round(c.stop, 10))
+                      for c in wide if c.setup != "D"}
+        self.assertEqual(base_other, wide_other)
+
+        # The default (no override) is exactly today's live behaviour.
+        default_d = [c for c in generate("x", self.k5, self.k15, self.k4h, self.k1d)
+                    if c.setup == "D"]
+        self.assertEqual([(c.ts, c.side, round(c.stop, 10)) for c in base_d],
+                         [(c.ts, c.side, round(c.stop, 10)) for c in default_d])
+
 
 class TestOwnerStyleExit(unittest.TestCase):
     """Lock profit once price moves 0.5%, then trail tight (the owner's SOL trade)."""
