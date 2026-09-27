@@ -28,6 +28,7 @@ candle route is the last resort — worse data, but real bars.
 """
 from __future__ import annotations
 
+import asyncio
 from datetime import UTC, datetime
 
 import httpx
@@ -227,6 +228,14 @@ class BinanceKlines:
             self.last_books[symbol.lower()] = book
         return book
 
+    # How many symbols to fetch (klines + depth) at once. Binance's public
+    # per-IP weight budget is generous (thousands/minute) next to a watchlist
+    # of a handful of coins, so this is sized to stay polite to the host and
+    # leave headroom for other collectors sharing the same egress IP, not to
+    # dodge a limit we would actually hit — a fixed small cap rather than
+    # "all of them at once" unbounded.
+    FETCH_CONCURRENCY = 5
+
     async def fetch(self) -> int:
         """
         Refresh every watchlist symbol. Returns how many got real candles.
@@ -234,32 +243,46 @@ class BinanceKlines:
         Best effort per symbol: one market failing must not stop the rest, and
         this job failing must not stop the price feed, which comes from a
         different collector entirely.
+
+        Symbols are fetched concurrently, capped by FETCH_CONCURRENCY, rather
+        than one after another. Sequentially, N symbols paid N round trips to
+        Binance back to back (klines, then depth, then the next symbol) —
+        with 7 watchlist coins at roughly a second each that was most of the
+        7s this job was taking. Nothing here depends on fetch order: each
+        symbol's candles and depth are independent, so bounding the fan-out
+        with a semaphore collapses that to about as long as the slowest
+        single symbol.
         """
         if self.store is None:
             return 0
         symbols = await self.store.get_symbols()
         self.refreshed = set()
         self.status = {}
-        for sym in symbols:
-            try:
-                bars = await self.fetch_candles(sym)
-                if not bars:
-                    self.status[sym] = f"no candles ({self.last_error or 'empty'})"
-                    continue
-                if len(bars) < 20:
-                    self.status[sym] = f"only {len(bars)} bars — too few to install"
-                    continue
-                await self.store.replace_candles(sym, bars)
-                self.refreshed.add(sym)
-                self.status[sym] = f"{len(bars)} bars via {self.host or 'fallback'}"
-                book = await self.fetch_depth(sym)
-                if book is not None:
-                    state = await self.store.get(sym)
-                    if state is not None:
-                        state.order_book = book
-            except Exception as exc:
-                self.status[sym] = f"{type(exc).__name__}: {exc}"
-                log.debug("binance_klines_symbol_failed", symbol=sym, error=str(exc))
+        sem = asyncio.Semaphore(self.FETCH_CONCURRENCY)
+
+        async def _one(sym: str) -> None:
+            async with sem:
+                try:
+                    bars = await self.fetch_candles(sym)
+                    if not bars:
+                        self.status[sym] = f"no candles ({self.last_error or 'empty'})"
+                        return
+                    if len(bars) < 20:
+                        self.status[sym] = f"only {len(bars)} bars — too few to install"
+                        return
+                    await self.store.replace_candles(sym, bars)
+                    self.refreshed.add(sym)
+                    self.status[sym] = f"{len(bars)} bars via {self.host or 'fallback'}"
+                    book = await self.fetch_depth(sym)
+                    if book is not None:
+                        state = await self.store.get(sym)
+                        if state is not None:
+                            state.order_book = book
+                except Exception as exc:
+                    self.status[sym] = f"{type(exc).__name__}: {exc}"
+                    log.debug("binance_klines_symbol_failed", symbol=sym, error=str(exc))
+
+        await asyncio.gather(*(_one(sym) for sym in symbols))
         if self.refreshed:
             self.last_success = datetime.now(UTC)
         log.info("binance_klines_done", refreshed=len(self.refreshed),

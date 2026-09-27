@@ -3501,6 +3501,10 @@ async def _api_paper_config_post(runner, request: web.Request) -> web.Response:
                 sizing_ceiling_pct=(float(body["sizing_ceiling_pct"])
                                     if "sizing_ceiling_pct" in body else None),
             )
+            # A config save must show up on /api/pipeline right away, not in
+            # up to 4s — same discipline as /api/app-settings's own save.
+            from scheduler import cache
+            cache.invalidate("pipeline_db_read")
             return web.json_response({"ok": True, "enabled": cfg.enabled, "starting_wallet": cfg.starting_wallet})
     except Exception as exc:
         return web.json_response({"error": str(exc)}, status=400)

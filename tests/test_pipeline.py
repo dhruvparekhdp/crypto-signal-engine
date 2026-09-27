@@ -6,6 +6,7 @@ import os
 import tempfile
 import unittest
 from types import SimpleNamespace
+from unittest.mock import AsyncMock, patch
 
 from aiohttp.test_utils import make_mocked_request
 
@@ -71,8 +72,10 @@ class TestApi(unittest.TestCase):
         async def run():
             import storage.database as database
             from analysis.protections import ProtectionConfig
+            from scheduler import cache
             from scheduler.settings_page import pipeline_api
             from storage.database import init_db
+            cache.clear()
             await init_db()
 
             async def get_all():
@@ -84,6 +87,73 @@ class TestApi(unittest.TestCase):
             body = json.loads(resp.text)
             self.assertIn("in_session_now", body["gates"])
             self.assertIn("stages", body["day"])
+            await database.engine.dispose()
+
+        asyncio.run(run())
+
+
+class TestPipelineDbReadIsCached(unittest.TestCase):
+    """
+    /api/pipeline's paper-config and open-positions reads barely change
+    between one poll and the next, so a repeat poll within the cache's TTL
+    must not pay the database round trip again — the same discipline
+    /api/paper's own snapshot already follows.
+    """
+
+    def test_a_second_call_within_ttl_does_not_hit_the_database_again(self):
+        os.environ["DATABASE_URL"] = f"sqlite+aiosqlite:///{tempfile.mktemp(suffix='.db')}"
+
+        async def run():
+            import storage.database as database
+            from scheduler import cache
+            from scheduler.settings_page import _pipeline_db_read
+            from storage.database import init_db
+            cache.clear()
+            await init_db()
+
+            calls = []
+            from storage.repository import Repository
+            real_get_paper_config = Repository.get_paper_config
+
+            async def counted(self):
+                calls.append(1)
+                return await real_get_paper_config(self)
+            Repository.get_paper_config = counted
+            try:
+                await _pipeline_db_read()
+                await _pipeline_db_read()
+            finally:
+                Repository.get_paper_config = real_get_paper_config
+            self.assertEqual(len(calls), 1, "second call should hit the cache, not the DB")
+            await database.engine.dispose()
+
+        asyncio.run(run())
+
+    def test_a_paper_config_save_invalidates_it_immediately(self):
+        os.environ["DATABASE_URL"] = f"sqlite+aiosqlite:///{tempfile.mktemp(suffix='.db')}"
+
+        async def run():
+            import storage.database as database
+            from scheduler import cache
+            from scheduler.health import _api_paper_config_post
+            from scheduler.settings_page import _pipeline_db_read
+            from storage.database import init_db
+            cache.clear()
+            await init_db()
+
+            pcfg, _rows = await _pipeline_db_read()
+            self.assertEqual(pcfg.max_concurrent, 3)  # default, before the save
+
+            class Body:
+                async def json(self):
+                    return {"max_concurrent": 9}
+            with patch("scheduler.health._verify_admin_session", AsyncMock(return_value=True)):
+                fake_req = SimpleNamespace(json=Body().json)
+                await _api_paper_config_post(SimpleNamespace(), fake_req)
+
+            pcfg2, _rows2 = await _pipeline_db_read()
+            self.assertEqual(pcfg2.max_concurrent, 9,
+                             "the save must be visible immediately, not after the cache's TTL")
             await database.engine.dispose()
 
         asyncio.run(run())

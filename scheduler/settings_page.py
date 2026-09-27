@@ -65,6 +65,12 @@ async def _recent_activity(session_factory) -> dict:
            for role, r in zip(jobs, results, strict=True)}
 
 
+async def _stored_settings(session_factory) -> dict:
+    from storage.repository import Repository
+    async with session_factory() as session:
+        return await Repository(session).get_app_settings()
+
+
 async def _settings_db_read(session_factory) -> dict:
     """
     Both DB-backed pieces of /api/app-settings — saved overrides and which
@@ -72,13 +78,20 @@ async def _settings_db_read(session_factory) -> dict:
     else in the response (settings.<field>, chain_for()) reads the live
     Python objects directly, no DB and no cache needed: apply() already
     updates them the instant a save lands, so they are never stale.
+
+    The two pieces don't depend on each other, so on a cache miss they run
+    together rather than one after the other. Sequentially this was two
+    round trips back to back (one for the saved overrides, six more run
+    together for "who last answered") before the response could be built —
+    on this database's ~1.4s floor that is the difference between a ~1.4s
+    miss and a ~2.8s one.
     """
-    from storage.repository import Repository
+    import asyncio
 
     async def fetch():
-        async with session_factory() as session:
-            stored = await Repository(session).get_app_settings()
-        return {"stored": stored, "activity": await _recent_activity(session_factory)}
+        stored, activity = await asyncio.gather(
+            _stored_settings(session_factory), _recent_activity(session_factory))
+        return {"stored": stored, "activity": activity}
 
     from scheduler import cache
     return await cache.cached("app_settings_db", 8.0, fetch)
@@ -173,26 +186,46 @@ def _calendar_caution_row(now) -> dict | None:
     return {"name": item.name, "level": item.level, "when": item.when, "penalty": penalty}
 
 
+async def _pipeline_db_read() -> tuple:
+    """
+    The two DB reads /api/pipeline needs — the paper config and every open
+    position — cached a few seconds, the same way /api/paper's own snapshot
+    is. Both barely change between one poll and the next (a config save or a
+    trade opening/closing), so paying this database's round trip on every
+    single poll bought nothing: the page was re-reading the same rows every
+    few seconds while nothing behind them had moved. runner._paper_tick_job
+    and the /api/paper/config save both invalidate this the instant either
+    one actually changes.
+    """
+    from sqlalchemy import select
+
+    from storage.database import AsyncSessionFactory
+    from storage.models import PaperPosition
+    from storage.repository import Repository
+
+    async def fetch():
+        async with AsyncSessionFactory() as session:
+            pcfg = await Repository(session).get_paper_config()
+            open_rows = (await session.execute(select(PaperPosition))).scalars().all()
+        return pcfg, open_rows
+
+    from scheduler import cache
+    return await cache.cached("pipeline_db_read", 4.0, fetch)
+
+
 def pipeline_api(runner):
     """GET /api/pipeline — the signal funnel, and the live state of every time-based gate."""
     async def get(request: web.Request) -> web.Response:
         from datetime import UTC, datetime
-
-        from sqlalchemy import select
 
         from analysis.crypto_signals import SCALP
         from analysis.deal_scanner import book_full
         from analysis.protections import in_session
         from config.settings import settings
         from scheduler.pipeline import funnel
-        from storage.database import AsyncSessionFactory
-        from storage.models import PaperPosition
-        from storage.repository import Repository
 
         now = datetime.now(UTC)
-        async with AsyncSessionFactory() as session:
-            pcfg = await Repository(session).get_paper_config()
-            open_rows = (await session.execute(select(PaperPosition))).scalars().all()
+        pcfg, open_rows = await _pipeline_db_read()
         protect = runner._protection_config() if hasattr(runner, "_protection_config") else None
         blackout = runner._blackout(now) if hasattr(runner, "_blackout") else None
         full = (book_full(open_rows, settings.premium_roe_pct)

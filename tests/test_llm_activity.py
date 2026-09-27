@@ -66,6 +66,43 @@ class TestRecentServedBy(unittest.TestCase):
         _run(go())
 
 
+class TestSettingsDbReadRunsBothPiecesTogether(unittest.TestCase):
+    """
+    /api/app-settings' DB-backed pieces — saved overrides, and who last
+    answered each AI role — don't depend on each other. On a cache miss they
+    used to run one after the other; now they run together, so a miss costs
+    about as long as the slower of the two, not both added up.
+    """
+
+    def test_a_cache_miss_takes_about_as_long_as_the_slower_piece_not_both(self):
+        import asyncio
+        import time
+
+        from scheduler import cache, settings_page
+        cache.clear()
+
+        delay = 0.1
+
+        async def slow_stored(_session_factory):
+            await asyncio.sleep(delay)
+            return {"k": "v"}
+
+        async def slow_activity(_session_factory):
+            await asyncio.sleep(delay)
+            return {"pre_trade": {"last_served_by": None}}
+
+        async def go():
+            from unittest.mock import patch
+            with patch("scheduler.settings_page._stored_settings", slow_stored), \
+                 patch("scheduler.settings_page._recent_activity", slow_activity):
+                start = time.monotonic()
+                await settings_page._settings_db_read(session_factory=None)
+                return time.monotonic() - start
+        elapsed = asyncio.run(go())
+        self.assertLess(elapsed, delay * 1.7,
+                        "_settings_db_read looks sequential, not concurrent")
+
+
 class TestSettingsPageShowsRecentActivity(unittest.TestCase):
     def test_the_settings_api_response_carries_who_answered_each_role(self):
         async def go():
