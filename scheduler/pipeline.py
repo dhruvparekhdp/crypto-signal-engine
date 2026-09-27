@@ -71,6 +71,7 @@ REASON_WORDS = {
     "mirror_stop_passed": "price already past its own stop before it could confirm",
     "mirror_target_passed": "price already past its own target before it could confirm",
     "mirror_review_tracking": "still being reviewed — not confident enough yet either way",
+    "mirror_trading_disabled": "would have traded, but the mirror trading switch is off",
 }
 
 

@@ -738,14 +738,23 @@ class AppRunner:
         winner = max(round_winners, key=lambda c: c.signal.confidence)
         winner.state = "traded"
         state = states.get(winner.signal.symbol)
-        if pcfg.enabled:
+        if not settings.mirror_review_can_trade:
+            # Won its round, but the trading switch is off: log it exactly
+            # like a normal "why no trade" skip, so the review trail reads
+            # "Not traded — mirror trading switch is off" instead of
+            # "Traded" — the whole point of the second switch is that this
+            # branch is indistinguishable from a real trade in every way
+            # except that nothing opens.
+            await self._mark_skipped(winner.log_id, "mirror_trading_disabled")
+        elif pcfg.enabled:
             self._pending_paper_signals.append((winner.signal, state))
+            await self._mark_traded(winner.log_id)
         else:
             await self._mark_skipped(winner.log_id, "paper_trading_off")
-        await self._mark_traded(winner.log_id)
         log.info("mirror_candidate_won", symbol=winner.signal.symbol,
                  role=winner.signal.candidate_role, direction=winner.signal.direction,
-                 confidence=winner.signal.confidence, round=winner.review_round)
+                 confidence=winner.signal.confidence, round=winner.review_round,
+                 would_trade_only=not settings.mirror_review_can_trade)
 
         for cand in pair.candidates():
             if cand is winner or cand.state != "tracking":

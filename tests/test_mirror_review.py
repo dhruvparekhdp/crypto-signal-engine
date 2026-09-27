@@ -223,7 +223,8 @@ async def test_a_strong_signal_opens_immediately_at_round_zero():
     engine, sm = await _fresh_db()
     runner, st = _runner_with_state()
     runner.groq_sentinel = _unavailable_groq()   # confidence stays at seed
-    with patch("scheduler.runner.AsyncSessionFactory", sm):
+    with patch("scheduler.runner.AsyncSessionFactory", sm), \
+         patch("scheduler.runner.settings.mirror_review_can_trade", True):
         from storage.repository import Repository
         async with sm() as s:
             repo = Repository(s)
@@ -245,6 +246,40 @@ async def test_a_strong_signal_opens_immediately_at_round_zero():
 
 
 @pytest.mark.asyncio
+async def test_winning_candidate_does_not_trade_while_can_trade_switch_is_off():
+    """mirror_review_can_trade defaults to False: a candidate that wins its
+    round is logged and its trail is fully populated exactly as if it had
+    traded, but nothing queues, and the reason is legible on the Signals
+    page via REASON_WORDS. Two independent switches, tested independently:
+    mirror_review_enabled is what's on here, mirror_review_can_trade stays
+    at its default off."""
+    engine, sm = await _fresh_db()
+    runner, st = _runner_with_state()
+    runner.groq_sentinel = _unavailable_groq()   # confidence stays at seed
+    with patch("scheduler.runner.AsyncSessionFactory", sm), \
+         patch("scheduler.runner.settings.mirror_review_can_trade", False):
+        from storage.repository import Repository
+        async with sm() as s:
+            repo = Repository(s)
+            await repo.update_paper_config(min_confidence=0.70)
+            scfg = await repo.get_strategy_config()
+            pcfg = await repo.get_paper_config()
+
+        sig = _signal(confidence=0.80, direction="long")
+        await runner._handle_mirror_candidates(sig, st, [st], scfg, pcfg)
+
+        assert runner._pending_paper_signals == []
+
+        async with sm() as s:
+            rows = await Repository(s).get_recent_crypto_signals(hours=24)
+    assert len(rows) == 2
+    winner = next(r for r in rows if r.direction == "long")
+    assert winner.skip_reason == "mirror_trading_disabled"
+    assert winner.rejection_reason == ""
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
 async def test_tie_break_higher_confidence_wins_loser_marked_rejected():
     """Both primary and mirror seed at the same confidence (Groq
     unavailable, so nothing nudges either) and both clear pcfg's floor at
@@ -253,7 +288,8 @@ async def test_tie_break_higher_confidence_wins_loser_marked_rejected():
     engine, sm = await _fresh_db()
     runner, st = _runner_with_state()
     runner.groq_sentinel = _unavailable_groq()
-    with patch("scheduler.runner.AsyncSessionFactory", sm):
+    with patch("scheduler.runner.AsyncSessionFactory", sm), \
+         patch("scheduler.runner.settings.mirror_review_can_trade", True):
         from storage.repository import Repository
         async with sm() as s:
             repo = Repository(s)
@@ -478,6 +514,7 @@ async def test_live_loop_win_queues_the_paper_trade_and_stops_the_opposite_side(
 
     with patch("scheduler.runner.AsyncSessionFactory", sm), \
          patch("scheduler.runner.settings.mirror_review_enabled", True), \
+         patch("scheduler.runner.settings.mirror_review_can_trade", True), \
          patch("scheduler.runner.settings.mirror_review_min_elapsed_pct", 0.1), \
          patch("scheduler.runner.settings.mirror_review_confidence_delta_threshold", 0.01), \
          patch("scheduler.runner.local_confidence_estimate", return_value=0.95):

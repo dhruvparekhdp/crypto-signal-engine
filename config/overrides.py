@@ -96,6 +96,11 @@ FIELDS: tuple[Field, ...] = (
           "isn't strong enough to open right away is tracked and re-reviewed as the market "
           "moves, instead of being decided once. Off keeps today's behaviour exactly.",
           live=False),
+    Field("mirror_review_can_trade", "signals", "Mirror review: allow trading",
+          "A candidate that wins its round queues a real paper trade. Off keeps mirror review "
+          "watch-only: it still runs and its review trail still shows who would have won, but "
+          "nothing opens. Has no effect unless Mirror review is also on.",
+          live=False),
     Field("mirror_review_confidence_delta_threshold", "signals",
           "Mirror re-review: confidence move",
           "Re-review a tracked candidate only once its local confidence has moved this much.",

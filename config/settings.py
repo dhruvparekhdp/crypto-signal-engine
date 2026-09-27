@@ -352,6 +352,16 @@ class Settings(BaseSettings):
     # trading behaviour (a signal can now be held instead of opened
     # immediately), unlike the purely observational phases above.
     mirror_review_enabled: bool = False
+    # Two separate switches on purpose. mirror_review_enabled turns on the
+    # generation/tracking/review machinery itself (mirrors get built,
+    # reviewed, and their trail shows up on the Signals page); this one
+    # separately decides whether a candidate that wins its round is allowed
+    # to actually queue a paper trade. Off (default): a winning candidate is
+    # logged and its review trail shows "Not traded — mirror trading switch
+    # is off" instead of opening anything — lets the feature run and be
+    # watched with zero effect on real paper trades until this is flipped
+    # on too. Has no effect while mirror_review_enabled is False.
+    mirror_review_can_trade: bool = False
     # A tracked candidate is only re-reviewed once its local confidence has
     # moved by at least this much since its last AI review.
     mirror_review_confidence_delta_threshold: float = 0.05
