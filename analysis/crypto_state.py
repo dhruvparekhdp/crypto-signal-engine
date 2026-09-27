@@ -51,6 +51,22 @@ def resample_candles(candles: list[OHLCVCandle], timeframe_minutes: int) -> list
 
 
 @dataclass
+class TapeEvent:
+    """
+    One event straight off Binance's raw trade/liquidation streams — never
+    written to the database per-event (research phases 2-3, 27 Sep): kept
+    in a short rolling window in memory only, the same way live prices
+    already are, and pruned by CryptoStateStore as new ones arrive.
+    """
+    side: str            # "buy" | "sell" — see the two call sites for what
+                          # this means for a liquidation vs. a large trade
+    price: float
+    qty: float
+    notional: float       # price * qty, in the quote asset (USDT)
+    timestamp: datetime
+
+
+@dataclass
 class CryptoState:
     symbol: str                                                    # e.g., "btcusdt"
     base_asset: str                                                # e.g., "BTC"
@@ -128,6 +144,14 @@ class CryptoState:
     daily_trend_at: datetime | None = None
     sentiment_news_count: int = 0
     last_sentiment_update: datetime | None = None
+
+    # Live tape, research phases 2-3 (27 Sep): forced liquidations and
+    # unusually large single trades from Binance's raw streams. Rolling,
+    # capped to a short window (CryptoStateStore.record_liquidation /
+    # record_large_trade) — observational for now, not read by the signal
+    # engine yet. Watch them on /api/pipeline before anything trades on them.
+    liquidations: list[TapeEvent] = field(default_factory=list)
+    large_trades: list[TapeEvent] = field(default_factory=list)
 
     timestamp: datetime = field(default_factory=lambda: datetime.now(UTC))
 

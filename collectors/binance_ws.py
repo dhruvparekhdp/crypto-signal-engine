@@ -162,6 +162,16 @@ class BinanceWSCollector:
             s = sym.lower()
             streams.append(f"{s}@kline_{interval}")
             streams.append(f"{s}@miniTicker")
+            # Research phases 2-3 (27 Sep): forced liquidations and large
+            # single trades, straight off Binance's own free public streams
+            # — no key, no extra polling. Both optional and off is safe:
+            # nothing downstream reads them yet, only /api/pipeline shows
+            # them, so this is purely how much is subscribed to, not how
+            # much trades on it.
+            if settings.binance_liquidation_stream_enabled:
+                streams.append(f"{s}@forceOrder")
+            if settings.binance_large_trade_stream_enabled:
+                streams.append(f"{s}@aggTrade")
 
         stream_param = "/".join(streams)
         host = self.BASE_WS_URL
@@ -228,6 +238,8 @@ class BinanceWSCollector:
             pass
 
     async def _handle_stream_payload(self, payload: dict) -> None:
+        from config.settings import settings
+
         stream_name = payload.get("stream", "")
         data = payload.get("data", {})
 
@@ -280,6 +292,37 @@ class BinanceWSCollector:
                 high_24h=high_24h,
                 low_24h=low_24h,
             )
+
+        elif "@forceOrder" in stream_name:
+            # {"e":"forceOrder","E":..,"o":{"s":"BTCUSDT","S":"SELL",
+            #  "q":"0.014","ap":"9910",...}} — "S" is the forced order's own
+            # side, not the trader's original position: SELL means a LONG
+            # was closed, BUY means a SHORT was.
+            o = data.get("o", {})
+            sym = o.get("s", "").lower()
+            if not sym:
+                return
+            side = "buy" if o.get("S") == "BUY" else "sell"
+            price = float(o.get("ap") or o.get("p") or 0.0)
+            qty = float(o.get("q", 0.0))
+            await self.store.record_liquidation(sym, side, price, qty)
+
+        elif "@aggTrade" in stream_name:
+            # {"e":"aggTrade","s":"BTCUSDT","p":"...","q":"...","m":bool}
+            # "m" true means the buyer was the maker — the trade was SELL-
+            # initiated (aggressor hit the bid). Discarded before touching
+            # the store's lock unless it clears the notional threshold:
+            # most trades are small, and this stream is the chattiest one
+            # subscribed to, so that check has to happen first.
+            price = float(data.get("p", 0.0))
+            qty = float(data.get("q", 0.0))
+            if price <= 0 or qty <= 0 or price * qty < settings.large_trade_notional_usd:
+                return
+            sym = data.get("s", "").lower()
+            if not sym:
+                return
+            side = "sell" if data.get("m") else "buy"
+            await self.store.record_large_trade(sym, side, price, qty)
 
     def stop(self) -> None:
         self._running = False

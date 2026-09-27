@@ -148,6 +148,22 @@ def settings_api(runner):
     return get, post
 
 
+def _tape_summary(events: list, now) -> dict:
+    """Count, gross notional by side and the most recent event, for the raw-
+    tape columns on /api/pipeline. Never returns the events themselves — a
+    phone screen has room for a number, not a list."""
+    from datetime import UTC
+    if not events:
+        return {"count": 0, "buy_notional": 0.0, "sell_notional": 0.0, "last": None}
+    buy = sum(e.notional for e in events if e.side == "buy")
+    sell = sum(e.notional for e in events if e.side == "sell")
+    last = events[-1]
+    ts = last.timestamp if last.timestamp.tzinfo else last.timestamp.replace(tzinfo=UTC)
+    return {"count": len(events), "buy_notional": round(buy, 2), "sell_notional": round(sell, 2),
+           "last": {"side": last.side, "notional": round(last.notional, 2),
+                    "price": last.price, "ago_s": round((now - ts).total_seconds())}}
+
+
 def _calendar_caution_row(now) -> dict | None:
     from analysis.event_calendar import caution
     item = caution(now)
@@ -194,7 +210,12 @@ def pipeline_api(runner):
                           # swing is smaller than the fees, no setup can pay.
                           "atr_pct": (round(st.atr_14 / price * 100, 3)
                                       if price > 0 and st.atr_14 > 0 else None),
-                          "cost_pct": round(SCALP.for_symbol(st.symbol).cost_floor_pct * 100, 3)})
+                          "cost_pct": round(SCALP.for_symbol(st.symbol).cost_floor_pct * 100, 3),
+                          # Research phases 2-3: what the raw tape has shown
+                          # in the last 15 minutes. Watch, nothing trades on
+                          # these yet — see analysis/crypto_state.TapeEvent.
+                          "liquidations_15m": _tape_summary(getattr(st, "liquidations", []), now),
+                          "large_trades_15m": _tape_summary(getattr(st, "large_trades", []), now)})
         gates = {
             "paper_enabled": bool(pcfg.enabled),
             "protections_enabled": settings.protections_enabled,

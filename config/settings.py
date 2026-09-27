@@ -335,6 +335,20 @@ class Settings(BaseSettings):
     binance_oi_enabled: bool = True
     orderflow_enabled: bool = True
     high_conviction_only: bool = False
+    # Research phases 2-3 (27 Sep): Binance's free public liquidation and
+    # trade streams, subscribed alongside the klines the socket already
+    # carries — no extra connection, no key. Purely observational for
+    # now: nothing in the signal engine reads state.liquidations or
+    # state.large_trades yet, only /api/pipeline shows them. Off does not
+    # take effect until the next reconnect, same as the kline interval.
+    binance_liquidation_stream_enabled: bool = True
+    binance_large_trade_stream_enabled: bool = True
+    # A single trade at or above this notional (USDT) is flagged as
+    # "large" — a free, crude proxy for a big (possibly institutional)
+    # participant. BTCUSDT trades often several times a second; this
+    # threshold is what keeps almost all of them from ever reaching the
+    # store's lock, let alone memory.
+    large_trade_notional_usd: float = 50000.0
 
     # Paper Trading defaults (Dynamically managed in DB via PaperTradingConfig)
     paper_trading_enabled: bool = True

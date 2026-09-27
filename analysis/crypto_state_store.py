@@ -6,7 +6,7 @@ from datetime import UTC, datetime
 
 import structlog
 
-from analysis.crypto_state import CommodityState, CryptoState, OHLCVCandle
+from analysis.crypto_state import CommodityState, CryptoState, OHLCVCandle, TapeEvent
 from config.settings import settings
 
 log = structlog.get_logger()
@@ -149,6 +149,18 @@ CANDLE_WINDOW = 360
 """Rolling 1-minute window kept per symbol (6 hours). Shared so the backtest cannot
 silently diverge from the live store by holding a different amount of history."""
 
+TAPE_WINDOW_MINUTES = 15
+"""How long a liquidation or large-trade event is kept in memory. Short on
+purpose: this is "what just happened", not history — the database, not this
+window, is where anything worth keeping longer ends up (nothing does yet)."""
+
+
+def _prune_tape(events: list[TapeEvent], now: datetime) -> None:
+    """Drop events older than TAPE_WINDOW_MINUTES, in place."""
+    cutoff = now.timestamp() - TAPE_WINDOW_MINUTES * 60
+    while events and events[0].timestamp.timestamp() < cutoff:
+        events.pop(0)
+
 # The longest indicator lookback is EMA-200, but RSI and ATR only ever consume
 # their last `period + 1` inputs, so handing them the whole window is wasted
 # work for a bit-identical answer.
@@ -267,6 +279,52 @@ class CryptoStateStore:
 
             if is_closed:
                 recalculate_indicators(state)
+
+    async def record_liquidation(self, symbol: str, side: str, price: float,
+                                 qty: float, timestamp: datetime | None = None) -> None:
+        """
+        A forced liquidation on `symbol` (research phase 2, 27 Sep). `side`
+        is the forced order's own side: "sell" means a LONG was force-closed
+        (added selling pressure), "buy" means a SHORT was (added buying
+        pressure) — which one is closer to a bottom vs. a cascade continuing
+        depends on where price already was, which is exactly why this is
+        watched before it decides anything.
+        """
+        if price <= 0 or qty <= 0:
+            return
+        sym = symbol.lower()
+        async with self._lock:
+            state = self._states.get(sym)
+            if state is None:
+                return   # not (or no longer) on the watchlist
+            now = timestamp or datetime.now(UTC)
+            state.liquidations.append(TapeEvent(side=side, price=price, qty=qty,
+                                                notional=price * qty, timestamp=now))
+            _prune_tape(state.liquidations, now)
+        log.info("binance_liquidation", symbol=sym, side=side, price=price,
+                 qty=qty, notional=round(price * qty, 2))
+
+    async def record_large_trade(self, symbol: str, side: str, price: float,
+                                 qty: float, timestamp: datetime | None = None) -> None:
+        """
+        A single trade on `symbol` above the configured notional threshold
+        (research phase 3, 27 Sep) — a crude, free proxy for a large
+        (possibly institutional) participant. `side` is the aggressor: who
+        crossed the spread, "buy" (hit the ask) or "sell" (hit the bid).
+        """
+        if price <= 0 or qty <= 0:
+            return
+        sym = symbol.lower()
+        async with self._lock:
+            state = self._states.get(sym)
+            if state is None:
+                return
+            now = timestamp or datetime.now(UTC)
+            state.large_trades.append(TapeEvent(side=side, price=price, qty=qty,
+                                                notional=price * qty, timestamp=now))
+            _prune_tape(state.large_trades, now)
+        log.info("binance_large_trade", symbol=sym, side=side, price=price,
+                 qty=qty, notional=round(price * qty, 2))
 
     async def replace_candles(self, symbol: str, bars: list[dict]) -> None:
         """
