@@ -1359,6 +1359,149 @@ class Repository:
                 slot["wins" if won else "losses"] += 1
         return dict(sorted(out.items(), key=lambda kv: -kv[1]["total"]))
 
+    async def get_ai_vs_reality(self, days: int = 7, limit: int = 200) -> list[dict]:
+        """
+        One row per Groq Sentinel pre-trade review, joined read-only against
+        what actually happened — the data behind the /ai-vs-reality page.
+
+        Three independent things, stitched together:
+          * what the AI said — this SignalReview row itself (verdict,
+            summary, the confidence_delta it wanted to apply, whether or not
+            Part 1's ai_review_can_block_trade let it act on the floor
+            check);
+          * what the market actually did — the matching CryptoSignalLog row,
+            already resolved against real candles by
+            _resolve_signal_outcomes_job, read through
+            analysis.signal_audit.to_verdict (the same resolution /audit
+            uses — reused here, not recomputed);
+          * what the paper trade did, if one opened at all.
+
+        No foreign key ties a SignalReview to its signal, or a signal to its
+        trade — reviewer_scorecard above already matches a review to its
+        signal by (symbol, signal_type) within 120 seconds, so this reuses
+        that exact pairing. A paper trade carries the precise price its
+        signal was quoted at before slippage (Position.signal_price, set in
+        analysis.paper_trading.open_position), which is the join key from
+        signal to trade: symbol + side + that price + opened within 30
+        minutes of the signal firing.
+
+        Bounded to `days` (capped at 90) and `limit` reviews — never
+        unbounded history.
+        """
+        from storage.models import SignalReview
+        since = _now_utc() - timedelta(days=max(1, min(days, 90)))
+
+        rev_res = await self.session.execute(
+            select(SignalReview)
+            .where(SignalReview.phase == "pre", SignalReview.created_at >= since)
+            .order_by(SignalReview.created_at.desc())
+            .limit(max(1, min(limit, 2000))))
+        reviews = list(rev_res.scalars().all())
+        if not reviews:
+            return []
+
+        sig_res = await self.session.execute(
+            select(CryptoSignalLog).where(CryptoSignalLog.timestamp >= since))
+        by_key: dict[tuple, list] = {}
+        for row in sig_res.scalars():
+            by_key.setdefault((row.symbol, row.signal_type), []).append(row)
+
+        trade_res = await self.session.execute(
+            select(PaperTrade).where(PaperTrade.closed_at >= since))
+        trades = list(trade_res.scalars().all())
+        pos_res = await self.session.execute(select(PaperPosition))
+        positions = list(pos_res.scalars().all())
+
+        def _match_signal(rv):
+            candidates = by_key.get((rv.symbol, rv.signal_type), [])
+            return min(
+                (c for c in candidates
+                 if abs((c.timestamp - rv.created_at).total_seconds()) < 120),
+                key=lambda c: abs((c.timestamp - rv.created_at).total_seconds()),
+                default=None)
+
+        def _price_matches(a: float, b: float) -> bool:
+            return abs(a - b) <= max(abs(b) * 1e-4, 1e-8)
+
+        def _match_trade(sig_row):
+            side = sig_row.direction
+            best, best_gap = None, None
+            for t in trades:
+                if t.symbol != sig_row.symbol or t.side != side:
+                    continue
+                if not _price_matches(t.signal_price, sig_row.current_price):
+                    continue
+                gap = abs((t.opened_at - sig_row.timestamp).total_seconds())
+                if gap > 1800:
+                    continue
+                if best_gap is None or gap < best_gap:
+                    best, best_gap = t, gap
+            if best is not None:
+                return "closed", best
+            for p in positions:
+                if p.symbol != sig_row.symbol or p.side != side:
+                    continue
+                if not _price_matches(p.signal_price, sig_row.current_price):
+                    continue
+                if abs((p.opened_at - sig_row.timestamp).total_seconds()) > 1800:
+                    continue
+                return "open", p
+            return "none", None
+
+        out = []
+        for rv in reviews:
+            sig_row = _match_signal(rv)
+            market = None
+            paper: dict = {"status": "unmatched", "opened": False}
+            if sig_row is not None:
+                from analysis.signal_audit import to_verdict
+                v = to_verdict(sig_row)
+                market = {
+                    "outcome": v.outcome,
+                    "pnl_pct": round(v.pnl_pct, 4),
+                    "net_pnl_pct": round(v.net_pnl_pct, 4),
+                    "entry": v.entry, "target": v.target, "stop": v.stop,
+                    "move_pct": round(v.move_pct, 4),
+                    "decided": v.decided,
+                }
+                if sig_row.suppressed_by:
+                    paper = {"status": "suppressed", "opened": False,
+                             "reason": sig_row.suppressed_by}
+                elif sig_row.rejection_reason:
+                    paper = {"status": "rejected", "opened": False,
+                             "reason": sig_row.rejection_reason}
+                elif sig_row.skip_reason and sig_row.skip_reason != "mirror_review_tracking":
+                    paper = {"status": "not_opened", "opened": False,
+                             "reason": sig_row.skip_reason}
+                else:
+                    kind, trade = _match_trade(sig_row)
+                    if kind == "closed":
+                        paper = {
+                            "status": "closed", "opened": True,
+                            "won": trade.net_pnl > 0,
+                            "net_pnl": round(trade.net_pnl, 2),
+                            "return_on_margin_pct": round(trade.return_on_margin * 100, 2),
+                            "exit_reason": trade.exit_reason,
+                        }
+                    elif kind == "open":
+                        paper = {"status": "open", "opened": True}
+                    else:
+                        paper = {"status": "unresolved", "opened": False}
+            out.append({
+                "review_id": rv.id,
+                "at": rv.created_at,
+                "symbol": rv.symbol.upper(),
+                "signal_type": rv.signal_type,
+                "direction": sig_row.direction if sig_row else "",
+                "ai": {
+                    "verdict": rv.verdict, "summary": rv.summary,
+                    "confidence_delta": rv.confidence_delta, "model": rv.model,
+                },
+                "market": market,
+                "paper": paper,
+            })
+        return out
+
 
 def _parse_dt(value) -> datetime:
     """Accept an ISO string or a datetime; fall back to now rather than fail."""

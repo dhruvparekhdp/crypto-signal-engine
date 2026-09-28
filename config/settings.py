@@ -78,6 +78,20 @@ class Settings(BaseSettings):
     # CAUTION is not REJECT.
     groq_caution_min_penalty: float = 0.01
 
+    # "No auto kill, let's trade go through" (the owner, 28 Sep). The
+    # reviewer still runs, still forms a verdict/summary/delta, and it is
+    # still saved via save_review every time — this only decides whether
+    # that delta is allowed to touch sig.confidence before the
+    # crypto_min_confidence / paper_min_confidence floor check. Off (the new
+    # default): the floor check runs against the analyzers' own confidence,
+    # untouched by the AI's opinion, so a REJECT can no longer sink a trade
+    # that would otherwise have opened. On: today's behaviour, unchanged —
+    # the delta applies and can push a signal below the floor, same as
+    # before this setting existed. Kept flippable rather than deleting the
+    # gate outright, matching this session's own rule: no real behaviour
+    # change ships without a way back.
+    ai_review_can_block_trade: bool = False
+
     # A second signal on the same symbol/direction/setup, fired minutes
     # apart with the price barely moved, is not a new question — it is the
     # same question asked twice. Cache the last real pre-trade review

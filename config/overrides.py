@@ -193,7 +193,15 @@ FIELDS: tuple[Field, ...] = (
           "All coins move with BTC; this caps correlated exposure.", kind="int", lo=1, hi=10),
     # AI
     Field("groq_signal_review_enabled", "ai", "AI review before a trade",
-          "The AI can veto a trade, never add to it."),
+          "The AI can never add confidence, only take it away — and only if "
+          "'AI review can block a trade' below is also on."),
+    Field("ai_review_can_block_trade", "ai", "AI review can block a trade",
+          "Off (default, 28 Sep): the Groq Sentinel still reviews every signal and its "
+          "verdict/summary/delta are still recorded, but the delta no longer touches the "
+          "confidence used for the min-confidence floor check — the AI's opinion can no "
+          "longer be the reason a signal never becomes a paper trade. On: today's older "
+          "behaviour, where a REJECT's penalty can push a signal below the floor. Applies "
+          "immediately either way."),
     Field("position_review_enabled", "ai", "AI review of open trades",
           "Two close votes 10 minutes apart are needed."),
     Field("groq_postmortem_enabled", "ai", "AI post-mortem after a trade", ""),

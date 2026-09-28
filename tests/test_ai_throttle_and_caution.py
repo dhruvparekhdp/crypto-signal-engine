@@ -184,7 +184,8 @@ async def test_caution_costs_a_guaranteed_minimum_even_at_delta_zero():
     sig = _signal(confidence=0.74)
     with patch("scheduler.runner.AsyncSessionFactory", sm), \
          patch("scheduler.runner.settings.groq_signal_review_enabled", True), \
-         patch("scheduler.runner.settings.groq_caution_min_penalty", 0.01):
+         patch("scheduler.runner.settings.groq_caution_min_penalty", 0.01), \
+         patch("scheduler.runner.settings.ai_review_can_block_trade", True):
         from storage.repository import Repository
         async with sm() as s:
             scfg = await Repository(s).get_strategy_config()
@@ -206,7 +207,8 @@ async def test_caution_never_shrinks_a_larger_self_assessed_penalty():
     sig = _signal(confidence=0.80)
     with patch("scheduler.runner.AsyncSessionFactory", sm), \
          patch("scheduler.runner.settings.groq_signal_review_enabled", True), \
-         patch("scheduler.runner.settings.groq_caution_min_penalty", 0.01):
+         patch("scheduler.runner.settings.groq_caution_min_penalty", 0.01), \
+         patch("scheduler.runner.settings.ai_review_can_block_trade", True):
         from storage.repository import Repository
         async with sm() as s:
             scfg = await Repository(s).get_strategy_config()

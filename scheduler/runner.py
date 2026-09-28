@@ -719,6 +719,13 @@ class AppRunner:
         mirror review can run it independently for a primary, a mirror, and
         any later re-review round, without duplicating the Groq/save_review
         plumbing three times over.
+
+        settings.ai_review_can_block_trade (28 Sep) gates the same one thing
+        it gates in _analyse_states: whether `delta` is applied to
+        sig.confidence at all. verdict/summary/delta are computed and saved
+        via save_review exactly the same either way — only the confidence
+        this candidate carries into pcfg.min_confidence's round-winner check
+        depends on the flag.
         """
         if not (self.groq_sentinel.is_available and settings.groq_signal_review_enabled):
             return "", ""
@@ -749,7 +756,8 @@ class AppRunner:
             log.debug("mirror_review_not_saved", symbol=sig.symbol,
                       role=getattr(sig, "candidate_role", "primary"))
         before = sig.confidence
-        sig.confidence = max(0.50, min(0.95, round(before + delta, 4)))
+        if settings.ai_review_can_block_trade:
+            sig.confidence = max(0.50, min(0.95, round(before + delta, 4)))
         return verdict, ai_summary
 
     async def _ai_review_pair(
@@ -800,7 +808,8 @@ class AppRunner:
                 log.debug("mirror_review_not_saved", symbol=cand_sig.symbol,
                           role=getattr(cand_sig, "candidate_role", "primary"))
             before = cand_sig.confidence
-            cand_sig.confidence = max(0.50, min(0.95, round(before + delta, 4)))
+            if settings.ai_review_can_block_trade:
+                cand_sig.confidence = max(0.50, min(0.95, round(before + delta, 4)))
 
         return (verdict_p, summary_p), (verdict_m, summary_m)
 
@@ -1390,6 +1399,14 @@ class AppRunner:
                     # in the numbers. So a REJECT costs real confidence and
                     # the ordinary threshold decides, which keeps every
                     # decision in one place and visible in the logs.
+                    #
+                    # 28 Sep — "no auto kill, let's trade go through": the
+                    # review still runs and is still saved in full below
+                    # (verdict, summary, the delta it wanted) either way.
+                    # ai_review_can_block_trade only decides whether that
+                    # delta is allowed to touch sig.confidence before the
+                    # floor check right after it. Off (the new default): the
+                    # floor sees the analyzers' own confidence, untouched.
                     if self.groq_sentinel.is_available and settings.groq_signal_review_enabled:
                         news, briefing_id = await self._news_context(sig.symbol)
                         delta, ai_summary, verdict = (
@@ -1416,7 +1433,8 @@ class AppRunner:
                         except Exception:
                             log.debug("pre_review_not_saved", symbol=sig.symbol)
                         before = sig.confidence
-                        sig.confidence = max(0.50, min(0.95, round(before + delta, 4)))
+                        if settings.ai_review_can_block_trade:
+                            sig.confidence = max(0.50, min(0.95, round(before + delta, 4)))
                         if (settings.crypto_min_confidence > 0
                                 and sig.confidence < settings.crypto_min_confidence):
                             log.info("crypto_signal_dropped_after_ai_review",

@@ -56,6 +56,8 @@ ENDPOINTS: tuple[tuple[str, str, str, str, dict], ...] = (
     ("Signals", "GET", "/api/audit/methods", "The code that produces a signal.", {}),
     ("Signals", "GET", "/api/reviews", "Every AI review.",
      {"days": "7", "phase": "pre", "limit": "100"}),
+    ("Signals", "GET", "/api/ai-reality", "AI verdict vs real price vs the paper trade, joined.",
+     {"days": "7"}),
     ("v2 strategy", "GET", "/api/v2/backtest", "Latest v2 backtest report.", {}),
     ("v2 strategy", "GET", "/api/v2/shadow", "v2 live shadow signals.", {"days": "7"}),
     ("v2 strategy", "GET", "/api/journal", "Your manual trade journal.", {}),
@@ -162,7 +164,7 @@ textarea{width:100%;height:220px;margin-top:10px;border:0;outline:none;resize:ve
 </style></head><body>
 <header><h1>🔌 API list</h1>
 <nav><a href="/">Dashboard</a><a href="/settings">Settings</a><a href="/v2">v2 strategy</a>
-<a href="/journal">Journal</a></nav></header>
+<a href="/journal">Journal</a><a href="/ai-vs-reality">AI vs Reality</a></nav></header>
 <main>
 <section class="card raise">
   <h2>Copy for Claude</h2>

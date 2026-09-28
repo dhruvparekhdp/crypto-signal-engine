@@ -45,6 +45,7 @@ select = ["E", "F", "I", "UP"]
 "scheduler/settings_page.py" = ["E501"]
 "scheduler/v2_pages.py" = ["E501"]
 "scheduler/api_docs.py" = ["E501"]
+"scheduler/ai_reality_page.py" = ["E501"]
 
 [tool.mypy]
 python_version = "3.11"

@@ -1853,6 +1853,7 @@ section h2{color:var(--accent-soft)}
   <a class="side-item side-secondary" data-tab="v2" href="/v2"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 17l6-6 4 4 8-8"/><path d="M14 7h7v7"/></svg><span>v2 Shadow</span></a>
   <a class="side-item side-secondary" data-tab="journal" href="/journal"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 17l6-6 4 4 8-8"/><path d="M14 7h7v7"/></svg><span>Journal</span></a>
   <a class="side-item side-secondary" data-tab="audit" href="/audit"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 3h6v5l4 9a2 2 0 01-1.8 3H6.8A2 2 0 015 16l4-9z"/><path d="M9 8h6"/></svg><span>Signal Audit</span></a>
+  <a class="side-item side-secondary" data-tab="ai-reality" href="/ai-vs-reality"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l2.6 5.3 5.9.9-4.3 4.1 1 5.8-5.2-2.7-5.2 2.7 1-5.8L3.5 9.2l5.9-.9z"/></svg><span>AI vs Reality</span></a>
   <a class="side-item side-secondary" data-tab="diag" href="/api/debug/collectors"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2v4M12 18v4M4.9 4.9l2.8 2.8M16.3 16.3l2.8 2.8M2 12h4M18 12h4"/></svg><span>Diagnostics</span></a>
   <a class="side-item side-secondary" data-tab="settings" href="/settings"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19 12a7 7 0 00-.1-1l2-1.6-2-3.4-2.4 1a7 7 0 00-1.7-1L14.5 3h-4l-.4 2.6a7 7 0 00-1.7 1l-2.4-1-2 3.4L6 11a7 7 0 000 2l-2 1.6 2 3.4 2.4-1a7 7 0 001.7 1l.4 2.6h4l.4-2.6a7 7 0 001.7-1l2.4 1 2-3.4-2-1.6a7 7 0 00.1-1z"/></svg><span>Settings</span></a>
   <div class="side-item side-more" onclick="toggleMore()">
@@ -4366,6 +4367,7 @@ th.num{text-align:right}
   <span class="spacer"></span>
   <a class="nav-btn" href="/">&larr; Dashboard</a>
   <a class="nav-btn" href="/data">Database</a>
+  <a class="nav-btn" href="/ai-vs-reality">AI vs Reality</a>
   <a class="nav-btn" href="/settings">Settings</a>
 </header>
 <main>
@@ -4989,6 +4991,7 @@ table.sb td.n{text-align:right;font-variant-numeric:tabular-nums}
   <a class="nav-btn" href="/">&larr; Dashboard</a>
   <a class="nav-btn" href="/predict">Outlook</a>
   <a class="nav-btn" href="/audit">Audit</a>
+  <a class="nav-btn" href="/ai-vs-reality">AI vs Reality</a>
 </header>
 <main id="main"><div class="card empty">Loading&hellip;</div></main>
 <script>
@@ -5755,6 +5758,8 @@ async def make_app(runner) -> web.Application:
     app.router.add_get("/api/debug/null-test", _bind(_api_debug_null_test))
     from scheduler.v2_pages import register as _register_v2_pages
     _register_v2_pages(app, runner)
+    from scheduler.ai_reality_page import register as _register_ai_reality
+    _register_ai_reality(app, runner)
     return app
 
 
