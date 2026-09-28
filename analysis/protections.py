@@ -40,6 +40,7 @@ class ProtectionConfig:
     streak_pause_minutes: int = 120
     streak_stop_day_after: int = 5
     pair_cooldown_minutes: int = 15
+    consecutive_loss_cooldown_minutes: int = 60
     max_same_direction: int = 2
     min_stop_cost_multiple: float = 1.5
     liquidation_stop_multiple: float = 3.0
@@ -72,7 +73,7 @@ def losing_streak(trades: list[RecentTrade]) -> tuple[int, datetime | None]:
 
 def check_entry(now: datetime, symbol: str, direction: str, trades: list[RecentTrade],
                 day_start_wallet: float, open_positions: list, cfg: ProtectionConfig,
-                is_crypto: bool = True) -> tuple[bool, str]:
+                is_crypto: bool = True, sentiment_score: float = 0.0) -> tuple[bool, str]:
     """(ok, reason). `now` and the trade times are naive UTC."""
     if not cfg.enabled:
         return True, "ok"
@@ -92,8 +93,31 @@ def check_entry(now: datetime, symbol: str, direction: str, trades: list[RecentT
             and now - last < timedelta(minutes=cfg.streak_pause_minutes)):
         return False, "losing_streak_pause"
 
+    # Adaptive Pair Cooldown: 2 consecutive stop-outs pause symbol for 60m-90m (up to 120m-180m if sentiment hostile)
+    sym_trades = sorted([t for t in trades if t.symbol.lower() == symbol.lower()],
+                        key=lambda t: t.closed_at, reverse=True)
+    sym_streak = 0
+    sym_last = None
+    for t in sym_trades:
+        if t.net_pnl < 0:
+            sym_streak += 1
+            if sym_last is None:
+                sym_last = t.closed_at
+        else:
+            break
+
+    if sym_streak >= 2 and sym_last is not None:
+        cooldown_mins = getattr(cfg, "consecutive_loss_cooldown_minutes", 60)
+        hostile = (direction.lower() == "long" and sentiment_score < -0.2) or \
+                  (direction.lower() == "short" and sentiment_score > 0.2)
+        if hostile:
+            cooldown_mins = int(cooldown_mins * 1.5)
+        if now - sym_last < timedelta(minutes=cooldown_mins):
+            remaining_mins = max(1, int((timedelta(minutes=cooldown_mins) - (now - sym_last)).total_seconds() / 60))
+            return False, f"adaptive_loss_cooldown_{remaining_mins}m_rem"
+
     for t in trades:
-        if (t.symbol == symbol
+        if (t.symbol.lower() == symbol.lower()
                 and now - t.closed_at < timedelta(minutes=cfg.pair_cooldown_minutes)):
             return False, "pair_cooldown"
 

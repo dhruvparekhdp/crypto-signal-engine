@@ -126,6 +126,8 @@ class ScalpConfig:
     # taking. The paper engine reads this same value, so there is one floor
     # rather than a band where a signal is published and then refused.
     min_edge_multiple: float = 3.0
+    trade_mode: str = "intraday"
+    min_stop_distance_pct: float = 0.0
 
     # Volatility gate. If the recent swing cannot cover the cost floor, there
     # is no trade here at any confidence — this is the check that would have
@@ -236,7 +238,30 @@ class ScalpConfig:
         5.0 it keeps 80%, which is where the account's good trades sat and
         below which the fee starts owning the outcome.
         """
-        return cls(min_edge_multiple=5.0, min_reward_risk=1.0)
+        return cls(min_edge_multiple=5.0, min_reward_risk=1.0, min_stop_distance_pct=0.008)
+
+    @classmethod
+    def intraday(cls) -> ScalpConfig:
+        """Intraday scalp configuration with clamped safe stop (0.8% - 1.8%)."""
+        return cls(
+            trade_mode="intraday",
+            min_stop_distance_pct=0.008,
+            min_edge_multiple=3.0,
+            target_reward_risk=2.0,
+            max_hold_minutes=1440,
+        )
+
+    @classmethod
+    def delivery(cls) -> ScalpConfig:
+        """Delivery swing configuration with wide structural stops and high edge."""
+        return cls(
+            trade_mode="delivery",
+            target_reward_risk=2.0,
+            stop_atr_multiple=3.0,
+            min_stop_distance_pct=0.025,
+            min_edge_multiple=6.0,
+            max_hold_minutes=20160,
+        )
 
     def with_measured_execution(self, execution_pct: float) -> ScalpConfig:
         """
@@ -435,6 +460,9 @@ class ScalpLevels:
     stop_pct: float
     cost_pct: float
     horizon_minutes: float = 30.0     # expected time to target, derived
+    tp1: float = 0.0                  # scale-out target (+1.0R)
+    tp2: float = 0.0                  # runner target (+2.0R to +2.5R)
+    trade_mode: str = "intraday"      # intraday or delivery
 
     @property
     def reward_risk(self) -> float:
@@ -490,7 +518,8 @@ def scalp_levels(
     # ...and the smallest risk that does not let the round trip dominate it.
     cost_stop = (cfg.cost_floor_pct / cfg.max_cost_share_of_risk
                  if cfg.max_cost_share_of_risk > 0 else cfg.cost_floor_pct)
-    stop_pct = max(vol_stop, cost_stop)
+    min_safe_stop = getattr(cfg, "min_stop_distance_pct", 0.0)
+    stop_pct = max(vol_stop, cost_stop, min_safe_stop)
 
     target_pct = max(stop_pct * rr * atr_target_multiple, cfg.min_target_pct)
 
@@ -528,7 +557,7 @@ def scalp_levels(
         return NoTrade.TARGET_TOO_SMALL
     if actual_stop_pct <= 0:
         return NoTrade.TICK_TOO_COARSE
-    if actual_stop_pct < atr_pct * cfg.stop_atr_multiple * 0.9:
+    if actual_stop_pct < atr_pct * cfg.stop_atr_multiple * 0.9 and (min_safe_stop <= 0 or actual_stop_pct < min_safe_stop * 0.9):
         return NoTrade.STOP_INSIDE_NOISE
 
     # Rounding both levels away from entry can widen the stop by more than it
@@ -547,6 +576,9 @@ def scalp_levels(
     if actual_target_pct / actual_stop_pct < cfg.min_reward_risk - 1e-9:
         return NoTrade.POOR_REWARD
 
+    tp1 = round_to_tick(entry * (1 + sign * actual_stop_pct), tick, up=is_long)
+    tp2 = target
+
     return ScalpLevels(
         entry=entry, target=target, stop=stop, tick=tick,
         target_pct=actual_target_pct, stop_pct=actual_stop_pct,
@@ -554,4 +586,5 @@ def scalp_levels(
         # Recomputed from the level that survived rounding, not the one we
         # asked for — the published time has to describe the published target.
         horizon_minutes=cfg.minutes_to_move(actual_target_pct, atr_pct, bar_minutes),
+        tp1=tp1, tp2=tp2, trade_mode=getattr(cfg, "trade_mode", "intraday"),
     )

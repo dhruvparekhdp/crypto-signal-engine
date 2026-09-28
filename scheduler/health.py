@@ -110,6 +110,8 @@ async def _api_crypto_signals(runner, request: web.Request) -> web.Response:
             "skip_reason": r.skip_reason or None,
             "skip_reason_text": (REASON_WORDS.get(r.skip_reason, r.skip_reason.replace("_", " "))
                                  if r.skip_reason else None),
+            "trade_mode": getattr(r, "trade_mode", "intraday"),
+            "veto_reason": getattr(r, "veto_reason", "") or r.suppressed_by or None,
             # Mirror review: the primary + mirror candidates' full review
             # trail, only present when the feature produced one for this
             # signal. Absent (not just empty) otherwise, so the page can
@@ -184,6 +186,8 @@ def _signal_row(r) -> dict:
         "stop_loss": r.stop_loss, "edge_pct": r.edge_pct,
         "timeframe": r.timeframe, "outcome": r.outcome, "pnl_pct": r.pnl_pct,
         "timestamp": _iso(r.timestamp),
+        "trade_mode": getattr(r, "trade_mode", "intraday"),
+        "veto_reason": getattr(r, "veto_reason", "") or getattr(r, "suppressed_by", "") or getattr(r, "skip_reason", "") or None,
     }
 
 
@@ -900,6 +904,12 @@ async def _api_paper(runner, request: web.Request) -> web.Response:
             "expires_at": _iso(r.expires_at),
             "usdt_inr": r.usdt_inr,
             "notional": round(r.coin_qty * mark * r.usdt_inr, 2),
+            "trade_mode": getattr(r, "trade_mode", "intraday"),
+            "leverage": getattr(r, "leverage", 10.0),
+            "tp1_price": getattr(r, "tp1_price", 0.0),
+            "tp2_price": getattr(r, "tp2_price", 0.0),
+            "partial_closed": getattr(r, "partial_closed", False),
+            "partial_pnl": round(getattr(r, "partial_pnl", 0.0), 2),
         })
 
     return web.Response(text=json.dumps({
@@ -1158,9 +1168,6 @@ async def _api_binance_symbols(runner, request: web.Request) -> web.Response:
     from collectors.binance_symbols import search
 
     q = (request.query.get("q") or "").strip()[:40]
-    if len(q) < 2:
-        return web.Response(text=json.dumps({"results": [], "available": True}),
-                            content_type="application/json")
     watchlist = set(await runner.crypto_store.get_symbols())
     payload = await search(q, watchlist)
     return web.Response(text=json.dumps(payload), content_type="application/json")
@@ -1599,9 +1606,12 @@ section h2{color:var(--accent-soft)}
 .pt-side.s{background:rgba(248,113,113,.14);color:var(--neg)}
 .pt-setup{font-size:10.5px;color:var(--muted);display:block;margin-top:3px}
 .pt-unit{font-size:9.5px;color:var(--muted2);letter-spacing:.03em}
-.pt-notional{display:block;font-size:10px;color:var(--muted2);margin-top:2px}
 .pt-trail{font-size:9px;color:var(--accent);letter-spacing:.05em;
   text-transform:uppercase;margin-left:6px}
+.pt-mode{display:inline-block;font-size:9.5px;font-weight:700;padding:2px 6px;border-radius:4px;letter-spacing:.04em;margin-left:5px}
+.pt-mode.intra{background:rgba(59,130,246,.18);color:var(--accent)}
+.pt-mode.deliv{background:rgba(168,85,247,.18);color:var(--brand)}
+.pt-partial{display:inline-block;font-size:9px;font-weight:700;padding:2px 6px;border-radius:4px;background:rgba(34,197,94,.16);color:var(--pos);margin-left:5px}
 .pt-muted{color:var(--muted2)}
 
 .pt-prail{position:relative;height:22px;min-width:130px}
@@ -1914,6 +1924,11 @@ section h2{color:var(--accent-soft)}
     <h2>Why signals were refused</h2>
     <div id="dash-refused"><div class="empty">Loading&hellip;</div></div>
   </section>
+  <section>
+    <h2>🛡️ Filter &amp; Veto Activity &middot; Protection Circuit Breakers</h2>
+    <div class="cr-note">Signals filtered or dropped by technical protections (RSI exhaustion, 1h macro trend, loss cooldowns) or AI review hard veto (adverse news, funding squeeze).</div>
+    <div id="dash-veto-log"><div class="empty">Loading&hellip;</div></div>
+  </section>
 </div>
 
 
@@ -1966,7 +1981,7 @@ section h2{color:var(--accent-soft)}
     <h2>Watchlist</h2>
     <div class="cr-note">The engine follows only the pairs on this list. Search Binance, check the price and volume, then add the exact pair. For gold, search <b>gold</b>: Binance lists it as tokenised gold (PAXG, XAUT), not as XAUUSDT.</div>
     <div class="wl-search">
-      <input type="search" id="cr-add-input2" class="cr-input" placeholder="Search Binance: gold, sol, pepe…" autocomplete="off" aria-label="Search Binance pairs" oninput="wlSearchSoon()" onkeydown="if(event.key==='Enter')wlSearchNow()">
+      <input type="search" id="cr-add-input2" class="cr-input" placeholder="Search Binance: gold, sol, pepe…" autocomplete="off" aria-label="Search Binance pairs" onfocus="if(!this.value)wlSearchNow()" oninput="wlSearchSoon()" onkeydown="if(event.key==='Enter')wlSearchNow()">
       <div id="wl-results" class="wl-results" aria-live="polite"></div>
     </div>
     <h3 class="wl-sub">On the watchlist</h3>
@@ -2251,10 +2266,20 @@ function renderPaperPositions(rows, rate){
         const col = good ? 'var(--pos)' : 'var(--neg)';
         const fillL = Math.min(eAt, mAt), fillW = Math.abs(mAt - eAt);
         const unit = p.symbol.replace(/USDT$/, '');
+        const isIntraday = (p.trade_mode || 'intraday') === 'intraday';
+        const modeBadge = isIntraday 
+          ? `<span class="pt-mode intra">⚡ Intra ${p.leverage || 10}x</span>`
+          : `<span class="pt-mode deliv">📦 Delivery</span>`;
+        const partialBadge = p.partial_closed
+          ? `<span class="pt-partial" title="Partial profit of +₹${p.partial_pnl} taken at TP1">TP1 HIT (50% Closed)</span>`
+          : '';
+        const trailBadge = p.trailing ? '<span class="pt-trail">🔒 Trail Locked</span>' : '';
         return `<tr>
           <td><span class="pt-sym">${p.symbol}</span>`
           + `<span class="pt-side ${long ? 'l' : 's'}">${p.side.toUpperCase()}</span>`
-          + (p.trailing ? '<span class="pt-trail">trailing</span>' : '')
+          + modeBadge
+          + partialBadge
+          + trailBadge
           + `<span class="pt-setup">${(p.signal_type||'').replace(/_/g,' ')} &middot; ${p.confidence}%</span>`
           + ptLogBtn(p.symbol, p.opened_at) + `</td>
           <td class="r pt-num">${_ptQty(p.qty)} <span class="pt-unit">${unit}</span>
@@ -2341,10 +2366,19 @@ function renderPaperHistory(){
       + rows.map(t => {
           const r = t.usdt_inr || rate;
           const unit = t.symbol.replace(/USDT$/, '');
+          const mode = t.trade_mode || 'intraday';
+          const modeBadge = mode === 'delivery' 
+            ? '<span class="pt-mode deliv">📦 Deliv</span>'
+            : '<span class="pt-mode intra">⚡ Intra</span>';
+          const partialBadge = t.partial_pnl 
+            ? `<span class="pt-partial" title="TP1 Partial: +₹${t.partial_pnl}">+TP1</span>`
+            : '';
           return `<tr>
             <td class="pt-num pt-muted">${fmtTime(t.closed_at)}</td>
             <td><span class="pt-sym">${t.symbol}</span>`
             + `<span class="pt-side ${t.side === 'long' ? 'l' : 's'}">${t.side.toUpperCase()}</span>`
+            + modeBadge
+            + partialBadge
             + `<span class="pt-setup">${(t.signal_type||'').replace(/_/g,' ')} &middot; ${t.confidence}%</span>`
             + ptLogBtn(t.symbol, t.opened_at) + `</td>
             <td class="r pt-num">${_ptQty(t.qty)} <span class="pt-unit">${unit}</span></td>
@@ -2486,28 +2520,61 @@ async function loadDashboard(){
 
   document.getElementById('dash-signals').innerHTML = sigs.length ? `
     <div class="scroll"><table class="tbl"><thead><tr>
-      <th>Fired</th><th>Symbol</th><th>Setup</th><th>Dir</th><th>Move</th><th>&times; cost</th><th>Conf</th>
+      <th>Fired</th><th>Symbol</th><th>Setup</th><th>Dir</th><th>Mode</th><th>Move</th><th>&times; cost</th><th>Conf</th><th>Status</th>
     </tr></thead><tbody>` + sigs.slice(0,40).map(x=>{
       const m=moveOf(x), xc=xCost(x), ok=m>=MIN_TARGET_PCT;
+      const isDeliv = (x.trade_mode || 'intraday') === 'delivery';
+      const modeBadge = isDeliv ? '<span class="pt-mode deliv">📦 Deliv</span>' : '<span class="pt-mode intra">⚡ Intra</span>';
+      const statusBadge = x.veto_reason 
+        ? `<span class="pt-tag stop" title="${esc(x.veto_reason)}">VETOED</span>`
+        : (ok ? '<span class="pt-tag target">VIABLE</span>' : '<span class="pt-tag expired">SUB-COST</span>');
       return `<tr>
         <td class="sub">${fmtSignalTime(x.timestamp)}</td>
         <td><b>${esc(x.symbol)}</b></td>
         <td>${esc(CR_SIG_NAME[x.signal_type]||x.signal_type)}</td>
         <td class="${x.direction==='long'?'pos':'neg'}">${x.direction.toUpperCase()}</td>
+        <td>${modeBadge}</td>
         <td>${m.toFixed(3)}%</td>
         <td class="${ok?'pos':'neg'}">${xc.toFixed(1)}&times;</td>
-        <td>${x.confidence}%</td></tr>`;
+        <td>${x.confidence}%</td>
+        <td>${statusBadge}</td></tr>`;
     }).join('') + '</tbody></table></div>'
     : '<div class="empty">No signals in the last 7 days</div>';
 
   const refused = {};
-  sigs.forEach(x=>{ if(moveOf(x) < MIN_TARGET_PCT) refused['below the cost floor'] = (refused['below the cost floor']||0)+1; });
+  sigs.forEach(x=>{ 
+    if(moveOf(x) < MIN_TARGET_PCT) refused['Below cost floor (<0.4%)'] = (refused['Below cost floor (<0.4%)']||0)+1; 
+    if(x.veto_reason) refused[x.veto_reason] = (refused[x.veto_reason]||0)+1;
+    else if(x.skip_reason) refused[x.skip_reason_text||x.skip_reason] = (refused[x.skip_reason_text||x.skip_reason]||0)+1;
+  });
   const rows = Object.entries(refused);
   document.getElementById('dash-refused').innerHTML = rows.length
     ? rows.map(([k,v])=>`<div style="display:flex;align-items:center;gap:10px;padding:4px 0">
         <div style="height:6px;background:#334155;border-radius:3px;width:${Math.min(240,v*12)}px"></div>
         <span style="font-size:11px;color:#94a3b8">${esc(k)} · ${v}</span></div>`).join('')
     : '<div class="empty">Nothing refused in this window</div>';
+
+  const vetoed = sigs.filter(s => s.veto_reason || (s.skip_reason && s.skip_reason !== 'paper_off'));
+  const vetoEl = document.getElementById('dash-veto-log');
+  if (vetoEl) {
+    vetoEl.innerHTML = vetoed.length ? `
+      <div class="scroll"><table class="tbl"><thead><tr>
+        <th>Time</th><th>Symbol</th><th>Dir</th><th>Mode</th><th>Gate / Reason</th><th>Action</th>
+      </tr></thead><tbody>` + vetoed.slice(0, 30).map(x => {
+        const isDeliv = (x.trade_mode || 'intraday') === 'delivery';
+        const modeBadge = isDeliv ? '<span class="pt-mode deliv">📦 Delivery</span>' : '<span class="pt-mode intra">⚡ Intraday</span>';
+        const reason = x.veto_reason || x.skip_reason_text || x.skip_reason || 'Filtered';
+        return `<tr>
+          <td class="sub">${fmtSignalTime(x.timestamp)}</td>
+          <td><b>${esc(x.symbol)}</b></td>
+          <td class="${x.direction==='long'?'pos':'neg'}">${x.direction ? x.direction.toUpperCase() : '—'}</td>
+          <td>${modeBadge}</td>
+          <td><span class="pt-tag stop">${esc(reason)}</span></td>
+          <td class="neg" style="font-weight:600">Dropped / Cooldown</td>
+        </tr>`;
+      }).join('') + '</tbody></table></div>'
+      : '<div class="empty">No recent vetoes or filtered signals</div>';
+  }
 }
 
 async function loadWatchlist(){
@@ -2743,7 +2810,6 @@ function _wlCompact(n){
 async function wlSearchNow(){
   const q=(document.getElementById('cr-add-input2').value||'').trim();
   const box=document.getElementById('wl-results');
-  if(q.length<2){ box.textContent=''; return; }
   const seq=++_wlSeq;
   box.innerHTML='<div class="wl-msg">Searching Binance…</div>';
   const d=await jget('/api/binance/symbols?q='+encodeURIComponent(q),{results:[],available:false});
@@ -2933,6 +2999,12 @@ function renderCryptoSignalCard(s){
   const risk  = (sl && entry) ? Math.abs(entry - sl) / entry * 100 : 0;
   const xcost = move / BREAK_EVEN_PCT;
   const viable = move >= MIN_TARGET_PCT;
+  const mode = s.trade_mode || 'intraday';
+  const isDelivery = mode === 'delivery';
+  const lev = s.leverage_suggested || (isDelivery ? 2 : 10);
+  const modeBadge = isDelivery 
+    ? `<span class="pt-mode deliv">📦 Delivery</span>`
+    : `<span class="pt-mode intra">⚡ Intraday ${lev}x</span>`;
   const roe = move * PAPER_LEVERAGE;
 
   // The track runs stop -> target, so it reads left-to-right the same way for
@@ -2947,7 +3019,8 @@ function renderCryptoSignalCard(s){
   return `<div class="sig ${cls}">
     <div class="sig-head">
       <span class="sig-sym">${esc(s.symbol)}</span>
-      <span class="sig-dir ${long?'long':'short'}">${long?'Long':'Short'} ${PAPER_LEVERAGE}x</span>
+      <span class="sig-dir ${long?'long':'short'}">${long?'Long':'Short'}</span>
+      ${modeBadge}
       <div style="flex-grow:1"></div>
       <div class="sig-profit ${viable?'':'muted'}">
         <b>${viable?'+':''}${roe.toFixed(1)}%</b><span>expected</span></div>
@@ -2964,7 +3037,7 @@ function renderCryptoSignalCard(s){
     <div class="sig-levels">
       <div><label>Stop loss</label><b class="neg">${fmtPrice(sl)}</b><span>−${risk.toFixed(2)}%</span></div>
       <div class="mid"><label>Entry</label><b>${fmtPrice(entry)}</b><span>LTP</span></div>
-      <div class="right"><label>Take profit</label><b class="pos">${fmtPrice(tp)}</b><span>+${move.toFixed(2)}%</span></div>
+      <div class="right"><label>Take profit</label><b class="pos">${fmtPrice(tp)}</b><span>+${move.toFixed(2)}%</span>${s.tp1_price ? `<div style="font-size:9.5px;color:var(--pos)">TP1: ${fmtPrice(s.tp1_price)}</div>` : ''}</div>
     </div>
 
     <div class="sig-track">
@@ -2981,11 +3054,15 @@ function renderCryptoSignalCard(s){
       ${rr?`<span class="pill">${rr.toFixed(2)} reward:risk</span>`:''}
       <span class="pill">${move.toFixed(3)}% move</span>
       <div style="flex-grow:1"></div>
-      <span class="sig-act ${!viable?'off':(s.skip_reason?'off':(long?'long':'short'))}">${
-        !viable ? 'Refused' : (s.skip_reason ? 'Not traded' : (long?'Buy / Long':'Sell / Short'))}</span>
+      <span class="sig-act ${!viable?'off':(s.veto_reason?'off':(s.skip_reason?'off':(long?'long':'short')))}">${
+        !viable ? 'Refused' : (s.veto_reason ? 'Vetoed' : (s.skip_reason ? 'Not traded' : (long?'Buy / Long':'Sell / Short')))}</span>
     </div>
 
-    ${(viable && s.skip_reason)?`<div class="sig-warn">Fired, but did not become a paper
+    ${s.veto_reason ? `<div class="sig-warn" style="border-left-color:var(--neg);background:rgba(248,113,113,0.08);color:var(--neg)">
+      <b>🚫 Hard Veto:</b> ${esc(s.veto_reason)}
+    </div>` : ''}
+
+    ${(viable && !s.veto_reason && s.skip_reason)?`<div class="sig-warn">Fired, but did not become a paper
       trade: <b>${esc(s.skip_reason_text||s.skip_reason)}</b>. The cost/move numbers above
       passed — this is a different gate (confidence, session, protections, or the book
       already full) deciding it, not this card's own math.</div>`:''}

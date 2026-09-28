@@ -269,6 +269,8 @@ class Repository:
         review_round: int = 0,
         parent_signal_id: int = 0,
         rejection_reason: str = "",
+        trade_mode: str = "intraday",
+        veto_reason: str = "",
     ) -> int:
         row = CryptoSignalLog(
             symbol=symbol,
@@ -292,6 +294,8 @@ class Repository:
             review_round=review_round,
             parent_signal_id=parent_signal_id,
             rejection_reason=rejection_reason,
+            trade_mode=trade_mode,
+            veto_reason=veto_reason,
             timestamp=_now_utc(),
         )
         self.session.add(row)
@@ -467,6 +471,7 @@ class Repository:
             cycle_id=cycle_id,
             symbol=pos.symbol,
             side=pos.side.value,
+            trade_mode=getattr(pos, "trade_mode", "intraday"),
             signal_price=pos.signal_price,
             entry_price=pos.entry_price,
             margin=pos.margin,
@@ -476,6 +481,10 @@ class Repository:
             stop_price=pos.stop_price,
             initial_stop_price=pos.initial_stop_price,
             target_price=pos.target_price,
+            tp1_price=getattr(pos, "tp1_price", 0.0),
+            tp2_price=getattr(pos, "tp2_price", 0.0),
+            partial_closed=getattr(pos, "partial_closed", False),
+            partial_pnl=getattr(pos, "partial_pnl", 0.0),
             liq_price=pos.liq_price,
             peak_price=pos.peak_price,
             trail_active=pos.trail_active,
@@ -491,7 +500,7 @@ class Repository:
         )
 
     async def sync_position(self, row_id: int, pos) -> None:
-        """Persist trail movement. Called every tick, so it writes only what moves."""
+        """Persist trail movement and partial exits. Called every tick."""
         row = await self.session.get(PaperPosition, row_id)
         if row is None:
             return
@@ -502,6 +511,10 @@ class Repository:
         row.trail_r_override = pos.trail_r_override
         row.locked_roe = pos.locked_roe
         row.stop_moved_by_profit_lock = pos.stop_moved_by_profit_lock
+        row.coin_qty = pos.coin_qty
+        row.margin = pos.margin
+        row.partial_closed = getattr(pos, "partial_closed", False)
+        row.partial_pnl = getattr(pos, "partial_pnl", 0.0)
         await self.session.commit()
 
     async def delete_position(self, row_id: int) -> None:
@@ -551,6 +564,7 @@ class Repository:
             cycle_id=cycle_id,
             symbol=pos.symbol,
             side=pos.side.value,
+            trade_mode=getattr(pos, "trade_mode", "intraday"),
             signal_price=pos.signal_price,
             entry_price=pos.entry_price,
             exit_price=trade.exit_price,
@@ -562,6 +576,7 @@ class Repository:
             target_price=pos.target_price,
             exit_reason=trade.reason.value,
             gross_pnl=trade.gross_pnl,
+            partial_pnl=getattr(pos, "partial_pnl", 0.0),
             # Fees and funding stay separate so "was it the strategy or the
             # costs" is still answerable after the fact.
             trading_fees=trade.fees_paid - trade.funding_paid,

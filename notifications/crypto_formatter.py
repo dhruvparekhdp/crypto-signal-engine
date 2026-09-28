@@ -55,8 +55,18 @@ def format_crypto_signal(sig: CryptoSignal) -> str:
     if getattr(sig, "ai_review", ""):
         ai_review_block = f"\n\n🤖 <b>AI Review (Groq Sentinel):</b>\n<i>\"{sig.ai_review}\"</i>"
 
+    mode_str = (
+        f"⚡ <b>INTRADAY SCALP</b> ({getattr(sig, 'leverage_suggested', 10.0):.0f}x Leverage)"
+        if getattr(sig, "trade_mode", "intraday") == "intraday"
+        else f"📦 <b>DELIVERY SWING</b> ({getattr(settings, 'delivery_wallet_allocation_pct', 8.0):.0f}% Allocation)"
+    )
+
+    tp_line = ""
+    if getattr(sig, "tp1_price", 0.0) > 0 and getattr(sig, "tp2_price", 0.0) > 0:
+        tp_line = f"\n🎯 <b>TP1 (50% scale-out):</b> ${sig.tp1_price:,.4f} · <b>TP2 (runner):</b> ${sig.tp2_price:,.4f}"
+
     return (
-        f"🪙 <b>{symbol_display}</b> · {dir_emoji}\n"
+        f"🪙 <b>{symbol_display}</b> · {dir_emoji} · {mode_str}\n"
         # The timeframe is now the window the move is expected to need, and
         # it is spelled out rather than left as a bare "15m" — the point of
         # running two horizons is being able to compare them by eye.
@@ -65,7 +75,8 @@ def format_crypto_signal(sig: CryptoSignal) -> str:
         f"Entry <b>${sig.current_price:,.4f}</b> → "
         f"Target <b>{target_str}</b> → Stop <b>{stop_str}</b>\n"
         f"Move <b>{move_pct:.3f}%</b> · <b>{x_cost:.1f}×</b> what the round trip costs · "
-        f"reward:risk <b>{rr:.2f}</b>\n"
+        f"reward:risk <b>{rr:.2f}</b>"
+        + tp_line + "\n"
         + trail_lines +
         f"Confidence <b>{conf_pct}%</b> · Suggested stake <b>₹{stake_amt:,.0f}</b> "
         f"({stake_pct_display}% of bank)"

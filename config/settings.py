@@ -121,7 +121,7 @@ class Settings(BaseSettings):
     # The reviews it writes are stored with their news context so the local
     # model can study them later.
     llm_chain_pre_trade: str = (
-        "groq:openai/gpt-oss-120b, groq:openai/gpt-oss-20b, openrouter:qwen/qwen3-32b")
+        "groq:openai/gpt-oss-120b, groq:openai/gpt-oss-20b, openrouter:qwen/qwen3.8-27b:free, openrouter:qwen/qwen3-32b")
     # A quota is per-organization on Groq's free tier, so when it is hit
     # every Groq model in a chain fails together — the 21-25 Sep pattern
     # where the whole "why did it move" job went silent for hours because
@@ -143,7 +143,7 @@ class Settings(BaseSettings):
         "openrouter:nvidia/nemotron-3-ultra-550b-a55b:free")
     # The world-events briefing. Every entry can actually search.
     llm_chain_briefing: str = (
-        "groq:openai/gpt-oss-120b+search, groq:openai/gpt-oss-20b+search, "
+        "groq:openai/gpt-oss-20b+search, groq:openai/gpt-oss-120b+search, "
         "openrouter:qwen/qwen3-32b:online")
     market_briefing_enabled: bool = True
     market_briefing_minutes: int = 30
@@ -351,7 +351,7 @@ class Settings(BaseSettings):
 
     # Crypto & Commodities Watchlist
     crypto_watchlist_seed: str = (
-        "btcusdt,ethusdt,bnbusdt,solusdt,xrpusdt,dogeusdt,adausdt,linkusdt,ltcusdt,dotusdt"
+        "btcusdt,ethusdt,solusdt,bnbusdt,dogeusdt,xrpusdt,adausdt,avaxusdt,linkusdt,suiusdt,bchusdt"
     )
     crypto_kline_interval: str = "1m"
     crypto_timeframes: str = "15m,30m,1h,4h,1d"
@@ -404,8 +404,8 @@ class Settings(BaseSettings):
     # now: nothing in the signal engine reads state.liquidations or
     # state.large_trades yet, only /api/pipeline shows them. Off does not
     # take effect until the next reconnect, same as the kline interval.
-    binance_liquidation_stream_enabled: bool = True
-    binance_large_trade_stream_enabled: bool = True
+    binance_liquidation_stream_enabled: bool = False
+    binance_large_trade_stream_enabled: bool = False
     # Mirror review (27 Sep): for every fired signal, also synthesise the
     # opposite-direction candidate and give the AI reviewer a second look at
     # it in parallel. A candidate that isn't already strong enough to open
@@ -463,6 +463,13 @@ class Settings(BaseSettings):
     paper_tick_interval_seconds: int = 30
     paper_usdt_inr: float = 102.0
     paper_alert_telegram: bool = True
+
+    # Dual-Mode Trading Engine (Intraday Scalp vs Delivery Swing)
+    intraday_leverage: float = 10.0                 # 5x to 15x leverage
+    delivery_wallet_allocation_pct: float = 8.0     # 5% to 10% of shared wallet
+    delivery_leverage: float = 2.0                  # 1x to 3x swing leverage
+    max_concurrent_intraday: int = 3                # Max simultaneous active intraday trades
+    consecutive_loss_cooldown_minutes: int = 60     # Adaptive cooldown on 2 losses (60m-180m)
 
     # Ingest / API Auth & Security
     api_auth_token: str = ""

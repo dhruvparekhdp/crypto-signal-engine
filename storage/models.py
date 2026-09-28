@@ -218,6 +218,8 @@ class CryptoSignalLog(Base):
     # words /api/pipeline already turns into English. Empty means either
     # it was opened, or paper trading has not reached a decision on it yet.
     skip_reason: Mapped[str] = mapped_column(String, default="")
+    trade_mode: Mapped[str] = mapped_column(String, default="intraday")
+    veto_reason: Mapped[str] = mapped_column(String, default="")
     # Mirror review (27 Sep). "primary" or "mirror" — never shown alone in
     # the UI, always paired with direction.
     candidate_role: Mapped[str] = mapped_column(String, default="primary")
@@ -716,6 +718,11 @@ class PaperPosition(Base):
     # back on restore so a redeploy mid-trade does not lose it and mislabel
     # a protected win as an ordinary stop. See ExitReason.PROFIT_LOCK.
     stop_moved_by_profit_lock: Mapped[bool] = mapped_column(Boolean, default=False)
+    trade_mode: Mapped[str] = mapped_column(String, default="intraday")
+    tp1_price: Mapped[float] = mapped_column(Float, default=0.0)
+    tp2_price: Mapped[float] = mapped_column(Float, default=0.0)
+    partial_closed: Mapped[bool] = mapped_column(Boolean, default=False)
+    partial_pnl: Mapped[float] = mapped_column(Float, default=0.0)
 
     entry_fee: Mapped[float] = mapped_column(Float)
     signal_type: Mapped[str] = mapped_column(String, default="")
@@ -741,6 +748,7 @@ class PaperTrade(Base):
     cycle_id: Mapped[int] = mapped_column(Integer, index=True)
     symbol: Mapped[str] = mapped_column(String, index=True)
     side: Mapped[str] = mapped_column(String)
+    trade_mode: Mapped[str] = mapped_column(String, default="intraday")
 
     signal_price: Mapped[float] = mapped_column(Float, default=0.0)
     entry_price: Mapped[float] = mapped_column(Float)
@@ -758,6 +766,7 @@ class PaperTrade(Base):
     exit_reason: Mapped[str] = mapped_column(String, index=True)
 
     gross_pnl: Mapped[float] = mapped_column(Float)
+    partial_pnl: Mapped[float] = mapped_column(Float, default=0.0)
     trading_fees: Mapped[float] = mapped_column(Float, default=0.0)
     funding_paid: Mapped[float] = mapped_column(Float, default=0.0)
     net_pnl: Mapped[float] = mapped_column(Float)

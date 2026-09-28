@@ -381,6 +381,11 @@ class AppRunner:
         pos.trail_r_override = getattr(row, "trail_r_override", None)
         pos.locked_roe = getattr(row, "locked_roe", None)
         pos.stop_moved_by_profit_lock = getattr(row, "stop_moved_by_profit_lock", False)
+        pos.trade_mode = getattr(row, "trade_mode", "intraday")
+        pos.tp1_price = getattr(row, "tp1_price", 0.0)
+        pos.tp2_price = getattr(row, "tp2_price", 0.0)
+        pos.partial_closed = getattr(row, "partial_closed", False)
+        pos.partial_pnl = getattr(row, "partial_pnl", 0.0)
         # Size was fixed at fill time, so it is restored rather than re-derived:
         # recomputing it from the current wallet would silently resize the
         # position every time the process restarts.
@@ -481,6 +486,23 @@ class AppRunner:
                     trade = resolve_at_price(pos, current_price, now, cfg, wallet,
                                              lock=self._profit_lock())
                     if trade is None:
+                        # 1. Dual Mode Trailing Ladder (TP1 partial 50% scale-out + R-ladder)
+                        from analysis.paper_cycle import fees_for
+                        fees = fees_for(pos.symbol)
+                        trail_moved, credit = pos.apply_dual_mode_trailing(current_price, fees)
+                        if credit > 0:
+                            wallet += credit
+                            await repo._set_wallet(cycle.id, wallet)
+                            self._tick_notes.append(f"TP1 partial 50% scale-out (+₹{credit:.2f} credited)")
+                            log.info("paper_trade_tp1_scale_out", symbol=pos.symbol, credit=round(credit, 2), wallet=round(wallet, 2))
+
+                        # 2. AI Sentiment Emergency Stop Ratchet
+                        if st is not None:
+                            ratcheted = pos.apply_ai_sentiment_stop_ratchet(current_price, st.sentiment_score, fees)
+                            if ratcheted:
+                                self._tick_notes.append(f"AI Sentiment stop ratchet applied (sentiment {st.sentiment_score:+.2f})")
+                                log.info("paper_trade_sentiment_ratchet", symbol=pos.symbol, sentiment=st.sentiment_score, new_stop=pos.stop_price)
+
                         # The position survived the tick's exits. A losing one
                         # now has to justify staying open; a winning one has
                         # its trail set by the same confidence. Nothing here
@@ -595,6 +617,14 @@ class AppRunner:
                                  reason="book_full_premium", holding=full.symbol)
                         await self._mark_skipped(log_id, "book_full_premium")
                         continue
+                    max_intraday = getattr(settings, "max_concurrent_intraday", 3)
+                    active_intraday = sum(1 for p in cstate.positions if getattr(p, "trade_mode", "intraday") == "intraday")
+                    if getattr(sig, "trade_mode", "intraday") == "intraday" and active_intraday >= max_intraday:
+                        log.info("paper_trade_skipped", symbol=sig.symbol, reason="max_concurrent_intraday_reached",
+                                 active=active_intraday, limit=max_intraday)
+                        await self._mark_skipped(log_id, f"max_intraday_trades_{active_intraday}/{max_intraday}")
+                        continue
+
                     sig, why_not = reprice_signal(sig, st.current_price, now, max_age)
                     if sig is None:
                         log.info("paper_trade_skipped", symbol=st.symbol, reason=why_not)
@@ -607,7 +637,8 @@ class AppRunner:
                         ok, _why = check_entry(
                             now.replace(tzinfo=None), sig.symbol, sig.direction, recent,
                             day_start_wallet, cstate.positions, protect,
-                            is_crypto=spec_for(sig.symbol).kind == "crypto")
+                            is_crypto=spec_for(sig.symbol).kind == "crypto",
+                            sentiment_score=st.sentiment_score)
                     if not ok:
                         log.info("paper_trade_skipped", symbol=sig.symbol, reason=_why)
                         await self._mark_skipped(log_id, _why)
@@ -709,6 +740,8 @@ class AppRunner:
         every call site that predates that feature, so this is a no-op
         unless a caller opts in.
         """
+        trade_mode = extra.pop("trade_mode", getattr(sig, "trade_mode", "intraday"))
+        veto_reason = extra.pop("veto_reason", getattr(sig, "veto_reason", ""))
         try:
             async with AsyncSessionFactory() as session:
                 return await Repository(session).log_crypto_signal(
@@ -727,6 +760,8 @@ class AppRunner:
                     indicators_summary=sig.indicators_summary,
                     suppressed_by=suppressed_by,
                     candidate_role=getattr(sig, "candidate_role", "primary"),
+                    trade_mode=trade_mode,
+                    veto_reason=veto_reason,
                     **extra,
                 )
         except Exception:
@@ -1445,7 +1480,7 @@ class AppRunner:
                             await self.groq_sentinel.review_signal_candidate(
                                 sig, state, model=scfg.groq_model, book=states, news=news)
                         )
-                        if verdict == "REJECT":
+                        if verdict in ("REJECT", "HARD_VETO"):
                             delta = -abs(settings.groq_reject_penalty)
                         elif verdict == "CAUTION":
                             delta = min(delta, -settings.groq_caution_min_penalty)
@@ -1464,6 +1499,17 @@ class AppRunner:
                                     **self._review_extras(state))
                         except Exception:
                             log.debug("pre_review_not_saved", symbol=sig.symbol)
+
+                        # Hard Veto: AI detected funding squeeze, news trap, or structural conflict
+                        if verdict in ("REJECT", "HARD_VETO"):
+                            log.info("crypto_signal_hard_vetoed_by_ai",
+                                     symbol=sig.symbol, type=sig.signal_type,
+                                     verdict=verdict, reason=ai_summary)
+                            sig.veto_reason = f"AI Hard Veto: {ai_summary}"
+                            await self._log_signal(sig, suppressed_by="ai_hard_veto", veto_reason=sig.veto_reason)
+                            self.crypto_engine.forget(sig)
+                            continue
+
                         before = sig.confidence
                         sig.confidence = max(0.50, min(0.95, round(before + delta, 4)))
                         if (settings.crypto_min_confidence > 0
@@ -1474,11 +1520,8 @@ class AppRunner:
                                      confidence_after=sig.confidence,
                                      threshold=settings.crypto_min_confidence,
                                      reason=ai_summary)
-                            # Logged as a shadow, not discarded. The resolver
-                            # scores it like any other signal, so the cost of
-                            # blocking it is measurable. A filter only ever
-                            # judged on what it let through cannot be wrong.
-                            await self._log_signal(sig, suppressed_by="ai_review")
+                            sig.veto_reason = f"AI Caution: {ai_summary}"
+                            await self._log_signal(sig, suppressed_by="ai_review", veto_reason=sig.veto_reason)
                             self.crypto_engine.forget(sig)
                             continue
 

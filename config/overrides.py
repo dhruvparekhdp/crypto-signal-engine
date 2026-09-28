@@ -28,6 +28,7 @@ class Field:
     lo: float | None = None
     hi: float | None = None
     choices: tuple = ()
+    depends_on: dict | None = None
 
 
 GROUPS = {
@@ -51,7 +52,7 @@ SECRET_STR_KEYS = frozenset({
 
 FIELDS: tuple[Field, ...] = (
     # Market data
-    Field("binance_only_mode", "data", "Binance only",
+    Field("binance_only_mode", "data", "Binance only [turns off CoinDCX, CoinGecko, Twelve Data]",
           "Use Binance for all prices and candles. Turns CoinDCX, CoinGecko and Twelve Data "
           "off so sources cannot disagree. Recommended."),
     Field("binance_klines_enabled", "data", "Binance candles (main source)",
@@ -63,24 +64,27 @@ FIELDS: tuple[Field, ...] = (
           "Tick-by-tick WebSocket on top of the candles. Optional."),
     Field("binance_oi_enabled", "data", "Open interest",
           "Binance futures open interest every 2 minutes.", live=False),
-    Field("binance_liquidation_stream_enabled", "data", "Liquidation stream",
-          "Free, no key. Watched on Why no trades? — nothing trades on it yet.",
-          live=False),
-    Field("binance_large_trade_stream_enabled", "data", "Large-trade stream",
-          "Free, no key. Watched on Why no trades? — nothing trades on it yet.",
-          live=False),
-    Field("large_trade_notional_usd", "data", "Large trade threshold (USDT)",
-          "A single trade at or above this is flagged as large.",
-          kind="float", lo=1000, hi=1000000, live=False),
     Field("coindcx_enabled", "data", "CoinDCX prices",
-          "INR exchange prices. Ignored when Binance only is on."),
+          "INR exchange prices. Ignored when Binance only is on.",
+          depends_on={"binance_only_mode": False}),
     Field("coingecko_enabled", "data", "CoinGecko prices",
-          "Fallback prices. Ignored when Binance only is on."),
+          "Fallback prices. Ignored when Binance only is on.",
+          depends_on={"binance_only_mode": False}),
     Field("twelvedata_enabled", "data", "Twelve Data (gold, silver, oil)",
-          "Commodity prices; needs a key. Ignored when Binance only is on.", live=False),
+          "Commodity prices; needs a key. Ignored when Binance only is on.",
+          live=False, depends_on={"binance_only_mode": False}),
     Field("news_sentiment_enabled", "data", "News sentiment",
           "Scored headlines feed the sentiment score and news pauses."),
-    # Signals
+    # Signals & Modes
+    Field("intraday_leverage", "signals", "Intraday Leverage (5x - 15x)",
+          "Leverage multiplier for intraday scalp mode (default 10x).",
+          kind="float", lo=5.0, hi=15.0),
+    Field("delivery_wallet_allocation_pct", "signals", "Delivery Wallet Allocation (5% - 10%)",
+          "Maximum percentage of wallet allocated per delivery swing trade (default 8%).",
+          kind="float", lo=5.0, hi=10.0),
+    Field("max_concurrent_intraday", "signals", "Max Concurrent Intraday Trades",
+          "Cap simultaneous active intraday positions to avoid correlated flash-wick drawdowns (default 3).",
+          kind="int", lo=1, hi=5),
     Field("crypto_min_confidence", "signals",
           "Minimum confidence to generate a signal at all",
           "Signals below this are dropped before they ever fire or get shown anywhere. "
@@ -91,8 +95,6 @@ FIELDS: tuple[Field, ...] = (
           kind="float", lo=0.5, hi=0.95),
     Field("high_conviction_only", "signals", "High conviction only",
           "Stricter scalp and conviction gates.", live=False),
-    Field("crypto_htf_filter_enabled", "signals", "1h/15m trend filter",
-          "Drop signals fighting the hourly trend."),
     Field("daily_trend_filter_enabled", "signals", "Daily trend filter",
           "Drop signals against the daily SMA20 trend."),
     Field("crypto_volume_spike_enabled", "signals", "Volume spike signals", ""),
@@ -186,6 +188,9 @@ FIELDS: tuple[Field, ...] = (
           "Stop opening trades for the day after this loss.", kind="float", lo=0.5, hi=20),
     Field("max_same_direction_positions", "protect", "Max same-direction positions",
           "All coins move with BTC; this caps correlated exposure.", kind="int", lo=1, hi=10),
+    Field("consecutive_loss_cooldown_minutes", "protect", "Adaptive Loss Cooldown (minutes)",
+          "Pause coin for at least 1h-1.5h after 2 consecutive stop-outs, extending up to 2h-3h if news sentiment is negative.",
+          kind="int", lo=45, hi=240),
     # AI
     Field("groq_signal_review_enabled", "ai", "AI review before a trade",
           "The AI can veto a trade, never add to it."),
@@ -226,10 +231,10 @@ FIELDS: tuple[Field, ...] = (
           "Deploy, crash and trade alerts. Get one from @BotFather.", kind="secret"),
     Field("twelvedata_api_key", "keys", "Twelve Data API key",
           "Gold, silver, oil prices. Ignored when Binance only is on. twelvedata.com",
-          kind="secret"),
+          kind="secret", depends_on={"binance_only_mode": False}),
     Field("coingecko_api_key", "keys", "CoinGecko API key",
           "Optional — raises the free rate limit. Ignored when Binance only is on.",
-          kind="secret"),
+          kind="secret", depends_on={"binance_only_mode": False}),
     Field("cryptopanic_auth_token", "keys", "CryptoPanic token",
           "News headlines for sentiment. cryptopanic.com/developers/api",
           kind="secret"),
@@ -312,4 +317,5 @@ def describe(settings, stored: dict) -> list[dict]:
         "value": None if f.kind == "secret" else getattr(settings, f.key, None),
         "is_set": _is_set(settings, f.key) if f.kind == "secret" else None,
         "source": "saved" if f.key in stored else "default",
+        "depends_on": f.depends_on,
     } for f in FIELDS]

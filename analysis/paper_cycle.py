@@ -336,6 +336,9 @@ def open_from_signal(
         usdt_inr=usdt_inr,
         lot_step=spec.lot_step,
         slippage=cfg.slippage,
+        trade_mode=getattr(signal, "trade_mode", "intraday"),
+        tp1_price=getattr(signal, "tp1_price", 0.0),
+        tp2_price=getattr(signal, "tp2_price", 0.0),
     )
     if pos.coin_qty <= 0:
         log.info("paper.rejected", symbol=signal.symbol, reason="below_one_lot")

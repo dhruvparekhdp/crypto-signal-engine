@@ -300,11 +300,27 @@ async def _call_openai_shaped(provider: Provider, model: str, system: str,
         headers["HTTP-Referer"] = "https://github.com/dhruvparekhdp/crypto-signal-engine"
         headers["X-Title"] = "crypto-signal-engine"
 
+    if search:
+        system = (system + "\nNote: Do not call custom functions or tools named 'json'. "
+                           "Only use browser_search if needed for news research, and write your "
+                           "final output as plain text containing a valid JSON object.")
+        payload["messages"] = [{"role": "system", "content": system},
+                                {"role": "user", "content": user}]
+
     async with httpx.AsyncClient(timeout=timeout) as client:
         resp = await client.post(provider.url, json=payload, headers=headers)
+        if resp.status_code == 400 and search and "tool" in resp.text.lower():
+            # Groq search tool error fallback: retry without tool attachment
+            log.warning("groq_search_tool_error_fallback", error=resp.text[:120])
+            payload.pop("tools", None)
+            payload["response_format"] = {"type": "json_object"}
+            resp = await client.post(provider.url, json=payload, headers=headers)
         if resp.status_code != 200:
             raise RuntimeError(f"{provider.name} returned {resp.status_code}: {resp.text[:200]}")
-        return resp.json()["choices"][0]["message"]["content"]
+        choices = resp.json().get("choices", [])
+        if not choices:
+            return ""
+        return choices[0]["message"].get("content", "") or ""
 
 
 async def _call_anthropic(model: str, system: str, user: str,

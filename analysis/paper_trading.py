@@ -343,6 +343,12 @@ class Position:
     # close_position() to pick the exit reason.
     stop_moved_by_profit_lock: bool = False
 
+    trade_mode: str = "intraday"         # "intraday" | "delivery"
+    tp1_price: float = 0.0               # First scale-out target (+1.0R)
+    tp2_price: float = 0.0               # Second runner target (+2.0R to +2.5R)
+    partial_closed: bool = False         # True once 50% scale-out is executed
+    partial_pnl: float = 0.0             # Realized PnL from partial close
+
     # Set once the position has been scaled in or out, because after that the
     # size no longer follows from margin x leverage / entry.
     _coin_qty: float | None = None
@@ -588,6 +594,114 @@ class Position:
             self.stop_price = candidate
         return moved
 
+    def scale_out_tp1(self, price: float, fees: FeeModel) -> tuple[float, float]:
+        """
+        Scale out 50% at TP1 (+1.0R).
+        Returns (wallet_credit, net_pnl_realised).
+        """
+        if self.partial_closed or self.coin_qty <= 0:
+            return 0.0, 0.0
+        close_qty = self.coin_qty * 0.5
+        gross, fee, freed = self.reduce(close_qty, price, fees)
+        net = gross - fee
+        self.partial_pnl += net
+        self.partial_closed = True
+        # Move stop to breakeven + round trip fees
+        s = self.sign
+        cost = fees.round_trip_pct()
+        be_stop = self.entry_price * (1 + s * cost)
+        # Ensure stop is at least at breakeven
+        self.stop_price = s * max(s * self.stop_price, s * be_stop)
+        self.stop_moved_by_profit_lock = True
+        self.trail_active = True
+        return freed + net, net
+
+    def apply_dual_mode_trailing(self, mark: float, fees: FeeModel) -> tuple[bool, float]:
+        """
+        Deterministic multi-stage trailing stop ladder:
+        Stage 1: If R >= 1.0 and not partial_closed -> scale out 50%, lock breakeven stop.
+                 Returns (stop_moved=True, wallet_credit=margin_released + net_pnl).
+        Stage 2: If R >= 1.2 -> ratchet stop to lock at least +0.5R profit.
+        Stage 3: If R >= 1.6 -> ratchet stop to lock at least +1.0R profit.
+        Stage 4: If R >= 2.0 -> trail behind peak price at 0.4R distance.
+        """
+        wallet_credit = 0.0
+        moved = False
+        s = self.sign
+        best = s * max(s * (self.peak_price or mark), s * mark)
+        self.peak_price = best
+
+        r = self.r_multiple(best)
+        risk = self.risk_per_unit
+        if risk <= 0:
+            return False, 0.0
+
+        # Stage 1: At +1.0R, scale out 50% if not already done
+        if r >= 1.0 and not self.partial_closed:
+            credit, _ = self.scale_out_tp1(mark, fees)
+            wallet_credit += credit
+            moved = True
+
+        # Stage 2: At +1.2R, lock in at least +0.5R
+        if r >= 1.2:
+            target_stop = self.entry_price + s * 0.5 * risk
+            if s * (target_stop - self.stop_price) > 0:
+                self.stop_price = target_stop
+                self.stop_moved_by_profit_lock = True
+                self.trail_active = True
+                moved = True
+
+        # Stage 3: At +1.6R, lock in at least +1.0R
+        if r >= 1.6:
+            target_stop = self.entry_price + s * 1.0 * risk
+            if s * (target_stop - self.stop_price) > 0:
+                self.stop_price = target_stop
+                self.stop_moved_by_profit_lock = True
+                self.trail_active = True
+                moved = True
+
+        # Stage 4: At +2.0R+, trail at 0.4R behind best price (or trail_r_override if set by AI)
+        if r >= 2.0:
+            trail_dist = risk * (self.trail_r_override if self.trail_r_override is not None else 0.4)
+            target_stop = best - s * trail_dist
+            if s * (target_stop - self.stop_price) > 0:
+                self.stop_price = target_stop
+                self.stop_moved_by_profit_lock = True
+                self.trail_active = True
+                moved = True
+
+        return moved, wallet_credit
+
+    def apply_ai_sentiment_stop_ratchet(self, mark: float, sentiment_score: float, fees: FeeModel) -> bool:
+        """
+        Emergency stop ratchet if news sentiment shifts against an open trade:
+        - For LONG: if sentiment < -0.3 and R > 0.3 -> ratchet stop to breakeven or lock existing profit.
+        - For SHORT: if sentiment > +0.3 and R > 0.3 -> ratchet stop to breakeven or lock existing profit.
+        """
+        s = self.sign
+        r = self.r_multiple(mark)
+        if r < 0.3:
+            return False  # not in meaningful profit to lock
+
+        hostile = (self.side is Side.LONG and sentiment_score < -0.3) or \
+                  (self.side is Side.SHORT and sentiment_score > 0.3)
+        if not hostile:
+            return False
+
+        # Lock at least half of current profit or breakeven
+        risk = self.risk_per_unit
+        cost = fees.round_trip_pct()
+        be_stop = self.entry_price * (1 + s * cost)
+        profit_lock_stop = self.entry_price + s * (r * 0.6) * risk
+        candidate = s * max(s * be_stop, s * profit_lock_stop)
+
+        if s * (candidate - self.stop_price) > 0:
+            self.stop_price = candidate
+            self.stop_moved_by_profit_lock = True
+            self.trail_active = True
+            return True
+        return False
+
     @property
     def entry_slippage_pct(self) -> float:
         """How far the fill landed from the quoted price, signed against us."""
@@ -730,6 +844,9 @@ def open_position(
     drift_pct: float = 0.0,
     stop_price: float | None = None,
     target_price: float | None = None,
+    trade_mode: str = "intraday",
+    tp1_price: float = 0.0,
+    tp2_price: float = 0.0,
 ) -> Position:
     # The signal quotes a price; we fill somewhere near it. Everything after
     # this point — stop, target, liquidation, size — is measured from where we
@@ -767,6 +884,9 @@ def open_position(
         lot_step=lot_step,
         signal_price=signal_price,
         initial_stop_price=stop,
+        trade_mode=trade_mode,
+        tp1_price=tp1_price,
+        tp2_price=tp2_price or target,
     )
     # Charged on what actually filled, not on what we asked for. With a coarse
     # lot step those differ by enough to matter on a small wallet.

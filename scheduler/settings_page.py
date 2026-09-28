@@ -325,6 +325,16 @@ nav a{flex:none;text-decoration:none;color:var(--text);font-weight:600;font-size
   box-shadow:4px 4px 9px var(--sh-d),-4px -4px 9px var(--sh-l)}
 nav a:active{box-shadow:inset 3px 3px 7px var(--sh-d),inset -3px -3px 7px var(--sh-l)}
 main{max-width:860px;margin:0 auto;padding:6px 16px;display:grid;gap:18px}
+.settings-sidebar{display:none}
+@media(min-width:900px){
+  main{max-width:1300px;display:grid;grid-template-columns:220px 1fr;gap:24px;align-items:start}
+  .settings-sidebar{display:flex;flex-direction:column;gap:6px;padding:14px;position:sticky;top:80px}
+  .side-title{font-size:11px;font-weight:700;text-transform:uppercase;color:var(--muted);letter-spacing:.05em;padding:4px 8px 8px}
+  .side-nav-btn{display:flex;align-items:center;gap:8px;padding:9px 12px;border-radius:12px;text-decoration:none;color:var(--text);font-weight:600;font-size:12.5px;transition:.15s}
+  .side-nav-btn:hover{background:var(--neu-l,rgba(255,255,255,0.05))}
+  .side-nav-btn.on{box-shadow:inset 2px 2px 5px var(--sh-d),inset -2px -2px 5px var(--sh-l);color:var(--accent)}
+  .rows{grid-template-columns:repeat(auto-fit,minmax(380px,1fr));gap:12px}
+}
 .card{padding:16px 18px}
 h2{font-size:15px;color:var(--text-strong);display:flex;align-items:center;gap:8px}
 .muted{color:var(--muted)} .small{font-size:12px}
@@ -383,6 +393,19 @@ th{color:var(--muted2);font-weight:600}
 <a href="/moves">Market moves</a><a href="/api-docs">API list</a><a href="#speed">Speed</a><a href="/settings/classic">Classic</a></nav>
 </header>
 <main>
+<aside class="settings-sidebar raise">
+  <div class="side-title">Quick Jump</div>
+  <a href="#sec-data" class="side-nav-btn">📡 Market data</a>
+  <a href="#sec-signals" class="side-nav-btn">📈 Signals & Modes</a>
+  <a href="#sec-exits" class="side-nav-btn">🔒 Exits</a>
+  <a href="#sec-protect" class="side-nav-btn">🛡️ Protections</a>
+  <a href="#sec-ai" class="side-nav-btn">🤖 AI Sentinel</a>
+  <a href="#sec-paper" class="side-nav-btn">🧪 Paper trading</a>
+  <a href="#sec-models" class="side-nav-btn">🧠 AI models</a>
+  <a href="#sec-keys" class="side-nav-btn">🔑 API keys</a>
+  <a href="#sec-themes" class="side-nav-btn">🎨 Theme</a>
+</aside>
+<div class="settings-content" style="display:grid;gap:18px">
 <section class="card raise" id="auth"></section>
 <section class="card raise" id="confwarn" style="display:none"></section>
 <section class="card raise" id="why"><h2>🔎 Why no trades?</h2><div id="funnel">
@@ -393,11 +416,12 @@ th{color:var(--muted2);font-weight:600}
 by the engine. A <span class="tag acc">restart</span> tag means it takes effect after the next
 restart; everything else applies the moment you save.</p></section>
 <div id="groups"></div>
-<details class="raise"><summary>🧪 Paper trading</summary><div class="rows" id="paper"></div></details>
-<details class="raise"><summary>🤖 AI models in use</summary><div class="rows" id="models"></div></details>
+<details class="raise" id="sec-paper"><summary>🧪 Paper trading</summary><div class="rows" id="paper"></div></details>
+<details class="raise" id="sec-models"><summary>🤖 AI models in use</summary><div class="rows" id="models"></div></details>
 <details class="raise" id="speed"><summary>⚡ Speed (why pages are slow)</summary>
 <div class="rows" id="perf"><p class="muted small">Log in to see timings.</p></div></details>
-<section class="card raise"><h2>🎨 Theme</h2><div class="themes" id="themes"></div></section>
+<section class="card raise" id="sec-themes"><h2>🎨 Theme</h2><div class="themes" id="themes"></div></section>
+</div>
 </main>
 <div class="savebar"><span class="muted small" id="dirty">No changes</span>
 <button class="btn" id="save" disabled onclick="save()">Save changes</button></div>
@@ -447,7 +471,28 @@ function control(f){const v=f.value, id='f-'+f.key;
     +'" onchange="mark(\''+f.key+'\',this.value)">'
     +(utcHour?'<div class="small muted" style="text-align:right;margin-top:4px">UTC · <b id="ist-'+f.key+'">'
       +istHour(v)+' IST</b></div>':'');}
-function mark(k,v){changes[k]=v;document.getElementById('r-'+k).classList.add('dirty');bar();checkConfidenceFloors();}
+function isFieldVisible(f){
+  if(!f.depends_on) return true;
+  for(const [k, expected] of Object.entries(f.depends_on)){
+    const cur = (k in changes) ? changes[k] : (FIELDS.find(x=>x.key===k)?.value ?? false);
+    if(Boolean(cur) !== Boolean(expected)) return false;
+  }
+  return true;
+}
+function updateVisibility(){
+  for(const f of FIELDS){
+    const el = document.getElementById('r-'+f.key);
+    if(el) el.style.display = isFieldVisible(f) ? '' : 'none';
+  }
+}
+function mark(k,v){
+  changes[k]=v;
+  const el = document.getElementById('r-'+k);
+  if(el) el.classList.add('dirty');
+  bar();
+  checkConfidenceFloors();
+  updateVisibility();
+}
 function markP(k,v){paperChanges[k]=v;document.getElementById('p-'+k).classList.add('dirty');bar();checkConfidenceFloors();}
 function bar(){const n=Object.keys(changes).length+Object.keys(paperChanges).length;
   document.getElementById('dirty').textContent=n?n+' unsaved change'+(n>1?'s':''):'No changes';
@@ -468,18 +513,21 @@ function renderGroups(){
   document.getElementById('sources').innerHTML=(LAST_SOURCES_ON||[]).map(s=>'<span>'+esc(s)+'</span>').join('');
   const groups={}; FIELDS.forEach(f=>(groups[f.group_label]=groups[f.group_label]||[]).push(f));
   const icons={'Market data':'📡','Signals':'📈','Exits (profit lock)':'🔒','Protections':'🛡️','AI':'🤖','v2 strategy':'🧭','Storage':'🗄️','API keys':'🔑'};
+  const secId={'Market data':'sec-data','Signals':'sec-signals','Exits (profit lock)':'sec-exits','Protections':'sec-protect','AI':'sec-ai','v2 strategy':'sec-v2','Storage':'sec-storage','API keys':'sec-keys'};
   const groupNote={'API keys':'Paste a new key and save — leave a box blank to keep '
     +'whatever key is already set. Once saved a key is never shown again, here or in any '
     +'API response, only whether one is set.'};
   document.getElementById('groups').innerHTML=Object.entries(groups).map(([g,fs],i)=>
-    '<details class="raise" style="margin-bottom:18px"'+(i===0?' open':'')+'><summary>'+(icons[g]||'')
+    '<details class="raise" id="'+(secId[g]||'sec-'+i)+'" style="margin-bottom:18px"'+(i===0?' open':'')+'><summary>'+(icons[g]||'')
     +' '+esc(g)+'</summary><div class="rows">'
     +(groupNote[g]?'<p class="small muted" style="padding:0 4px 8px">'+groupNote[g]+'</p>':'')
-    +fs.map(f=>'<div class="row inset" id="r-'+f.key+'"><div>'
+    +fs.map(f=>'<div class="row inset" id="r-'+f.key+'" style="display:'+(isFieldVisible(f)?'':'none')+'"><div>'
     +'<div class="l">'+esc(f.label)+'</div>'+(f.help?'<div class="h">'+esc(f.help)+'</div>':'')
     +'<div class="b">'+(f.live?'':'<span class="tag acc">restart</span>')
     +(f.source==='saved'?'<span class="tag">saved</span>':'<span class="tag">default</span>')
+    +(f.depends_on && f.depends_on.binance_only_mode===false?'<span class="tag">multi-feed</span>':'')
     +'</div></div><div>'+control(f)+'</div></div>').join('')+'</div></details>').join('');
+  updateVisibility();
 }
 function renderModels(d){
   const act=d.models_activity||{};

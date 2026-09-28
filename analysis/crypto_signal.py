@@ -40,6 +40,11 @@ class CryptoSignal:
     # at paper-trade open time, to decide whether to use the extended
     # hold-time ceiling instead of the normal one — never anything else.
     precedent_extended_hold: bool = False
+    trade_mode: str = "intraday"         # "intraday" | "delivery"
+    leverage_suggested: float = 10.0     # 5x-15x for intraday, 1x-3x for delivery
+    tp1_price: float = 0.0               # First scale-out target (+1.0R)
+    tp2_price: float = 0.0               # Second runner target (+2.0R to +2.5R)
+    veto_reason: str = ""                # Explanation if rejected by filter
 
 
 def compute_crypto_stake(edge_pct: float, confidence: float) -> float:

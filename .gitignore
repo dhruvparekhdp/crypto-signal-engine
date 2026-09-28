@@ -1,4 +1,5 @@
 .env
+.env.yaml
 *.db
 *.db-shm
 *.db-wal

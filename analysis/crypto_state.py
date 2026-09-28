@@ -177,6 +177,39 @@ class CryptoState:
             return 0.0
         return self.volume_24h / self.volume_24h_avg
 
+    @property
+    def htf_1h_trend(self) -> str:
+        """'bull' if price >= EMA/SMA 50 on 1h candles, 'bear' if price < EMA/SMA 50, else 'neutral'."""
+        candles = self.get_candles("1h")
+        if not candles or len(candles) < 15:
+            return "neutral"
+        closes = [c.close for c in candles]
+        n = min(len(closes), 50)
+        ma = sum(closes[-n:]) / n
+        return "bull" if self.current_price >= ma else "bear"
+
+    @property
+    def htf_4h_trend(self) -> str:
+        """'bull' if price >= EMA/SMA 50 on 4h candles, 'bear' if price < EMA/SMA 50, else 'neutral'."""
+        candles = self.get_candles("4h")
+        if not candles or len(candles) < 10:
+            return "neutral"
+        closes = [c.close for c in candles]
+        n = min(len(closes), 50)
+        ma = sum(closes[-n:]) / n
+        return "bull" if self.current_price >= ma else "bear"
+
+    @property
+    def momentum_15m(self) -> str:
+        """'bull' if price >= EMA/SMA 20 on 15m candles, 'bear' if price < EMA/SMA 20, else 'neutral'."""
+        candles = self.get_candles("15m")
+        if not candles or len(candles) < 10:
+            return "neutral"
+        closes = [c.close for c in candles]
+        n = min(len(closes), 20)
+        ma = sum(closes[-n:]) / n
+        return "bull" if self.current_price >= ma else "bear"
+
     def rsi_divergence(self, lookback: int = 40) -> str | None:
         """
         Regular RSI divergence, measured at confirmed swing pivots.

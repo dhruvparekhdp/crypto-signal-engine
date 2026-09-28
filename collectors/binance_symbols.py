@@ -182,13 +182,23 @@ async def ticker_24h(symbols: list[str], timeout: float = 10.0) -> dict[str, dic
     return {}
 
 
+POPULAR_SYMBOLS = (
+    "BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT", "DOGEUSDT",
+    "XRPUSDT", "ADAUSDT", "AVAXUSDT", "LINKUSDT", "SUIUSDT", "BCHUSDT",
+)
+
+
 async def search(query: str, watchlist: set[str], limit: int = 20) -> dict:
     """The payload behind the watchlist page's search box."""
     cache = await load_symbols()
     if cache is None:
         return {"results": [], "available": False,
                 "error": "Binance did not answer from this server; try again shortly."}
-    matches = rank(query, cache.spot, limit)
+    q = (query or "").strip()
+    if len(q) < 2:
+        matches = [s for s in POPULAR_SYMBOLS if s in cache.spot][:limit]
+    else:
+        matches = rank(q, cache.spot, limit)
     stats = await ticker_24h(matches)
     results = []
     for symbol in matches:

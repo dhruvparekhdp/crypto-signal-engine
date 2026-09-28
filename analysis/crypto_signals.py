@@ -136,9 +136,38 @@ def _emit(
         pipeline.no_setup("no volatility reading yet", signal_type)
         return None
 
-    # Cost is per-market: gold is five times cheaper to trade than ether, so
-    # holding both to the same floor would refuse profitable gold scalps.
-    cfg = SCALP.for_symbol(state.symbol)
+    # Hard RSI exhaustion vetoes:
+    # No shorting oversold dumps below RSI 35 (exhaustion bounce risk)
+    # No buying overbought tops above RSI 70 (exhaustion pullback risk)
+    if direction == "short" and state.rsi_14 < 35.0:
+        log.info("signal_vetoed_rsi_oversold", symbol=state.symbol, rsi=state.rsi_14)
+        pipeline.no_setup(f"RSI oversold ({state.rsi_14:.1f} < 35) - exhaustion bounce risk", signal_type)
+        return None
+    if direction == "long" and state.rsi_14 > 70.0:
+        log.info("signal_vetoed_rsi_overbought", symbol=state.symbol, rsi=state.rsi_14)
+        pipeline.no_setup(f"RSI overbought ({state.rsi_14:.1f} > 70) - exhaustion pullback risk", signal_type)
+        return None
+
+    # 1h Macro Trend Filter:
+    # Do not short when the macro 1h trend is bullish (price > 1h EMA 50)
+    if direction == "short" and state.htf_1h_trend == "bull":
+        log.info("signal_vetoed_opposes_1h_bull_trend", symbol=state.symbol)
+        pipeline.no_setup("1h macro trend is bullish - shorting against macro trend", signal_type)
+        return None
+
+    # Dual-Mode Routing: "delivery" (macro aligned swing) vs "intraday" (scalp)
+    is_delivery = (
+        timeframe in ("4h", "1d") or
+        (state.htf_1h_trend == direction and state.htf_4h_trend == direction and confidence >= 0.75)
+    )
+    if is_delivery:
+        trade_mode = "delivery"
+        leverage_suggested = float(getattr(settings, "delivery_leverage", 2.0))
+        cfg = ScalpConfig.delivery().for_symbol(state.symbol)
+    else:
+        trade_mode = "intraday"
+        leverage_suggested = float(getattr(settings, "intraday_leverage", 10.0))
+        cfg = SCALP.for_symbol(state.symbol)
 
     # And per-book, when there is one. Walking the resting orders for the size
     # actually being traded replaces two guesses that between them make up two
@@ -220,6 +249,10 @@ def _emit(
         sentiment_score=state.sentiment_score,
         indicators_summary=summary,
         timestamp=datetime.now(UTC),
+        trade_mode=trade_mode,
+        leverage_suggested=leverage_suggested,
+        tp1_price=levels.tp1,
+        tp2_price=levels.tp2,
     )
 
 
