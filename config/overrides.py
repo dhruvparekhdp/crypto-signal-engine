@@ -120,6 +120,11 @@ FIELDS: tuple[Field, ...] = (
     Field("mirror_target_jitter_pct", "signals", "Mirror target/stop jitter",
           "+/- range used to jitter the mirror candidate's target and stop away from an "
           "exact reflection of the original.", kind="float", lo=0.0, hi=0.50, live=False),
+    Field("bank_size", "signals", "Bank size (for stake display)",
+          "Notional wallet size used only to turn a signal's stake % into a rupee amount "
+          "on its Telegram alert. Does not affect what actually opens or how much it risks "
+          "- that is Paper trading's own starting wallet below.",
+          kind="float", lo=100, hi=10000000),
     # Exits
     Field("profit_lock_enabled", "exits", "Profit lock",
           "Your rule: once a trade is far enough in profit, lock a small win and trail tight."),
@@ -240,7 +245,7 @@ BY_KEY = {f.key: f for f in FIELDS}
 LEGACY_STRATEGY = ("crypto_min_confidence", "high_conviction_only",
                    "crypto_volume_spike_enabled", "crypto_htf_filter_enabled",
                    "binance_klines_enabled", "binance_oi_enabled", "orderflow_enabled",
-                   "groq_signal_review_enabled")
+                   "groq_signal_review_enabled", "bank_size")
 
 
 def coerce(field: Field, value):
