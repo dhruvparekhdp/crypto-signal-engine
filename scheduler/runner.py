@@ -560,8 +560,17 @@ class AppRunner:
                         continue
                     atr_pct = (st.atr_14 / st.current_price
                                if st.current_price > 0 and st.atr_14 > 0 else None)
-                    pos = open_from_signal(sig, cfg, cstate, now,
-                                           pcfg.usdt_inr, atr_pct, protect=protect)
+                    # The event-precedent brief's extended hold: only for a
+                    # trade the engine already flagged, and only while the
+                    # setting that turns extension on is still on (it may
+                    # have been flipped off between detection and open).
+                    extended_hold = (
+                        settings.event_precedent_extended_hold_minutes
+                        if (settings.event_precedent_extended_hold_enabled
+                            and getattr(sig, "precedent_extended_hold", False))
+                        else None)
+                    pos = open_from_signal(sig, cfg, cstate, now, pcfg.usdt_inr, atr_pct,
+                                           protect=protect, extended_hold_minutes=extended_hold)
                     if pos is None:
                         # open_from_signal's own gates (stop_inside_fees,
                         # liquidation_too_near, below_one_lot, target_not_
@@ -589,7 +598,9 @@ class AppRunner:
                                  else "")
                               + (f" · news: {blackout.name[:60]} → {event_bias['bias']} "
                                  f"({event_bias['confidence']:.2f}, {event_bias['source']})"
-                                 if event_bias else "")))])
+                                 if event_bias else "")
+                              + (f" · extended hold: {extended_hold:.0f}m (event precedent)"
+                                 if extended_hold else "")))])
                     cstate.position_ids[len(cstate.positions)] = row.id
                     cstate.positions.append(pos)
                     log.info("paper_trade_opened", symbol=pos.symbol,
@@ -1845,6 +1856,160 @@ class AppRunner:
         except Exception:
             log.exception("move_attribution_job_failed")
 
+    async def _research_precedent(self, name: str, at: datetime, level: int,
+                                  symbols: list[str]) -> dict | None:
+        """
+        Steps A-C of analysis/event_precedent.py for one calendar event:
+        find real historical precedent, measure our own Binance lake data
+        for it, then synthesise. Returns None — never raises — whenever
+        there is nothing usable to cache: zero real precedents found (the
+        expected, correct outcome for a genuinely novel event), or none of
+        the precedents found had measured market data behind them. Nothing
+        is stored for a None; the next run tries fresh.
+        """
+        from analysis.event_precedent import (
+            PRECEDENT_FIND_SYSTEM,
+            PRECEDENT_SYNTH_SYSTEM,
+            confidence_bucket,
+            find_prompt,
+            measure_window,
+            parse_precedents,
+            parse_synthesis,
+            synth_prompt,
+        )
+        from collectors.llm_client import ask_json
+
+        when = at.strftime("%A %d %B %Y, %H:%M UTC")
+        try:
+            found = await ask_json("event_precedent", PRECEDENT_FIND_SYSTEM,
+                                   find_prompt(name, when), max_tokens=1200,
+                                   temperature=0.2, timeout=90.0)
+            if not found:
+                log.info("event_precedent_no_answer", event_name=name, failures=found.failures)
+                return None
+            precedents = parse_precedents(found.data)
+            if not precedents:
+                log.info("event_precedent_none_found", event_name=name)
+                return None
+
+            measurements: dict[str, dict] = {}
+            for p in precedents:
+                try:
+                    start = datetime.fromisoformat(p["start_date"])
+                    end = datetime.fromisoformat(p["end_date"])
+                except ValueError:
+                    continue
+                per_symbol = {}
+                for sym in symbols:
+                    m = await asyncio.to_thread(
+                        measure_window, sym, start, end, settings.v2_lake_dir)
+                    if m is not None:
+                        per_symbol[sym] = m
+                if per_symbol:
+                    measurements[p["name"]] = per_symbol
+            usable_precedents = [p for p in precedents if p["name"] in measurements]
+            if not usable_precedents:
+                log.info("event_precedent_no_usable_data", event_name=name,
+                         precedents_found=len(precedents))
+                return None
+
+            synthesised = await ask_json("event_precedent", PRECEDENT_SYNTH_SYSTEM,
+                                         synth_prompt(name, precedents, measurements),
+                                         max_tokens=900, temperature=0.2, timeout=90.0)
+            if not synthesised:
+                log.info("event_precedent_synthesis_no_answer", event_name=name,
+                         failures=synthesised.failures)
+                return None
+            result = parse_synthesis(synthesised.data, len(usable_precedents))
+            log.info("event_precedent_saved", event_name=name, sample_size=result["sample_size"],
+                     direction_bias=result["direction_bias"],
+                     served_by=f"{found.served_by} / {synthesised.served_by}")
+            return {
+                "event_name": name, "event_at": at, "level": level,
+                "precedents": precedents, "measurements": measurements,
+                "direction_bias": result["direction_bias"],
+                "typical_magnitude_pct": result["typical_magnitude_pct"],
+                "typical_duration_days": result["typical_duration_days"],
+                "sample_size": result["sample_size"], "summary": result["summary"],
+                "confidence_real": confidence_bucket(usable_precedents),
+                "model": f"{found.served_by} / {synthesised.served_by}",
+                "latency_ms": found.latency_ms + synthesised.latency_ms,
+            }
+        except Exception:
+            log.exception("event_precedent_research_failed", event_name=name)
+            return None
+
+    async def _event_precedent_job(self) -> None:
+        """
+        Every few hours: for calendar events coming up within the lookahead
+        window, make sure there is cached precedent research for this exact
+        occurrence (scheduler.runner._research_precedent), then refresh the
+        small in-process cache analysis.event_precedent.current_brief()
+        reads from — crypto_engine.process() runs on every tick and is
+        synchronous, so the DB read has to have already happened.
+
+        Genuinely rare: most runs find every candidate event already
+        researched (or find none in the lookahead window at all) and do
+        nothing but refresh the cache.
+        """
+        if not settings.event_precedent_enabled:
+            return
+        from collectors.llm_client import chain_for
+        if not chain_for("event_precedent"):
+            return
+        from analysis.event_calendar import EVENTS_2026, calendar_context, upcoming
+        now = datetime.now(UTC).replace(tzinfo=None)
+        lookahead = settings.event_precedent_lookahead_days
+
+        # EVENTS_2026 entries carry an exact timestamp, so they key cleanly
+        # by name + date. calendar_context()'s recurring structural items
+        # (rebalancing, expiry, the yearly list) do not carry a machine
+        # date — only calendar_context() itself knows when they are near —
+        # so they are keyed by name + year instead: still a fresh row each
+        # time the item's date rolls around, at the coarser granularity
+        # calendar_context() already operates at. Only level >= 3 items are
+        # considered; the weekly/intraday ones (funding settlement, weekend
+        # liquidity, the US market open) are too frequent for "precedent"
+        # research to mean anything and would defeat "genuinely rare".
+        candidates: dict[str, tuple[str, datetime, int]] = {}
+        for ev in upcoming(now, days=lookahead, events=EVENTS_2026):
+            level = {"fomc": 5, "cpi": 4, "nfp": 4}.get(ev.kind, 3)
+            candidates[f"{ev.kind}:{ev.at.date().isoformat()}"] = (ev.name, ev.at, level)
+        for item in calendar_context(now):
+            if item.level >= 3:
+                key = f"{item.name}:{now.year}"
+                candidates.setdefault(key, (item.name, now, item.level))
+        if not candidates:
+            return
+        try:
+            async with AsyncSessionFactory() as session:
+                repo = Repository(session)
+                existing = {}
+                for key in candidates:
+                    row = await repo.get_event_precedent(key)
+                    if row is not None:
+                        existing[key] = row
+            missing = {k: v for k, v in candidates.items() if k not in existing}
+            symbols = list(await self.crypto_store.get_symbols())
+            for key, (name, at, level) in missing.items():
+                built = await self._research_precedent(name, at, level, symbols)
+                if built is None:
+                    continue
+                async with AsyncSessionFactory() as session:
+                    await Repository(session).save_event_precedent(event_key=key, **built)
+                async with AsyncSessionFactory() as session:
+                    row = await Repository(session).get_event_precedent(key)
+                if row is not None:
+                    existing[key] = row
+
+            from analysis.event_precedent import brief_from_row, set_active_briefs
+            set_active_briefs({key: brief_from_row(row, lookahead)
+                               for key, row in existing.items()})
+            log.info("event_precedent_job_done", candidates=len(candidates),
+                     researched=len(missing), active=len(existing))
+        except Exception:
+            log.exception("event_precedent_job_failed")
+
     async def _news_context(self, symbol: str) -> tuple[str, int]:
         """(news paragraph for a reviewer, id of the briefing in it). Never raises."""
         from collectors.market_briefing import context_block
@@ -2156,6 +2321,19 @@ class AppRunner:
             max_instances=1,
             next_run_time=datetime.now(UTC) + timedelta(minutes=5),
         )
+        # Genuinely rare — see the job's own docstring. Not latency-
+        # sensitive at all, so a few hours between runs is more than
+        # enough; the no-op case (nothing in the lookahead window, or
+        # everything already researched) is the common one.
+        if settings.event_precedent_enabled:
+            self.scheduler.add_job(
+                self._event_precedent_job,
+                "interval",
+                hours=4,
+                id="event_precedent",
+                max_instances=1,
+                next_run_time=datetime.now(UTC) + timedelta(minutes=10),
+            )
         if settings.event_monitor_enabled:
             # Self-scheduling: each run books the next one (adaptive timing).
             self._schedule_monitor(1)

@@ -99,6 +99,34 @@ class CryptoEngine:
                              reason=item.name, level=item.level, penalty=penalty,
                              confidence=sig.confidence)
 
+            # Event-precedent brief (28 Sep, off by default): advisory
+            # context for an upcoming calendar event, built from real
+            # historical precedent and OUR OWN measured market data — see
+            # analysis/event_precedent.py. Bounded exactly like
+            # calendar_caution above (same penalty-bucket scale, softens
+            # only), plus it can mark this signal eligible for a longer
+            # paper-trade hold ceiling, applied later at open time in
+            # analysis.paper_cycle. Never raises confidence, never lowers
+            # the entry bar the line below still enforces.
+            if getattr(settings, "event_precedent_enabled", False):
+                from analysis.event_precedent import (
+                    allows_extended_hold,
+                    confidence_penalty,
+                    current_brief,
+                    is_usable,
+                )
+                brief = current_brief(datetime.now(UTC).replace(tzinfo=None))
+                if brief is not None and is_usable(
+                        brief, settings.event_precedent_min_sample_size):
+                    penalty = confidence_penalty(brief["level"])
+                    sig.confidence = max(0.50, round(sig.confidence - penalty, 4))
+                    log.info("crypto_signal_event_precedent", symbol=sig.symbol,
+                             event_name=brief["event_name"], sample_size=brief["sample_size"],
+                             penalty=penalty, confidence=sig.confidence)
+                    if (settings.event_precedent_extended_hold_enabled
+                            and allows_extended_hold(brief, sig.direction)):
+                        sig.precedent_extended_hold = True
+
             if sig.confidence < settings.crypto_min_confidence:
                 log.debug("crypto_signal_below_threshold", symbol=sig.symbol, confidence=sig.confidence)
                 pipeline.no_setup("setup found, confidence below the minimum", sig.signal_type)

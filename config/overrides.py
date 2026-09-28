@@ -139,6 +139,25 @@ FIELDS: tuple[Field, ...] = (
           "Month-end/quarter-end rebalancing, options and futures expiry, thin weekend "
           "liquidity — a small confidence penalty, never a pause. Separate from the FOMC/"
           "CPI/NFP pause above."),
+    Field("event_precedent_enabled", "protect", "Precedent-based event context",
+          "Off by default. When on, an upcoming calendar event gets real historical "
+          "precedent (same category, same US administration) looked up, measured against "
+          "our own price history, and used only to soften confidence a little (same scale "
+          "as the row above) or extend a hold-time ceiling. Never a prediction, never lowers "
+          "the entry bar."),
+    Field("event_precedent_lookahead_days", "protect", "Precedent research: lookahead (days)",
+          "How far ahead an event has to be before it gets researched.",
+          kind="int", lo=1, hi=30),
+    Field("event_precedent_min_sample_size", "protect", "Precedent: min sample size",
+          "A brief only counts once at least this many real historical occurrences had "
+          "measured market data behind them.", kind="int", lo=1, hi=10),
+    Field("event_precedent_extended_hold_enabled", "protect", "Precedent: extended hold",
+          "When a usable precedent brief is active and a signal already clears the normal "
+          "confidence bar, allow a longer paper-trade hold ceiling than usual. Stop-loss and "
+          "sizing are never touched. Has no effect unless the row above is also on."),
+    Field("event_precedent_extended_hold_minutes", "protect",
+          "Precedent: extended hold ceiling (minutes)",
+          "4320 = 3 days.", kind="int", lo=60, hi=20160),
     # Protections
     Field("protections_enabled", "protect", "Protections",
           "Master switch for everything in this group."),

@@ -186,7 +186,8 @@ def should_open(
     return True, "ok"
 
 
-def _hold_minutes(signal: CryptoSignal, cfg: CycleConfig) -> float:
+def _hold_minutes(signal: CryptoSignal, cfg: CycleConfig,
+                  ceiling_minutes: float | None = None) -> float:
     """
     How long to give this setup, from the signal's own expected duration.
 
@@ -196,7 +197,14 @@ def _hold_minutes(signal: CryptoSignal, cfg: CycleConfig) -> float:
     -0.067%, having paid fees to learn nothing. Half again the expected time
     leaves room to be slow without waiting on a setup that has clearly failed,
     and the configured maximum is still the ceiling.
+
+    `ceiling_minutes` overrides `cfg.max_hold_minutes` as that ceiling — the
+    event-precedent brief's extended hold (settings.
+    event_precedent_extended_hold_minutes), when the caller decided this
+    trade qualifies. None (the ordinary case) leaves the normal ceiling
+    exactly as it was.
     """
+    ceiling = cfg.max_hold_minutes if ceiling_minutes is None else ceiling_minutes
     tf = (signal.timeframe or "").strip().lower()
     minutes = None
     try:
@@ -207,8 +215,8 @@ def _hold_minutes(signal: CryptoSignal, cfg: CycleConfig) -> float:
     except ValueError:
         minutes = None
     if not minutes or minutes <= 0:
-        return cfg.max_hold_minutes
-    return min(max(minutes, 15.0), cfg.max_hold_minutes)
+        return ceiling
+    return min(max(minutes, 15.0), ceiling)
 
 
 def open_from_signal(
@@ -219,6 +227,7 @@ def open_from_signal(
     usdt_inr: float,
     atr_pct: float | None = None,
     protect=None,
+    extended_hold_minutes: float | None = None,
 ) -> Position | None:
     """
     Build a position from a signal, or None if it fails the viability gate.
@@ -226,6 +235,12 @@ def open_from_signal(
     `protect` (analysis.protections.ProtectionConfig) adds two gates: a stop
     closer than 1.5x the round-trip cost is refused, and leverage is capped
     so liquidation sits at least 3x the stop distance away.
+
+    `extended_hold_minutes`: the caller's decision (scheduler.runner, from
+    signal.precedent_extended_hold and the event-precedent settings) to use
+    a longer hold-time ceiling for this one trade. None leaves
+    cfg.max_hold_minutes exactly as it was — stop-loss and sizing above are
+    never affected by it either way.
     """
     margin = cfg.margin_for_signal(state.wallet, signal.confidence,
                                    committed_margin(state.positions))
@@ -292,7 +307,7 @@ def open_from_signal(
         signal_type=signal.signal_type,
         timeframe=signal.timeframe,
         confidence=signal.confidence,
-        expires_at=now + timedelta(minutes=_hold_minutes(signal, cfg)),
+        expires_at=now + timedelta(minutes=_hold_minutes(signal, cfg, extended_hold_minutes)),
         usdt_inr=usdt_inr,
         lot_step=spec.lot_step,
         slippage=cfg.slippage,

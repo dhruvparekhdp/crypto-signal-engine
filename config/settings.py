@@ -277,6 +277,38 @@ class Settings(BaseSettings):
     llm_chain_research: str = (
         "anthropic:claude-opus-5-5, anthropic:claude-opus-5, gemini:gemini-3.1-pro-preview")
 
+    # Precedent-based event context (28 Sep) — NOT a price-direction
+    # forecaster; the owner was told plainly no detector stack here can
+    # promise that, and agreed. For an upcoming calendar event, a web-search
+    # model looks up real historical precedent (same category, same US
+    # administration), OUR OWN Binance Parquet lake measures what actually
+    # happened around those precedent dates, and a second AI call
+    # characterises the pattern grounded in those real numbers. Advisory
+    # only: clamped through the exact same penalty-bucket scale as
+    # calendar_caution above (see analysis/event_precedent.py), never
+    # raises confidence, never lowers the entry bar. Genuinely rare — a
+    # handful of AI calls a year, cached per event occurrence. Off by
+    # default, shadow-first like every other AI-touching feature here.
+    event_precedent_enabled: bool = False
+    # How far ahead an event has to be before the job researches it.
+    event_precedent_lookahead_days: int = 7
+    # A brief may only touch anything live once at least this many
+    # precedent occurrences had real measured market data behind them — one
+    # data point is an anecdote, not a precedent.
+    event_precedent_min_sample_size: int = 2
+    # The "take longer time trades" half of the ask: when a usable brief is
+    # active and a signal already clears the normal confidence bar on its
+    # own, the paper engine may use this hold-time ceiling instead of
+    # paper_max_hold_minutes for that one trade. Stop-loss and position
+    # sizing are never touched — only the hold-time ceiling changes. Off
+    # by default even when event_precedent_enabled is on, so turning the
+    # research pipeline on does not by itself change trading behaviour.
+    event_precedent_extended_hold_enabled: bool = False
+    event_precedent_extended_hold_minutes: int = 4320   # 3 days
+    llm_chain_event_precedent: str = (
+        "groq:openai/gpt-oss-120b+search, groq:openai/gpt-oss-20b+search, "
+        "openrouter:qwen/qwen3-32b:online")
+
     # Market Data & External APIs
     twelvedata_api_key: str | None = None
     twelvedata_symbols: str = "XAU/USD,XAG/USD,WTI/USD"

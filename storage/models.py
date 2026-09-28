@@ -512,6 +512,56 @@ class MoveAttribution(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_now_utc, index=True)
 
 
+class EventPrecedent(Base):
+    """
+    Advisory, precedent-based context for one upcoming calendar event —
+    NOT a price prediction. See analysis/event_precedent.py for the full
+    design. One row per event OCCURRENCE: `event_key` is the event's name
+    plus its date, so a recurring event (e.g. "fiscal year starts") is not
+    re-researched on every run while its date is still ahead, but does get
+    a fresh row the next time its date rolls around.
+
+    Built by scheduler.runner._event_precedent_job: a web-search AI call
+    for real historical precedent (matched on category and US
+    administration), then real numbers measured from the Binance Parquet
+    lake for those precedent dates, then a second AI call to characterise
+    the pattern grounded in those measured numbers — never the AI's own
+    memory of what "usually happens".
+
+    Only ever softens confidence (by a capped amount, same penalty-bucket
+    scale as calendar_caution, keyed by `level`) or extends a paper trade's
+    hold-time ceiling — see analysis.crypto_engine.process and
+    analysis.paper_cycle.open_from_signal. Never raises confidence, never
+    lowers the entry bar.
+    """
+
+    __tablename__ = "event_precedents"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    event_key: Mapped[str] = mapped_column(String, unique=True, index=True)
+    event_name: Mapped[str] = mapped_column(String, default="")
+    event_at: Mapped[datetime] = mapped_column(DateTime, index=True)
+    # The triggering calendar item's own 1-5 level (analysis.event_calendar),
+    # captured at research time — what confidence_penalty() is keyed by.
+    level: Mapped[int] = mapped_column(Integer, default=3)
+    precedents: Mapped[str] = mapped_column(Text, default="[]")      # JSON list
+    measurements: Mapped[str] = mapped_column(Text, default="{}")    # JSON
+    direction_bias: Mapped[str] = mapped_column(String, default="mixed")
+    typical_magnitude_pct: Mapped[float] = mapped_column(Float, default=0.0)
+    typical_duration_days: Mapped[float] = mapped_column(Float, default=0.0)
+    # How many precedent occurrences actually had measured market data
+    # behind them — computed by the job, never taken from the model's own
+    # count. Gates whether the brief may touch anything live (>= 2 default).
+    sample_size: Mapped[int] = mapped_column(Integer, default=0)
+    # The most cautious confidence_this_is_real among the precedents used —
+    # "low" means the brief is inert (see analysis.event_precedent.is_usable).
+    confidence_real: Mapped[str] = mapped_column(String, default="low")
+    summary: Mapped[str] = mapped_column(Text, default="")
+    model: Mapped[str] = mapped_column(String, default="")
+    latency_ms: Mapped[int] = mapped_column(Integer, default=0)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=_now_utc, index=True)
+
+
 class HistoryEvent(Base):
     """
     One large past move found in the Binance lake, with what could be seen

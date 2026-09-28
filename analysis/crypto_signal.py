@@ -34,6 +34,12 @@ class CryptoSignal:
     # settings.mirror_review_enabled is on). Never shown alone in the UI —
     # always paired with direction, e.g. "Primary (Long)" / "Mirror (Short)".
     candidate_role: str = "primary"
+    # Set by analysis.crypto_engine.process() when a usable event-precedent
+    # brief (analysis/event_precedent.py) is active and, if it has a real
+    # directional lean, this signal's direction agrees with it. Read once,
+    # at paper-trade open time, to decide whether to use the extended
+    # hold-time ceiling instead of the normal one — never anything else.
+    precedent_extended_hold: bool = False
 
 
 def compute_crypto_stake(edge_pct: float, confidence: float) -> float:

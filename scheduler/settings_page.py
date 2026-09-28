@@ -44,7 +44,13 @@ async def _recent_activity(session_factory) -> dict:
     """
     import asyncio
 
-    from storage.models import MarketBriefing, MoveAttribution, NewsSentiment, SignalReview
+    from storage.models import (
+        EventPrecedent,
+        MarketBriefing,
+        MoveAttribution,
+        NewsSentiment,
+        SignalReview,
+    )
     jobs = {
         "pre_trade": (SignalReview, SignalReview.created_at, SignalReview.model,
                      "pre", SignalReview.phase),
@@ -57,6 +63,8 @@ async def _recent_activity(session_factory) -> dict:
                         None, None),
         "news_scoring": (NewsSentiment, NewsSentiment.received_at, NewsSentiment.model,
                          None, None),
+        "event_precedent": (EventPrecedent, EventPrecedent.created_at, EventPrecedent.model,
+                            None, None),
     }
     results = await asyncio.gather(
         *(_served_by(session_factory, role, *spec) for role, spec in jobs.items()),
@@ -107,7 +115,7 @@ def settings_api(runner):
         db = await _settings_db_read(AsyncSessionFactory)
         stored, activity = db["stored"], db["activity"]
         roles = ("pre_trade", "position_review", "post_trade", "briefing", "attribution",
-                 "news_scoring", "history")
+                 "news_scoring", "history", "event_precedent")
         models = {r: [f"{p}:{m}" for p, m in chain_for(r)] for r in roles}
         live_sources = sorted(k for k, v in (getattr(runner, "collector_enabled", {}) or {}).items()
                               if v)
@@ -184,6 +192,21 @@ def _calendar_caution_row(now) -> dict | None:
         return None
     penalty = {5: 0.08, 4: 0.06, 3: 0.03}.get(item.level, 0.01)
     return {"name": item.name, "level": item.level, "when": item.when, "penalty": penalty}
+
+
+def _event_precedent_row(now) -> dict | None:
+    """The active precedent brief, if any is both current and usable —
+    reads the scheduler job's in-process cache, never the database, so this
+    stays as cheap as the rest of /api/pipeline."""
+    from analysis.event_precedent import confidence_penalty, current_brief, is_usable
+    from config.settings import settings
+    brief = current_brief(now)
+    if brief is None or not is_usable(brief, settings.event_precedent_min_sample_size):
+        return None
+    return {"name": brief["event_name"], "sample_size": brief["sample_size"],
+           "direction_bias": brief["direction_bias"], "summary": brief["summary"],
+           "penalty": confidence_penalty(brief["level"]),
+           "extended_hold": settings.event_precedent_extended_hold_enabled}
 
 
 async def _pipeline_db_read() -> tuple:
@@ -265,6 +288,8 @@ def pipeline_api(runner):
                          if blackout is not None else None),
             "calendar_caution": (_calendar_caution_row(now.replace(tzinfo=None))
                                  if settings.calendar_caution_enabled else None),
+            "event_precedent": (_event_precedent_row(now.replace(tzinfo=None))
+                                if settings.event_precedent_enabled else None),
             "book_full_with": full.symbol.upper() if full is not None else None,
             "open_positions": len(open_rows),
         }
@@ -543,6 +568,12 @@ async function funnel(){
     info+='<div class="row inset"><div><div class="l">Institutional-flow window</div><div class="h">'
       +esc(c.name)+' ('+esc(c.when)+')<br>Confidence trimmed by '+(c.penalty*100).toFixed(0)
       +'% on new signals — never a pause.</div></div><div></div></div>'; }
+  if(g.event_precedent){ const p=g.event_precedent;
+    info+='<div class="row inset"><div><div class="l">Precedent brief: '+esc(p.name)+'</div><div class="h">'
+      +esc(p.summary||'')+'<br>'+p.sample_size+' historical occurrence(s) measured · bias: '
+      +esc(p.direction_bias)+' · confidence trimmed by '+(p.penalty*100).toFixed(0)+'%'
+      +(p.extended_hold?' · aligned trades may hold longer than usual':'')
+      +' — never a pause, never lowers the entry bar.</div></div><div></div></div>'; }
   if(g.book_full_with) stop.push('Book full: premium trade open in '+esc(g.book_full_with)+'.');
   const stale=(d.feeds||[]).filter(f=>f.candle_age_s==null||f.candle_age_s>300);
   if(stale.length) stop.push('No fresh price for '+stale.map(f=>esc(f.symbol)).join(', ')+' (over 5 min old).');

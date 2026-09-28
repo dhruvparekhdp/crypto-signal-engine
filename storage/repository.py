@@ -831,6 +831,38 @@ class Repository:
             select(MoveAttribution).order_by(MoveAttribution.created_at.desc()).limit(limit))
         return list(res.scalars().all())
 
+    async def get_event_precedent(self, event_key: str):
+        from storage.models import EventPrecedent
+        res = await self.session.execute(
+            select(EventPrecedent).where(EventPrecedent.event_key == event_key))
+        return res.scalar_one_or_none()
+
+    async def recent_event_precedents(self, limit: int = 50) -> list:
+        from storage.models import EventPrecedent
+        res = await self.session.execute(
+            select(EventPrecedent).order_by(EventPrecedent.event_at.desc()).limit(limit))
+        return list(res.scalars().all())
+
+    async def save_event_precedent(self, **kw) -> int:
+        import json
+
+        from storage.models import EventPrecedent
+        row = EventPrecedent(
+            event_key=kw["event_key"], event_name=kw.get("event_name", ""),
+            event_at=kw["event_at"], level=int(kw.get("level", 3) or 3),
+            precedents=json.dumps(kw.get("precedents", [])),
+            measurements=json.dumps(kw.get("measurements", {})),
+            direction_bias=kw.get("direction_bias", "mixed"),
+            typical_magnitude_pct=float(kw.get("typical_magnitude_pct", 0.0) or 0.0),
+            typical_duration_days=float(kw.get("typical_duration_days", 0.0) or 0.0),
+            sample_size=int(kw.get("sample_size", 0) or 0),
+            confidence_real=kw.get("confidence_real", "low"),
+            summary=kw.get("summary", ""), model=kw.get("model", ""),
+            latency_ms=int(kw.get("latency_ms", 0) or 0), created_at=_now_utc())
+        self.session.add(row)
+        await self.session.commit()
+        return row.id
+
     async def recent_served_by(self, table, at_col, model_col, phase=None,
                                phase_col=None, n: int = 20) -> dict:
         """
