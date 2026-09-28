@@ -56,6 +56,14 @@ class Settings(BaseSettings):
     # standing: the reviewer gets a real say without a unilateral veto, and
     # the confidence threshold stays the single place a signal is refused.
     groq_reject_penalty: float = 0.15
+    # A CAUTION verdict used to cost nothing unless the model's own
+    # confidence_delta happened to be negative — a diplomatic "proceed with
+    # caution" could pass through at delta 0.0. This guarantees a minimum
+    # cost: applied as delta = min(delta, -groq_caution_min_penalty), so it
+    # only ever makes the penalty MORE negative, never overrides a larger
+    # self-assessed one. Deliberately smaller than groq_reject_penalty —
+    # CAUTION is not REJECT.
+    groq_caution_min_penalty: float = 0.01
 
     # Two jobs, two models. The pre-trade check holds a signal up while it
     # runs, so it buys speed. The post-mortem runs after the money is already
@@ -165,6 +173,18 @@ class Settings(BaseSettings):
     profit_lock_at_pct: float = 0.5
     profit_lock_to_pct: float = 0.35
     profit_lock_trail_pct: float = 0.15
+    # Default OFF — this changes real paper-trading risk behaviour, unlike
+    # everything else in this block. Review finding (28 Sep): a flat
+    # profit_lock_at_pct usually arms BEFORE the runner-trail's own
+    # activation (activate_at_r, in R), so profit-lock tightens the stop
+    # first every time and the trail's "ride to 2R" branch never fires —
+    # almost every winner gets walked down to a small locked gain instead
+    # of being allowed to run. On: profit-lock only arms once price has
+    # passed max(profit_lock_at_pct, 1.3x the trail's own activation
+    # distance for that position), so the trail gets first look. Off
+    # (default): behaviour is byte-for-byte identical to before this
+    # setting existed. See Position.apply_profit_lock.
+    profit_lock_defers_to_trail_enabled: bool = False
     # Deal scanner (analysis/deal_scanner.py): signals on the same tick are
     # taken best first; an open trade whose target pays >= premium_roe_pct on
     # margin fills the book until it closes.

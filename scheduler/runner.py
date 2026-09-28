@@ -58,6 +58,7 @@ from collectors.binance_ws import BinanceWSCollector
 from collectors.coindcx import CoinDCXCollector
 from collectors.coingecko import CoinGeckoCollector
 from collectors.cryptopanic import CryptoPanicCollector
+from collectors.llm_client import should_call_again
 from collectors.macro_sentinel import GroqSentinel
 from collectors.sentiment_feeds import adjust_confidence, fetch_fear_greed
 from collectors.twelvedata_ws import TwelveDataWSCollector
@@ -379,6 +380,7 @@ class AppRunner:
         )
         pos.trail_r_override = getattr(row, "trail_r_override", None)
         pos.locked_roe = getattr(row, "locked_roe", None)
+        pos.stop_moved_by_profit_lock = getattr(row, "stop_moved_by_profit_lock", False)
         # Size was fixed at fill time, so it is restored rather than re-derived:
         # recomputing it from the current wallet would silently resize the
         # position every time the process restarts.
@@ -719,6 +721,11 @@ class AppRunner:
             sig, state, model=scfg.groq_model, book=states, news=news)
         if verdict == "REJECT":
             delta = -abs(settings.groq_reject_penalty)
+        elif verdict == "CAUTION":
+            # Guaranteed minimum cost: takes whichever is more negative, the
+            # model's own delta or this floor, so a CAUTION that came back
+            # with delta 0.0 still costs something.
+            delta = min(delta, -settings.groq_caution_min_penalty)
         if ai_summary:
             sig.ai_review = ai_summary
         try:
@@ -884,10 +891,12 @@ class AppRunner:
                         continue
 
                     local_conf = local_confidence_estimate(cand.signal, st)
-                    moved = (abs(local_conf - cand.last_reviewed_confidence)
-                            >= settings.mirror_review_confidence_delta_threshold)
-
-                    if not (ep >= settings.mirror_review_min_elapsed_pct and moved):
+                    if not should_call_again(
+                            elapsed_ratio=ep,
+                            min_elapsed_ratio=settings.mirror_review_min_elapsed_pct,
+                            current_value=local_conf,
+                            last_value=cand.last_reviewed_confidence,
+                            min_delta=settings.mirror_review_confidence_delta_threshold):
                         continue
                     if cand.review_round >= settings.mirror_review_max_rounds:
                         # Budget exhausted — keep tracking silently until it
@@ -1324,6 +1333,8 @@ class AppRunner:
                         )
                         if verdict == "REJECT":
                             delta = -abs(settings.groq_reject_penalty)
+                        elif verdict == "CAUTION":
+                            delta = min(delta, -settings.groq_caution_min_penalty)
                         if ai_summary:
                             sig.ai_review = ai_summary
                         try:
@@ -2029,7 +2040,8 @@ class AppRunner:
         return ProfitLock(enabled=settings.profit_lock_enabled,
                           at_pct=settings.profit_lock_at_pct,
                           to_pct=settings.profit_lock_to_pct,
-                          trail_pct=settings.profit_lock_trail_pct)
+                          trail_pct=settings.profit_lock_trail_pct,
+                          defers_to_trail=settings.profit_lock_defers_to_trail_enabled)
 
     def _protection_config(self):
         from analysis.protections import ProtectionConfig

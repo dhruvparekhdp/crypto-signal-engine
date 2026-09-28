@@ -712,6 +712,10 @@ class PaperPosition(Base):
     # from this row every tick, so the reviewer's trail never took effect.
     trail_r_override: Mapped[float | None] = mapped_column(Float, nullable=True)
     locked_roe: Mapped[float | None] = mapped_column(Float, nullable=True)
+    # Set once apply_profit_lock has ratcheted this position's stop — read
+    # back on restore so a redeploy mid-trade does not lose it and mislabel
+    # a protected win as an ordinary stop. See ExitReason.PROFIT_LOCK.
+    stop_moved_by_profit_lock: Mapped[bool] = mapped_column(Boolean, default=False)
 
     entry_fee: Mapped[float] = mapped_column(Float)
     signal_type: Mapped[str] = mapped_column(String, default="")

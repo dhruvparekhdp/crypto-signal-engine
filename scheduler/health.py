@@ -1614,7 +1614,7 @@ section h2{color:var(--accent-soft)}
 
 .pt-tag{display:inline-block;font-size:9.5px;font-weight:700;padding:2px 7px;
   border-radius:99px;letter-spacing:.03em;white-space:nowrap;text-transform:lowercase}
-.pt-tag.target,.pt-tag.trail{background:rgba(74,222,128,.14);color:var(--pos)}
+.pt-tag.target,.pt-tag.trail,.pt-tag.profit_lock{background:rgba(74,222,128,.14);color:var(--pos)}
 .pt-tag.stop,.pt-tag.liquidated{background:rgba(248,113,113,.14);color:var(--neg)}
 .pt-tag.expired{background:var(--sunk);color:var(--muted);border:1px solid var(--line)}
 
@@ -5604,9 +5604,76 @@ async def _api_debug_perf(runner, request: web.Request) -> web.Response:
         denied = check_bearer_auth(request, _SETTINGS.api_auth_token)
         if denied is not None:
             return denied
+    from collectors.llm_client import calls_today
     body = report()
     body["cache_age_s"] = cache.stats()
+    # Per-role AI call count since the last UTC midnight — every ask_json()
+    # call counts here regardless of which feature made it, so a runaway
+    # role (mirror review re-reviewing far more than expected, say) is
+    # visible immediately instead of only showing up in a provider bill.
+    body["ai_calls_today"] = calls_today()
     return web.json_response(body)
+
+
+async def _api_debug_null_test(runner, request: web.Request) -> web.Response:
+    """
+    GET /api/debug/null-test — do the live signals beat random entries over
+    the same bars? The same question scripts/null_test.py answers from a
+    terminal, runnable from the browser so it does not need SSH to the box.
+
+    Reuses analysis.null_test.compare_against_random (the actual comparison)
+    and scripts.null_test.load (the same crypto_signal_log/crypto_snapshots
+    query the script uses) rather than keeping a second copy of either.
+    Query params mirror the script's flags: days, trials, stop, target, hold.
+    Read-only — writes nothing.
+    """
+    from analysis.instruments import spec_for
+    from analysis.null_test import compare_against_random, render
+    from scripts.null_test import load as _load_null_test_inputs
+
+    def _num(name: str, default: float, kind):
+        raw = request.query.get(name)
+        if raw is None or not raw.strip():
+            return default
+        try:
+            return kind(raw)
+        except (TypeError, ValueError):
+            return default
+
+    # Bounded rather than left open: a trials count in the thousands or a
+    # days window past what crypto_snapshots retains would just make this
+    # request take minutes for no better an answer than the defaults give.
+    days = max(1, min(365, _num("days", 120, int)))
+    trials = max(10, min(2000, _num("trials", 200, int)))
+    stop_pct = _num("stop", 0.92, float)
+    target_pct = _num("target", 1.84, float)
+    hold_hours = _num("hold", 24.0, float)
+
+    entries, paths = await _load_null_test_inputs(days)
+    if not entries:
+        return web.json_response(
+            {"ok": False, "reason": f"no signals in the last {days} days"})
+    if not paths:
+        return web.json_response(
+            {"ok": False, "reason": "no usable price history for that window"})
+
+    cost_pct = spec_for(next(iter(paths))).round_trip_pct * 100
+    result = compare_against_random(entries, paths, stop_pct, target_pct,
+                                    hold_hours, cost_pct, trials=trials)
+    return web.json_response({
+        "ok": True,
+        "params": {"days": days, "trials": trials, "stop_pct": stop_pct,
+                  "target_pct": target_pct, "hold_hours": hold_hours,
+                  "cost_pct": round(cost_pct, 4)},
+        "entries": result.entries,
+        "real_total_pct": round(result.real_total, 2),
+        "random_mean_pct": round(result.random_mean, 2),
+        "random_sd_pct": round(result.random_sd, 2),
+        "edge_pct": round(result.edge, 2),
+        "p_value": round(result.p_value, 4),
+        "verdict": result.verdict,
+        "summary": render(result, stop_pct, target_pct, hold_hours),
+    })
 
 
 async def make_app(runner) -> web.Application:
@@ -5685,6 +5752,7 @@ async def make_app(runner) -> web.Application:
     app.router.add_get("/api/commodities", _bind(_api_commodities))
     app.router.add_get("/api/debug/binance", _bind(_api_binance_probe))
     app.router.add_get("/api/debug/perf", _bind(_api_debug_perf))
+    app.router.add_get("/api/debug/null-test", _bind(_api_debug_null_test))
     from scheduler.v2_pages import register as _register_v2_pages
     _register_v2_pages(app, runner)
     return app

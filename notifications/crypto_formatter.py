@@ -76,6 +76,7 @@ def format_crypto_signal(sig: CryptoSignal) -> str:
 _REASON_TEXT = {
     "target": "hit target",
     "stop": "stopped out",
+    "profit_lock": "profit locked in",
     "liquidation": "LIQUIDATED",
     "expiry": "time expired",
     "cycle_end": "cycle closed",

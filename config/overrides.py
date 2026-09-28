@@ -81,8 +81,14 @@ FIELDS: tuple[Field, ...] = (
     Field("news_sentiment_enabled", "data", "News sentiment",
           "Scored headlines feed the sentiment score and news pauses."),
     # Signals
-    Field("crypto_min_confidence", "signals", "Minimum confidence",
-          "Signals below this are dropped.", kind="float", lo=0.5, hi=0.95),
+    Field("crypto_min_confidence", "signals",
+          "Minimum confidence to generate a signal at all",
+          "Signals below this are dropped before they ever fire or get shown anywhere. "
+          "A fired signal can still fail the separate, usually higher, paper-trading floor "
+          "under Paper trading below ('Minimum confidence to open a paper trade') — that is a "
+          "second, stricter check, not a duplicate of this one. Lowering this alone does not "
+          "make more signals turn into trades if that other floor is still above it.",
+          kind="float", lo=0.5, hi=0.95),
     Field("high_conviction_only", "signals", "High conviction only",
           "Stricter scalp and conviction gates.", live=False),
     Field("crypto_htf_filter_enabled", "signals", "1h/15m trend filter",
@@ -125,6 +131,13 @@ FIELDS: tuple[Field, ...] = (
     Field("profit_lock_trail_pct", "exits", "Then trail behind the best price (%)",
           "0.15% is your SOL trade. Tighter = more small wins, more early exits.",
           kind="float", lo=0.05, hi=3),
+    Field("profit_lock_defers_to_trail_enabled", "exits",
+          "Profit lock: let the trail go first",
+          "Off (default): profit lock usually arms before the trailing stop does, so it "
+          "tightens the stop first on almost every winner and the trail's own 'ride to 2R' "
+          "never gets a turn. On: profit lock waits until price is past the trail's own "
+          "activation distance (with margin) before it touches the stop at all. Changes real "
+          "trading behaviour — leave off unless you mean to let winners run further."),
     Field("premium_fills_book", "exits", "A premium deal fills the book",
           "When an open trade's target pays at least the % below on margin, open nothing "
           "else until it closes. Signals on the same tick are always taken best first."),

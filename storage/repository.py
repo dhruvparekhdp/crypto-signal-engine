@@ -481,6 +481,7 @@ class Repository:
             trail_active=pos.trail_active,
             trail_r_override=pos.trail_r_override,
             locked_roe=pos.locked_roe,
+            stop_moved_by_profit_lock=pos.stop_moved_by_profit_lock,
             entry_fee=pos.entry_fee,
             signal_type=pos.signal_type,
             timeframe=pos.timeframe,
@@ -500,6 +501,7 @@ class Repository:
         row.trail_active = pos.trail_active
         row.trail_r_override = pos.trail_r_override
         row.locked_roe = pos.locked_roe
+        row.stop_moved_by_profit_lock = pos.stop_moved_by_profit_lock
         await self.session.commit()
 
     async def delete_position(self, row_id: int) -> None:

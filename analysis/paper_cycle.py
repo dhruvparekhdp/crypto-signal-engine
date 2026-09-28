@@ -345,7 +345,7 @@ def resolve_at_price(
         pos.apply_ladder(price, cfg.ladder, fees)
         pos.update_trail(price, price, cfg.trailing, fees)
         if lock is not None:
-            pos.apply_profit_lock(price, lock, fees, cfg.slippage)
+            pos.apply_profit_lock(price, lock, fees, cfg.slippage, trail=cfg.trailing)
         return None
     reason, fill = hit
     return close_position(pos, fill, reason, now, fees_for(pos.symbol), wallet)

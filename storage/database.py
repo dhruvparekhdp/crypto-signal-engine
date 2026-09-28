@@ -205,6 +205,12 @@ _COLUMN_MIGRATIONS: list[str] = [
         "ALTER TABLE paper_positions ADD COLUMN IF NOT EXISTS locked_roe FLOAT",
         "ALTER TABLE paper_positions ADD COLUMN trail_r_override FLOAT",
         "ALTER TABLE paper_positions ADD COLUMN locked_roe FLOAT",
+        # Profit-lock/trail exit-reason fix (28 Sep): distinguishes a stop
+        # exit whose stop was tightened by profit-lock from a real original
+        # stop. See ExitReason.PROFIT_LOCK.
+        "ALTER TABLE paper_positions ADD COLUMN IF NOT EXISTS "
+        "stop_moved_by_profit_lock BOOLEAN DEFAULT FALSE",
+        "ALTER TABLE paper_positions ADD COLUMN stop_moved_by_profit_lock BOOLEAN DEFAULT FALSE",
         "ALTER TABLE signal_reviews ADD COLUMN IF NOT EXISTS briefing_id INTEGER DEFAULT 0",
         "ALTER TABLE signal_reviews ADD COLUMN IF NOT EXISTS news_context TEXT DEFAULT ''",
         "ALTER TABLE signal_reviews ADD COLUMN IF NOT EXISTS sentiment_score FLOAT DEFAULT 0.0",

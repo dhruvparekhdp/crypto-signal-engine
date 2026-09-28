@@ -384,6 +384,7 @@ th{color:var(--muted2);font-weight:600}
 </header>
 <main>
 <section class="card raise" id="auth"></section>
+<section class="card raise" id="confwarn" style="display:none"></section>
 <section class="card raise" id="why"><h2>🔎 Why no trades?</h2><div id="funnel">
 <p class="small muted">Loading…</p></div></section>
 <section class="card raise"><h2>Data in use right now</h2>
@@ -446,14 +447,19 @@ function control(f){const v=f.value, id='f-'+f.key;
     +'" onchange="mark(\''+f.key+'\',this.value)">'
     +(utcHour?'<div class="small muted" style="text-align:right;margin-top:4px">UTC · <b id="ist-'+f.key+'">'
       +istHour(v)+' IST</b></div>':'');}
-function mark(k,v){changes[k]=v;document.getElementById('r-'+k).classList.add('dirty');bar();}
-function markP(k,v){paperChanges[k]=v;document.getElementById('p-'+k).classList.add('dirty');bar();}
+function mark(k,v){changes[k]=v;document.getElementById('r-'+k).classList.add('dirty');bar();checkConfidenceFloors();}
+function markP(k,v){paperChanges[k]=v;document.getElementById('p-'+k).classList.add('dirty');bar();checkConfidenceFloors();}
 function bar(){const n=Object.keys(changes).length+Object.keys(paperChanges).length;
   document.getElementById('dirty').textContent=n?n+' unsaved change'+(n>1?'s':''):'No changes';
   document.getElementById('save').disabled=!n;}
 const PAPER_FIELDS=[['enabled','Paper trading on','bool'],['starting_wallet','Starting wallet (₹)','num'],
   ['target_wallet','Target wallet (₹)','num'],['leverage','Base leverage','num'],
-  ['max_leverage','Max leverage','num'],['min_confidence','Min confidence','num'],
+  ['max_leverage','Max leverage','num'],
+  ['min_confidence','Minimum confidence to open a paper trade','num',
+    'Must also have cleared the separate "Minimum confidence to generate a signal at all" floor '
+    +'under Signals above; that one is checked first and this one is checked separately, usually '
+    +'the stricter of the two. A signal that fires but never trades is almost always this floor, '
+    +'not the one above.'],
   ['max_concurrent','Max open trades','num'],['max_hold_minutes','Max hold (min)','num'],
   ['sizing_floor_pct','Position size at weak confidence (0-1 of wallet)','num'],
   ['sizing_ceiling_pct','Position size at strong confidence (0-1 of wallet)','num'],
@@ -492,11 +498,37 @@ function renderModels(d){
     +'recent calls, not just what is configured — the way to see whether a fallback is firing.</p>';
 }
 function renderPaper(){
-  document.getElementById('paper').innerHTML=PAPER_FIELDS.map(([k,l,t])=>'<div class="row inset" id="p-'+k+'"><div>'
-    +'<div class="l">'+l+'</div></div><div>'+(t==='bool'
+  document.getElementById('paper').innerHTML=PAPER_FIELDS.map(([k,l,t,h])=>'<div class="row inset" id="p-'+k+'"><div>'
+    +'<div class="l">'+l+'</div>'+(h?'<div class="h">'+h+'</div>':'')+'</div><div>'+(t==='bool'
       ?'<label class="sw"><input type="checkbox"'+(PAPER[k]?' checked':'')+' onchange="markP(\''+k+'\',this.checked)"><span></span></label>'
-      :'<input class="num inset" type="number" step="any" value="'+esc(PAPER[k])+'" onchange="markP(\''+k+'\',Number(this.value))">')
+      :'<input class="num inset" id="pf-'+k+'" type="number" step="any" value="'+esc(PAPER[k])
+        +'" onchange="markP(\''+k+'\',Number(this.value))">')
     +'</div></div>').join('');
+}
+function checkConfidenceFloors(){
+  // The recurring "signal shows 67-68% confidence, no trade opened"
+  // confusion always traced back to the same thing: two differently-named
+  // "confidence" floors in two different sections, and the paper one is
+  // usually the stricter one. If the paper floor is set BELOW the signal
+  // floor it can never actually bind — nothing under the signal floor ever
+  // becomes a signal — so that combination is always a mistake, and this
+  // catches it the moment either field changes, saved or not.
+  const el=document.getElementById('confwarn'); if(!el) return;
+  const cEl=document.getElementById('f-crypto_min_confidence');
+  const pEl=document.getElementById('pf-min_confidence');
+  const cryptoMin=cEl?Number(cEl.value):null;
+  const paperMin=pEl?Number(pEl.value):null;
+  if(cryptoMin==null||paperMin==null||!isFinite(cryptoMin)||!isFinite(paperMin)||paperMin>=cryptoMin){
+    el.style.display='none'; el.innerHTML=''; return;
+  }
+  el.style.display='block';
+  el.innerHTML='<h2>⚠️ Dead configuration</h2><div class="row inset"><div>'
+    +'<div class="l" style="color:var(--accent)">Paper trade floor is below the signal floor</div>'
+    +'<div class="h">Paper trading\'s "Minimum confidence to open a paper trade" ('
+    +(paperMin*100).toFixed(0)+'%) is set below Signals\' "Minimum confidence to generate a signal '
+    +'at all" ('+(cryptoMin*100).toFixed(0)+'%). Nothing below the signal floor ever becomes a '
+    +'signal, so this paper floor can never actually bind — raise it to at least '
+    +(cryptoMin*100).toFixed(0)+'% or it has no effect.</div></div><div></div></div>';
 }
 let LAST_SOURCES_ON=[];
 async function load(){
@@ -506,6 +538,7 @@ async function load(){
   renderModels(d);
   PAPER=await fetch('/api/paper/config').then(r=>r.json()).catch(()=>({}));
   renderPaper();
+  checkConfidenceFloors();
 }
 async function save(){
   // Patch what the server now has straight into local state and re-render
@@ -532,14 +565,18 @@ async function save(){
     msg.push('paper settings saved');
     Object.assign(PAPER,paperChanges);}
   changes={};paperChanges={};bar();
-  renderGroups();renderPaper();
+  renderGroups();renderPaper();checkConfidenceFloors();
   toast(msg.join(', '));}
 async function perf(){
   const r=await fetch('/api/debug/perf',{headers:H()}); if(!r.ok) return;
   const d=await r.json(); const el=document.getElementById('perf');
   const blame=Object.entries(d.stall_blame_ms||{}).slice(0,6);
+  const calls=Object.entries(d.ai_calls_today||{});
   el.innerHTML='<div class="row inset"><div><div class="l">Database round trip</div><div class="h">'
     +d.db_ping_ms.p50+' ms typical, '+d.db_ping_ms.max+' ms worst, '+d.db_ping_ms.failures+' failures</div></div><div></div></div>'
+    +'<div class="row inset"><div><div class="l">AI calls today, by role</div><div class="h">'
+    +(calls.length?calls.map(([role,n])=>esc(role)+': '+n).join(' · '):'None yet today')
+    +'</div></div><div></div></div>'
     +'<div class="row inset"><div><div class="l">What froze the server</div><div class="h">'
     +(blame.length?blame.map(([j,ms])=>esc(j)+' '+(ms/1000).toFixed(1)+'s').join(' · '):'No freezes over 0.3 s yet')
     +'</div></div><div></div></div>'

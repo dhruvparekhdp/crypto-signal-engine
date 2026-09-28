@@ -39,6 +39,7 @@ from __future__ import annotations
 import json
 import time
 from dataclasses import dataclass, field
+from datetime import UTC, date, datetime
 from typing import Any
 
 import httpx
@@ -53,6 +54,67 @@ log = structlog.get_logger()
 # its own request shape and its own SDK, which is the fourth.
 OPENAI_SHAPED = "openai"
 ANTHROPIC_SHAPED = "anthropic"
+
+
+def should_call_again(elapsed_ratio: float, min_elapsed_ratio: float,
+                      current_value: float, last_value: float,
+                      min_delta: float) -> bool:
+    """
+    Is it worth spending another AI call on this?
+
+    Extracted from mirror-review's re-review gate (analysis/mirror_review.py
+    / scheduler/runner.py::_mirror_review_job), which fires a second AI call
+    on a tracked candidate only once enough of its own budgeted window has
+    passed AND a cheap local re-score has moved enough to be worth a second
+    opinion. Both conditions are cheap and local — no AI, no I/O — which is
+    what makes them worth checking before ever reaching for a call.
+
+    `elapsed_ratio` / `min_elapsed_ratio` is deliberately a ratio rather than
+    a fixed "seconds since last call": mirror-review's own window is a
+    fraction of the SIGNAL's timeframe (20 minutes of a 1h signal, say), not
+    a role-wide cadence, and different roles measure "enough time" in
+    different units. A caller that wants a plain wall-clock gap passes
+    elapsed_seconds / min_gap_seconds for both ratio arguments instead — the
+    function only ever compares a ratio to 1.0, so either usage is exact.
+
+    Pure and side-effect free, same as its callers demand: this only answers
+    "should", never itself places the call.
+    """
+    moved = abs(current_value - last_value) >= min_delta
+    return elapsed_ratio >= min_elapsed_ratio and moved
+
+
+# Per-role daily AI call counter. Rolls over at UTC midnight rather than a
+# rolling 24h window — the same simplification event_monitor's own daily cap
+# (settings.event_monitor_daily_cap, scheduler/runner.py's _monitor_calls)
+# already makes, so this follows an existing pattern instead of inventing a
+# second one. In-process only: a redeploy resets it, which is fine for a
+# "is something runaway right now" dashboard number, not a billing ledger.
+_calls_today: dict[str, int] = {}
+_calls_today_date: date | None = None
+
+
+def _record_call(role: str) -> None:
+    global _calls_today_date
+    today = datetime.now(UTC).date()
+    if _calls_today_date != today:
+        _calls_today.clear()
+        _calls_today_date = today
+    _calls_today[role] = _calls_today.get(role, 0) + 1
+
+
+def calls_today() -> dict[str, int]:
+    """{role: count} of ask_json() calls made since the last UTC midnight.
+
+    Every AI call in this codebase funnels through ask_json(), so this covers
+    every role automatically — surfaced on /api/debug/perf so a runaway
+    feature (a role suddenly calling far more than the others) is visible
+    without reading logs.
+    """
+    today = datetime.now(UTC).date()
+    if _calls_today_date != today:
+        return {}
+    return dict(_calls_today)
 
 
 @dataclass(frozen=True)
@@ -278,6 +340,7 @@ async def ask_json(role: str, system: str, user: str, *, max_tokens: int = 512,
     started = time.perf_counter()
     attempts: list[str] = []
     failures: list[str] = []
+    _record_call(role)
 
     for provider_name, model in chain_for(role):
         provider = PROVIDERS[provider_name]

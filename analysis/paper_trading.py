@@ -37,6 +37,14 @@ class Side(str, Enum):
 class ExitReason(str, Enum):
     TARGET = "target"
     STOP = "stop"
+    # A stop-triggered exit whose stop price had been tightened by
+    # apply_profit_lock rather than the untouched original stop. Booked
+    # through the exact same stop_price check as an ordinary STOP (nothing
+    # about when the trade closes changes) — only the label differs, so a
+    # small protected win stops being counted as a loss on the dashboard's
+    # exit-reason breakdown. See close_position() and
+    # Position.stop_moved_by_profit_lock.
+    PROFIT_LOCK = "profit_lock"
     LIQUIDATION = "liquidation"
     EXPIRY = "expiry"
     CYCLE_END = "cycle_end"
@@ -328,6 +336,12 @@ class Position:
     trail_active: bool = False
     # Highest rung the ladder has locked, so it can never step back down.
     locked_roe: float | None = None
+    # Set once apply_profit_lock has ratcheted this position's stop at least
+    # once. One-way: even if the trail moves the stop further afterward, the
+    # exit still isn't the ORIGINAL stop the trade was risked against, so it
+    # keeps being labelled profit_lock rather than stop. Read by
+    # close_position() to pick the exit reason.
+    stop_moved_by_profit_lock: bool = False
 
     # Set once the position has been scaled in or out, because after that the
     # size no longer follows from margin x leverage / entry.
@@ -442,7 +456,7 @@ class Position:
         return True
 
     def apply_profit_lock(self, price: float, lock: ProfitLock, fees: FeeModel,
-                          slippage=None) -> bool:
+                          slippage=None, trail: TrailingStop | None = None) -> bool:
         """
         Tighten the stop by the profit-lock rule. Returns True if it moved.
 
@@ -452,13 +466,32 @@ class Position:
             and stop slippage: a "locked" win must still be a win after costs
           * sits closer to the price than the trail distance: a lock must not
             stop the trade out on the tick it arms
+
+        `trail`, only consulted when `lock.defers_to_trail` is on (default
+        off — see ProfitLock.defers_to_trail): a flat `at_pct` arms before
+        the runner-trail's own activation (activate_at_r, in R) most of the
+        time, since 0.5% of price is usually less than activate_at_r * 1R.
+        Profit-lock then always tightens the stop first and the trail's own
+        "let it run to 2R" activation branch never gets to fire — nearly
+        every winner gets walked down to a small locked gain instead. With
+        the flag on, the lock arms only once price has passed whichever is
+        further out: its own at_pct, or 1.3x the trail's activation
+        distance for THIS position, so the trail gets first look at a
+        winning trade before profit-lock ever touches its stop.
         """
         if not lock.enabled or price <= 0 or self.entry_price <= 0:
             return False
         s = self.sign
         self.peak_price = s * max(s * (self.peak_price or price), s * price)
         best = self.peak_price
-        if s * (best - self.entry_price) / self.entry_price * 100 < lock.at_pct:
+        at_pct = lock.at_pct
+        if lock.defers_to_trail and trail is not None and trail.enabled:
+            risk = self.risk_per_unit
+            if risk > 0 and self.entry_price > 0:
+                trail_activation_pct = (trail.activate_at_r * risk
+                                        / self.entry_price * 100)
+                at_pct = max(at_pct, 1.3 * trail_activation_pct)
+        if s * (best - self.entry_price) / self.entry_price * 100 < at_pct:
             return False
         cost = fees.round_trip_pct()
         if slippage is not None:
@@ -466,14 +499,15 @@ class Position:
         lock_to = max(lock.to_pct / 100, cost)
         new = self.entry_price * (1 + s * lock_to)
         if lock.trail_pct:
-            trail = best * (1 - s * lock.trail_pct / 100)
-            new = max(new, trail) if s > 0 else min(new, trail)
+            trail_level = best * (1 - s * lock.trail_pct / 100)
+            new = max(new, trail_level) if s > 0 else min(new, trail_level)
         ceiling = price * (1 - s * (lock.trail_pct or 0.05) / 100)
         new = min(new, ceiling) if s > 0 else max(new, ceiling)
         if s * (new - self.stop_price) <= 0:
             return False
         self.stop_price = new
         self.trail_active = True
+        self.stop_moved_by_profit_lock = True
         return True
 
     def update_trail(self, high: float, low: float, trail: TrailingStop,
@@ -798,6 +832,16 @@ def close_position(
     so settlement returns margin + net P&L. A liquidation is floored at losing
     the entire margin — you cannot lose more than you posted.
     """
+    # A stop-triggered exit whose stop had been tightened by profit-lock is a
+    # different thing from the trade hitting its ORIGINAL stop — the first is
+    # usually a small protected win, the second a real loss — so it gets its
+    # own reason here rather than being booked as an ordinary "stop". Nothing
+    # about resolve_candle's decision (which level, at what price) changes;
+    # only this label does. Fees below still use `reason is ExitReason.TARGET`
+    # for the maker/taker split, which PROFIT_LOCK correctly fails same as
+    # STOP always did.
+    if reason is ExitReason.STOP and pos.stop_moved_by_profit_lock:
+        reason = ExitReason.PROFIT_LOCK
     gross = pos.gross_pnl(exit_price)
     exit_fee = fees.exit_fee(exit_price * pos.quantity, maker=reason is ExitReason.TARGET)
     hours_held = max(0.0, (closed_at - pos.opened_at).total_seconds() / 3600.0)
@@ -906,6 +950,10 @@ class ProfitLock:
     at_pct: float = 0.5
     to_pct: float = 0.35
     trail_pct: float = 0.15
+    # Off by default — changes real trading behaviour, so it stays inert
+    # until deliberately turned on (settings.profit_lock_defers_to_trail_enabled).
+    # See Position.apply_profit_lock for what this changes.
+    defers_to_trail: bool = False
 
 
 @dataclass(frozen=True)
