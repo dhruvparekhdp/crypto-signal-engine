@@ -822,12 +822,18 @@ async def _paper_db_snapshot() -> dict:
     async def fetch():
         async with AsyncSessionFactory() as session:
             repo = Repository(session)
-            cycle = await repo.get_running_cycle()
+            # running_cycles() already holds get_running_cycle()'s answer:
+            # both order by id, one just also returns any duplicates. Asking
+            # twice paid this database's ~1.4-1.5s network floor a second
+            # time on every /api/paper request that had a cycle running,
+            # which was most of it (production's p50/p95 for this endpoint
+            # tracked almost exactly N x that floor for N round trips).
+            running = await repo.running_cycles()
+            cycle = running[-1] if running else None
             if cycle is None:
                 return {"cycle": None, "recent": await repo.get_recent_cycles(limit=5)}
             rows = await repo.get_open_positions(cycle.id)
             trades = await repo.get_cycle_trades(cycle.id, limit=200)
-            running = await repo.running_cycles()
             return {"cycle": cycle, "rows": rows, "trades": trades, "running": running}
 
     from scheduler import cache

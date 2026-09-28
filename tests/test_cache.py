@@ -157,5 +157,84 @@ class TestPaperNeverCachesMarkPrice(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(mark2, 55000.0)
 
 
+class TestPaperSnapshotRoundTrips(unittest.IsolatedAsyncioTestCase):
+    """
+    /api/paper's cache (_paper_db_snapshot) rarely gets a hit in production —
+    the dashboard polls every 30s, well past the 4s TTL, so almost every
+    request pays for a fresh fetch(). That fetch used to run get_running_cycle
+    AND running_cycles as two separate round trips even though the second
+    already contains the first's answer (both order by id; the highest-id
+    running cycle is the same row). Each round trip on this database's
+    connection pays a measured ~1.4-1.5s network floor, and production's
+    /api/paper p50/p95 tracked closely with N x that floor for N round trips
+    — so one redundant query was a third of the endpoint's own latency.
+    """
+
+    async def asyncSetUp(self):
+        import os
+        import tempfile
+
+        from scheduler import cache
+        cache.clear()
+        self._db = tempfile.mktemp(suffix=".db")
+        os.environ["DATABASE_URL"] = f"sqlite+aiosqlite:///{self._db}"
+        import storage.database as database
+        await database.init_db()
+        self._database = database
+
+    async def asyncTearDown(self):
+        await self._database.engine.dispose()
+
+    async def test_a_running_cycle_costs_one_fewer_round_trip(self):
+        from datetime import UTC, datetime
+
+        from storage.database import AsyncSessionFactory
+        from storage.models import PaperCycle
+
+        now = datetime.now(UTC).replace(tzinfo=None)
+        async with AsyncSessionFactory() as s:
+            s.add(PaperCycle(
+                started_at=now, starting_wallet=1000.0, target_wallet=20000.0,
+                wallet=1000.0, peak_wallet=1000.0, leverage=10.0,
+                stop_pct_of_margin=0.2, reward_risk=2.0, min_confidence=0.7,
+                status="running"))
+            await s.commit()
+
+        from scheduler.health import _paper_db_snapshot
+
+        s = AsyncSessionFactory()
+        calls = 0
+        real_execute = s.execute
+
+        async def counting_execute(*a, **kw):
+            nonlocal calls
+            calls += 1
+            return await real_execute(*a, **kw)
+
+        s.execute = counting_execute
+
+        class _ReusedSession:
+            """Hands _paper_db_snapshot the same, already-instrumented
+            session on `async with AsyncSessionFactory() as session:`,
+            without closing it at the end of that block — the test closes
+            it once, itself, when done counting."""
+
+            async def __aenter__(self):
+                return s
+
+            async def __aexit__(self, *exc):
+                return False
+
+        from unittest.mock import patch
+
+        with patch("storage.database.AsyncSessionFactory", lambda: _ReusedSession()):
+            snap = await _paper_db_snapshot()
+        await s.close()
+        self.assertIsNotNone(snap["cycle"])
+        # get_open_positions + get_cycle_trades + running_cycles == 3, not 4:
+        # no separate get_running_cycle() round trip.
+        self.assertEqual(calls, 3, f"expected 3 round trips, made {calls}")
+
+
 if __name__ == "__main__":
     unittest.main()

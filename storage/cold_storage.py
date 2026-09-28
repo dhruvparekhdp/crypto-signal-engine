@@ -169,7 +169,14 @@ async def offload(session, root: Path, days: int = 365, batch: int = 5000,
                 select(func.count()).select_from(model).where(col < cutoff))).scalar() or 0
             moved[table] = int(n)
             continue
-        ceiling = (await session.execute(select(func.max(model.id)))).scalar()
+        # Scoped to the cutoff: most of these 15 tables have nothing past a
+        # year old on any given day, and this one query says so directly
+        # (None) instead of paying a second round trip for a batch select
+        # that comes back empty. Each round trip pays this database's
+        # ~1.4-1.5s network floor, so for a mostly-empty run that is most of
+        # db_cleanup's measured ~29s.
+        ceiling = (await session.execute(
+            select(func.max(model.id)).where(col < cutoff))).scalar()
         if ceiling is None:
             moved[table] = 0
             continue

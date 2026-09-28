@@ -28,6 +28,7 @@ belong to whoever is doing the analysis, not to storage.
 """
 from __future__ import annotations
 
+import asyncio
 import bisect
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
@@ -156,7 +157,13 @@ async def backfill_labels(session, window: timedelta | None = None) -> LabelRun:
         select(CryptoSnapshot).where(CryptoSnapshot.timestamp >= cutoff)
     )).scalars().all())
 
-    run = label_rows(rows, now)
+    # label_rows() is pure Python over plain scalars (no I/O, no ORM lazy
+    # loading, no session access) — safe to run off the event loop. At ~10
+    # symbols x 2-minute cadence x 3 days that is ~20k rows re-scanned every
+    # 15 minutes, and doing that inline was the single biggest event-loop
+    # stall in production (/api/debug/perf's stall_blame_ms, Sep 2026): every
+    # concurrent request froze for as long as this job's pure-Python loop ran.
+    run = await asyncio.to_thread(label_rows, rows, now)
     if run.labelled:
         await session.commit()
 
@@ -190,7 +197,7 @@ async def backfill_all(session, days: int = 120, chunk_days: int = 7) -> LabelRu
         )).scalars().all())
 
         if rows:
-            run = label_rows(rows, now)
+            run = await asyncio.to_thread(label_rows, rows, now)
             if run.labelled:
                 await session.commit()
             total = LabelRun(

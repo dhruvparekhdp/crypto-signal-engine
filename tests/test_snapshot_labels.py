@@ -245,6 +245,57 @@ class TestRetention(unittest.TestCase):
         asyncio.run(run())
 
 
+class TestArchiveRoundTrips(unittest.TestCase):
+    """
+    archive_old_crypto_data() runs first in db_cleanup, before cold storage's
+    offload(). Neither snapshot table has anything old enough to archive on
+    most days, and the old code still paid a max(id), an INSERT...SELECT and
+    a DELETE for each — three round trips producing zero rows. Scoping the
+    max(id) query to the cutoff answers "anything here?" in that one query
+    and skips the other two when the answer is no.
+    """
+
+    def test_a_table_with_only_recent_rows_costs_one_round_trip(self):
+        import asyncio
+        import os
+        import tempfile
+
+        db = tempfile.mktemp(suffix=".db")
+        os.environ["DATABASE_URL"] = f"sqlite+aiosqlite:///{db}"
+
+        async def run():
+            import storage.database as database
+            from storage.database import AsyncSessionFactory, init_db
+            from storage.repository import Repository
+
+            await init_db()
+            now = datetime.now(UTC).replace(tzinfo=None)
+            async with AsyncSessionFactory() as s:
+                from storage.models import CryptoSnapshot
+                s.add(CryptoSnapshot(symbol="rt-archive-test", price=100.0,
+                                     timestamp=now - timedelta(days=10)))
+                await s.commit()
+
+            async with AsyncSessionFactory() as s:
+                calls = 0
+                real_execute = s.execute
+
+                async def counting_execute(*a, **kw):
+                    nonlocal calls
+                    calls += 1
+                    return await real_execute(*a, **kw)
+
+                s.execute = counting_execute
+                moved = await Repository(s).archive_old_crypto_data(snapshot_days=365)
+            self.assertEqual(moved["crypto_snapshots"], 0)
+            # One max(id) query per table (crypto + commodity snapshots);
+            # neither has anything old, so neither reaches INSERT/DELETE.
+            self.assertEqual(calls, 2, f"expected one round trip per table, made {calls}")
+            await database.engine.dispose()
+
+        asyncio.run(run())
+
+
 class TestTheRoutinePassIsBounded(unittest.TestCase):
     """
     The job runs every fifteen minutes. At 120 days of retention the table
@@ -274,6 +325,51 @@ class TestTheRoutinePassIsBounded(unittest.TestCase):
         runner = (Path(__file__).resolve().parent.parent / "scheduler/runner.py").read_text()
         self.assertIn("await backfill_labels(session)", runner)
         self.assertNotIn("backfill_labels(session, lookback_days", runner)
+
+
+class TestTheRoutinePassDoesNotBlockTheEventLoop(unittest.TestCase):
+    """
+    label_rows() is pure Python over ~20k rows every 15 minutes (10 symbols x
+    2-minute cadence x the 3-day routine window) — no I/O, nothing async about
+    it. Run inline on the event loop, that CPU-bound loop stalls every other
+    concurrent request for as long as it runs; production's /api/debug/perf
+    named `snapshot_labels` the single biggest stall contributor (Sep 2026).
+    It must run in a thread, the same way v2_shadow's per-symbol CPU work
+    already does (scheduler/runner.py's `_v2_shadow_step_job`).
+    """
+
+    def test_backfill_labels_runs_label_rows_off_the_loop(self):
+        import asyncio
+        from unittest.mock import AsyncMock, patch
+
+        from analysis.snapshot_labeler import backfill_labels
+
+        class _FakeScalars:
+            def all(self):
+                return []
+
+        class _FakeResult:
+            def scalars(self):
+                return _FakeScalars()
+
+        session = AsyncMock()
+        session.execute.return_value = _FakeResult()
+
+        with patch("analysis.snapshot_labeler.asyncio.to_thread",
+                   new=AsyncMock(wraps=asyncio.to_thread)) as mocked:
+            asyncio.run(backfill_labels(session))
+        self.assertTrue(mocked.called, "label_rows must run via asyncio.to_thread, "
+                                        "not inline on the event loop")
+        from analysis.snapshot_labeler import label_rows
+        self.assertIs(mocked.call_args.args[0], label_rows)
+
+    def test_backfill_all_also_keeps_label_rows_off_the_loop(self):
+        import inspect
+
+        from analysis.snapshot_labeler import backfill_all
+
+        source = inspect.getsource(backfill_all)
+        self.assertIn("await asyncio.to_thread(label_rows", source)
 
 
 class TestTheFullPassAfterARestore(unittest.TestCase):

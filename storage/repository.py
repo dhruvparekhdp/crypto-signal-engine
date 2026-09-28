@@ -90,7 +90,15 @@ class Repository:
             (CryptoSnapshot, CryptoSnapshotArchive, "crypto_snapshots"),
             (CommoditySnapshot, CommoditySnapshotArchive, "commodity_snapshots"),
         ):
-            ceiling = (await self.session.execute(select(func.max(live.id)))).scalar()
+            # Scoped to the cutoff, not the whole table: on most days neither
+            # table has anything old enough to move, and this one query says
+            # so directly (None), skipping the INSERT/DELETE round trips that
+            # would otherwise run and touch zero rows. Each round trip pays
+            # this database's ~1.4-1.5s network floor, so two skipped queries
+            # a table is real wall-clock, not just tidiness (db_cleanup was
+            # measured at ~29s for what turned out to be mostly empty work).
+            ceiling = (await self.session.execute(
+                select(func.max(live.id)).where(live.timestamp < cutoff))).scalar()
             if ceiling is None:
                 continue
             which = (live.timestamp < cutoff, live.id <= ceiling)

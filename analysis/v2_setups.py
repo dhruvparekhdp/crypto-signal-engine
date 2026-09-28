@@ -145,12 +145,6 @@ def choppiness(df: pd.DataFrame, n: int = 14) -> pd.Series:
             / np.log10(n)).reset_index(drop=True)
 
 
-def _in_session(ts: pd.Timestamp, cfg: V2Config) -> bool:
-    if cfg.weekdays_only and ts.weekday() >= 5:
-        return False
-    return cfg.session_start_utc <= ts.hour < cfg.session_end_utc
-
-
 def _passes_costs(side: str, entry: float, stop: float, target: float,
                   cfg: V2Config) -> bool:
     if entry <= 0 or any(np.isnan(x) for x in (stop, target)):
@@ -203,9 +197,26 @@ def generate(symbol: str, k5: pd.DataFrame, k15: pd.DataFrame, k4h: pd.DataFrame
     j4 = align(close5, k4h, 240) if st4 is not None else None
     db = daily_bias(k1d) if len(k1d) >= 21 else None
     jd = align(close5, k1d, 1440) if db is not None else None
+    # Plain numpy arrays, not the DataFrame/Series themselves: this feeds a
+    # 200k+ iteration Python loop below, and Series.iloc's per-call overhead
+    # (bounds/type checks) dominated the v2 backtest's wall clock at that
+    # scale — the September 2026 90-minute-timeout investigation measured it.
+    db_sma20 = db["sma20"].to_numpy() if db is not None else None
+    db_close = db["close"].to_numpy() if db is not None else None
     fz = funding_z(funding)
     jf = (np.searchsorted(fz["ts"].to_numpy(), close5, side="right") - 1
           if fz is not None else None)
+    fz_z = fz["z"].to_numpy() if fz is not None else None
+
+    # Session mask, vectorised once instead of building a pd.Timestamp and
+    # calling _in_session() on every one of the 200k+ loop iterations.
+    session_ok = None
+    if cfg.session_filter:
+        ts_idx = pd.DatetimeIndex(close5)
+        session_ok = (ts_idx.hour >= cfg.session_start_utc) & (ts_idx.hour < cfg.session_end_utc)
+        if cfg.weekdays_only:
+            session_ok = session_ok & (ts_idx.dayofweek < 5)
+        session_ok = np.asarray(session_ok)
 
     # Previous UTC day high/low, from the 5m bars themselves.
     day = ts5.dt.floor("D")
@@ -236,8 +247,7 @@ def generate(symbol: str, k5: pd.DataFrame, k15: pd.DataFrame, k4h: pd.DataFrame
         j = j15[i]
         if j < 30 or np.isnan(a15[j]) or np.isnan(a5[i]):
             continue
-        t = pd.Timestamp(close5[i])
-        if cfg.session_filter and not _in_session(t, cfg):
+        if session_ok is not None and not session_ok[i]:
             continue
         if blackout is not None and len(blackout[0]):
             w = np.searchsorted(blackout[0], close5[i], side="right") - 1
@@ -250,8 +260,8 @@ def generate(symbol: str, k5: pd.DataFrame, k15: pd.DataFrame, k4h: pd.DataFrame
 
         # Higher-timeframe bias.
         allow_long = allow_short = True
-        if db is not None and jd[i] >= 0 and not np.isnan(db["sma20"].iloc[jd[i]]):
-            below = db["close"].iloc[jd[i]] < db["sma20"].iloc[jd[i]]
+        if db is not None and jd[i] >= 0 and not np.isnan(db_sma20[jd[i]]):
+            below = db_close[jd[i]] < db_sma20[jd[i]]
             four = st4[j4[i]] if st4 is not None and j4[i] >= 0 else "range"
             if below and four == "down":
                 allow_long = False
@@ -261,7 +271,7 @@ def generate(symbol: str, k5: pd.DataFrame, k15: pd.DataFrame, k4h: pd.DataFrame
                 allow_long = allow_long and (four == "up" or (four == "range" and not below))
                 allow_short = allow_short and (four == "down" or (four == "range" and below))
         if fz is not None and jf[i] >= 0:
-            z = fz["z"].iloc[jf[i]]
+            z = fz_z[jf[i]]
             if not np.isnan(z):
                 if z >= cfg.funding_z_max:
                     allow_long = False
@@ -302,8 +312,11 @@ def generate(symbol: str, k5: pd.DataFrame, k15: pd.DataFrame, k4h: pd.DataFrame
                                        or (setup == "C" and not range_ok)):
                 return
             if _passes_costs(side, px, stop, target, cfg):
-                out.append(Candidate(t, symbol, setup, side, float(px), float(stop),
-                                     float(target), notes))
+                # Candidates are rare relative to loop iterations, so the
+                # pd.Timestamp() construction happens only here, not once
+                # per bar.
+                out.append(Candidate(pd.Timestamp(close5[i]), symbol, setup, side,
+                                     float(px), float(stop), float(target), notes))
 
         # A. trend pullback to the last higher low / lower high, or VWAP.
         if st15[j] == "up" and allow_long and bull_trigger and not np.isnan(hl15[j]):

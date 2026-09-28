@@ -103,5 +103,56 @@ class TestOffload(unittest.TestCase):
         asyncio.run(run())
 
 
+    def test_a_table_with_nothing_old_costs_one_round_trip_not_two(self):
+        """
+        Most of the 15 offloaded tables have nothing past a year old on any
+        given day. The old code always paid a max(id) round trip AND a batch
+        SELECT round trip for those tables — the batch select just came back
+        empty. Scoping the max(id) query to the cutoff answers "anything to
+        do here?" in that same single round trip, which is most of what made
+        db_cleanup ~29s in production (mostly empty work, each round trip
+        paying this database's network floor).
+        """
+        db = tempfile.mktemp(suffix=".db")
+        os.environ["DATABASE_URL"] = f"sqlite+aiosqlite:///{db}"
+
+        async def run():
+            import storage.database as database
+            from storage.cold_storage import offload
+            from storage.database import AsyncSessionFactory, init_db
+            from storage.models import CryptoSignalLog
+
+            await init_db()
+            now = datetime.now(UTC).replace(tzinfo=None)
+            async with AsyncSessionFactory() as s:
+                # Only recent rows: nothing here should ever be old enough
+                # to move under a 365-day cutoff.
+                s.add(CryptoSignalLog(
+                    symbol="rt-test", signal_type="x", direction="long",
+                    trigger_description="", confidence=0.5, current_price=1.0,
+                    edge_pct=0.0, stake_pct=0.0, timeframe="1h",
+                    timestamp=now - timedelta(days=10)))
+                await s.commit()
+
+            with tempfile.TemporaryDirectory() as d:
+                root = Path(d)
+                async with AsyncSessionFactory() as s:
+                    calls = 0
+                    real_execute = s.execute
+
+                    async def counting_execute(*a, **kw):
+                        nonlocal calls
+                        calls += 1
+                        return await real_execute(*a, **kw)
+
+                    s.execute = counting_execute
+                    moved = await offload(s, root, days=365, tables=["crypto_signal_log"])
+            self.assertEqual(moved["crypto_signal_log"], 0)
+            self.assertEqual(calls, 1, f"expected one round trip, made {calls}")
+            await database.engine.dispose()
+
+        asyncio.run(run())
+
+
 if __name__ == "__main__":
     unittest.main()
