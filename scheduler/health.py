@@ -1007,7 +1007,7 @@ async def _api_crypto_watchlist_add(runner, request: web.Request) -> web.Respons
     """POST /api/crypto/watchlist/add  body: {"symbol": "dogeusdt"}"""
     from scheduler.security import check_bearer_auth
     is_admin = await _verify_admin_session(request)
-    if not is_admin:
+    if not is_admin and _SETTINGS.api_auth_token:
         denied = check_bearer_auth(request, _SETTINGS.api_auth_token)
         if denied is not None:
             return denied
@@ -1025,7 +1025,7 @@ async def _api_crypto_watchlist_add(runner, request: web.Request) -> web.Respons
         listed = await is_listed(symbol)
         if listed is False:
             return web.Response(text=json.dumps({
-                "error": f"{symbol.upper()} is not a Binance spot USDT pair. "
+                "error": f"{symbol.upper()} is not a Binance spot USDT pair (for gold, use PAXGUSDT). "
                          "Search on the Watchlist page and add the exact pair."}),
                 content_type="application/json", status=400)
         await runner.add_crypto_symbol(symbol)
@@ -1170,7 +1170,7 @@ async def _api_crypto_watchlist_remove(runner, request: web.Request) -> web.Resp
     """POST /api/crypto/watchlist/remove  body: {"symbol": "dogeusdt"}"""
     from scheduler.security import check_bearer_auth
     is_admin = await _verify_admin_session(request)
-    if not is_admin:
+    if not is_admin and _SETTINGS.api_auth_token:
         denied = check_bearer_auth(request, _SETTINGS.api_auth_token)
         if denied is not None:
             return denied
@@ -3054,13 +3054,32 @@ async function addCryptoSymbol(){
   const inp=document.getElementById('cr-add-input');
   const sym=inp.value.trim().toLowerCase();
   if(!sym) return;
-  await apiFetch('/api/crypto/watchlist/add',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({symbol:sym})});
-  inp.value='';
-  refresh();
+  try {
+    const res = await apiFetch('/api/crypto/watchlist/add',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({symbol:sym})});
+    let body={}; try{ body=await res.json(); }catch(e){}
+    if(!res.ok){
+      alert(body.error || ('Could not add ' + sym.toUpperCase() + ': HTTP ' + res.status));
+      return;
+    }
+    inp.value='';
+    refresh();
+  } catch(err) {
+    alert('Failed to add ' + sym.toUpperCase() + ': ' + err.message);
+  }
 }
 async function removeCryptoSymbol(sym){
-  await apiFetch('/api/crypto/watchlist/remove',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({symbol:sym})});
-  refresh();
+  if(!confirm('Remove ' + sym.toUpperCase() + ' from watchlist?')) return;
+  try {
+    const res = await apiFetch('/api/crypto/watchlist/remove',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({symbol:sym})});
+    let body={}; try{ body=await res.json(); }catch(e){}
+    if(!res.ok){
+      alert(body.error || ('Could not remove ' + sym.toUpperCase() + ': HTTP ' + res.status));
+      return;
+    }
+    refresh();
+  } catch(err) {
+    alert('Failed to remove ' + sym.toUpperCase() + ': ' + err.message);
+  }
 }
 
 // ── MAIN ──────────────────────────────────────────────────────────────────────
@@ -3578,7 +3597,7 @@ async def _api_collector_toggle(runner, request: web.Request) -> web.Response:
     """POST /api/settings/toggle  body: {"collector": "coindcx", "enabled": true}"""
     from scheduler.security import check_bearer_auth
     is_admin = await _verify_admin_session(request)
-    if not is_admin:
+    if not is_admin and _SETTINGS.api_auth_token:
         denied = check_bearer_auth(request, _SETTINGS.api_auth_token)
         if denied is not None:
             return denied

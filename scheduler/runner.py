@@ -424,14 +424,50 @@ class AppRunner:
                 for row in rows:
                     pos = self._restore_position(row)
                     st = states.get(row.symbol)
-                    if st is None or st.current_price <= 0:
+                    current_price = st.current_price if (st and st.current_price > 0) else None
+                    if current_price is None and hasattr(self, "commodity_store"):
+                        # Fallback for commodities (e.g. xau/usd, gold)
+                        for cs in await self.commodity_store.get_all():
+                            if (cs.symbol.lower() == row.symbol.lower()
+                                    or cs.symbol.replace("/", "").lower() == row.symbol.lower()
+                                    or ("xau" in row.symbol.lower() and "xau" in cs.symbol.lower())):
+                                if cs.current_price > 0:
+                                    current_price = cs.current_price
+                                    break
+
+                    # If the position has timed out, force-close it even if price feed is missing
+                    if pos.is_expired(now):
+                        mark_price = current_price if (current_price and current_price > 0) else row.entry_price
+                        trade = resolve_at_price(pos, mark_price, now, cfg, wallet,
+                                                 lock=self._profit_lock())
+                        if trade is None:
+                            from analysis.paper_cycle import fees_for
+                            from analysis.paper_trading import ExitReason, close_position
+                            trade = close_position(pos, mark_price, ExitReason.EXPIRY, now, fees_for(pos.symbol), wallet)
+                        wallet = trade.wallet_after
+                        await repo.close_position_atomic(cycle.id, row.id, trade, wallet)
+                        events = [_event(
+                            pos, cycle.id, now, "closed", "exit", new=f"{trade.exit_price:.6g}",
+                            note=(f"{trade.reason.value} · net ₹{trade.net_pnl:+.2f} "
+                                  f"({trade.return_on_margin * 100:+.1f}% on margin) · "
+                                  f"fees ₹{trade.fees_paid:.2f}"))]
+                        await repo.add_trade_events(events)
+                        log.info("paper_trade_expired_closed", symbol=pos.symbol,
+                                 reason=trade.reason.value, net=round(trade.net_pnl, 2),
+                                 wallet=round(wallet, 2))
+                        if pcfg.alert_telegram:
+                            await self.notifier.send_text(
+                                format_paper_trade(trade, wallet), parse_mode=ParseMode.HTML)
+                        continue
+
+                    if current_price is None or current_price <= 0:
                         live_ids[len(live)] = row.id
                         live.append(pos)
                         continue
 
                     before = _trade_snapshot(pos)
                     self._tick_notes = []
-                    trade = resolve_at_price(pos, st.current_price, now, cfg, wallet,
+                    trade = resolve_at_price(pos, current_price, now, cfg, wallet,
                                              lock=self._profit_lock())
                     if trade is None:
                         # The position survived the tick's exits. A losing one
@@ -440,9 +476,10 @@ class AppRunner:
                         # can defer an exit that already fired — by the time a
                         # stop is reached the loss is no longer bounded, so
                         # this runs only on what resolve_at_price left alive.
-                        trade = await self._review_open_position(
-                            pos, st, cfg, now, wallet, repo)
-                    events = _trade_changes(before, pos, cycle.id, now, st.current_price)
+                        if st is not None:
+                            trade = await self._review_open_position(
+                                pos, st, cfg, now, wallet, repo)
+                    events = _trade_changes(before, pos, cycle.id, now, current_price)
                     events += [_event(pos, cycle.id, now, "ai", note=n) for n in self._tick_notes]
                     if trade is None:
                         await repo.sync_position(row.id, pos)
