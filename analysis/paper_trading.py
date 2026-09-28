@@ -670,6 +670,18 @@ class Position:
         """Net P&L if closed right now, including the exit fee not yet paid."""
         return self.gross_pnl(mark) - fees.exit_fee(mark * self.quantity)
 
+    def is_expired(self, now: datetime) -> bool:
+        """Check if position is past its expiry datetime, handling aware/naive timestamps."""
+        if self.expires_at is None:
+            return False
+        expiry = self.expires_at
+        cur = now
+        if expiry.tzinfo is not None and cur.tzinfo is None:
+            cur = cur.replace(tzinfo=expiry.tzinfo)
+        elif expiry.tzinfo is None and cur.tzinfo is not None:
+            expiry = expiry.replace(tzinfo=cur.tzinfo)
+        return cur >= expiry
+
 
 @dataclass
 class ClosedTrade:
@@ -1493,3 +1505,9 @@ class CycleConfig:
         # release_target cannot rescue this: it only takes effect ON
         # activation, so a threshold that is never reached stays never reached.
         return self.trailing.activate_at_r < self.reward_risk
+
+
+def fees_for(symbol: str) -> FeeModel:
+    """Convenience alias: delegates to analysis.paper_cycle.fees_for."""
+    from analysis.paper_cycle import fees_for as _fees_for
+    return _fees_for(symbol)

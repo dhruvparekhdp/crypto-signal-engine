@@ -436,7 +436,18 @@ class AppRunner:
                                     break
 
                     # If the position has timed out, force-close it even if price feed is missing
-                    if pos.is_expired(now):
+                    is_pos_expired = (
+                        pos.is_expired(now)
+                        if hasattr(pos, "is_expired")
+                        else (
+                            pos.expires_at is not None
+                            and (
+                                (now.replace(tzinfo=UTC) if now.tzinfo is None else now)
+                                >= (pos.expires_at.replace(tzinfo=UTC) if pos.expires_at.tzinfo is None else pos.expires_at)
+                            )
+                        )
+                    )
+                    if is_pos_expired:
                         mark_price = current_price if (current_price and current_price > 0) else row.entry_price
                         trade = resolve_at_price(pos, mark_price, now, cfg, wallet,
                                                  lock=self._profit_lock())
@@ -1137,7 +1148,8 @@ class AppRunner:
                 return None
         self._close_votes.pop(pos.symbol, None)
 
-        from analysis.paper_trading import ExitReason, close_position, fees_for
+        from analysis.paper_trading import ExitReason, close_position
+        from analysis.paper_cycle import fees_for
 
         log.info("position_closed_early", symbol=pos.symbol,
                  confidence=round(review.confidence, 3), factors=review.factors,
@@ -2612,13 +2624,13 @@ class AppRunner:
                 f"AI Sentinel: {'Active' if settings.groq_api_key else 'Disabled (no key)'}",
                 parse_mode=ParseMode.HTML,
             )
-        elif len(starts) in (3, 10, 30):
+        elif len(starts) in (3, 10, 30) and crashed is not None:
             # A restart loop used to send this message every ten minutes for
             # hours. Now repeats inside an hour are silent, and a loop is
-            # reported as the fault it is.
+            # reported as the fault it is only if it actually crashed.
             await self.notifier.send_text(
-                f"⚠️ Engine restarted {len(starts)} times in the last hour. "
-                "It is crashing: check <code>sudo journalctl -u crypto-engine -n 200</code> "
+                f"⚠️ Engine restarted {len(starts)} times in the last hour after crashing. "
+                "Check <code>sudo journalctl -u crypto-engine -n 200</code> "
                 "and <code>sudo dmesg | grep -i oom</code>.",
                 parse_mode=ParseMode.HTML,
             )

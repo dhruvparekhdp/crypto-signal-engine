@@ -1039,3 +1039,42 @@ class TestTrailingActivationSanity(unittest.TestCase):
 
     def test_disabled_trailing_reports_false(self):
         self.assertFalse(CycleConfig().trailing_can_activate())
+
+
+class TestPositionExpiry(unittest.TestCase):
+    def test_is_expired_handles_none_expiry(self):
+        from datetime import datetime, timezone
+        from analysis.paper_trading import Position, Side
+        pos = Position(
+            symbol="ethusdt", side=Side.LONG, entry_price=2000.0, margin=100.0,
+            leverage=10.0, stop_price=1900.0, target_price=2200.0, liq_price=1800.0,
+            opened_at=datetime.now(timezone.utc), entry_fee=1.0, expires_at=None,
+        )
+        self.assertFalse(pos.is_expired(datetime.now(timezone.utc)))
+
+    def test_is_expired_detects_expiry_and_normalizes_tz(self):
+        from datetime import datetime, timezone, timedelta
+        from analysis.paper_trading import Position, Side
+        now = datetime.now(timezone.utc)
+        pos = Position(
+            symbol="ethusdt", side=Side.LONG, entry_price=2000.0, margin=100.0,
+            leverage=10.0, stop_price=1900.0, target_price=2200.0, liq_price=1800.0,
+            opened_at=now - timedelta(hours=2), entry_fee=1.0,
+            expires_at=now - timedelta(minutes=1),
+        )
+        self.assertTrue(pos.is_expired(now))
+        # Test with naive datetime
+        naive_now = datetime.now()
+        self.assertTrue(pos.is_expired(naive_now))
+
+        # Not yet expired
+        pos.expires_at = now + timedelta(hours=1)
+        self.assertFalse(pos.is_expired(now))
+
+
+class TestPaperTradingFeesForExport(unittest.TestCase):
+    def test_fees_for_exported(self):
+        from analysis.paper_trading import fees_for
+        f = fees_for("ethusdt")
+        self.assertIsNotNone(f)
+        self.assertGreater(f.round_trip_pct(), 0)
