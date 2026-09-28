@@ -4,7 +4,15 @@ import unittest
 from datetime import datetime, timedelta
 
 from analysis.crypto_state import OHLCVCandle
-from analysis.price_action import candle_word, describe, levels, structure, swings
+from analysis.price_action import (
+    HIGHER_TIMEFRAMES,
+    candle_word,
+    describe,
+    levels,
+    pick_higher_timeframe,
+    structure,
+    swings,
+)
 
 
 def bars(points):
@@ -54,6 +62,30 @@ class PriceActionTest(unittest.TestCase):
 
     def test_describe_is_empty_without_history(self):
         self.assertEqual(describe([], [], 100.0), "")
+
+    def test_describe_labels_whichever_higher_timeframe_it_is_given(self):
+        """Not hard-wired to 15m: pass 1h and the output, the against-note
+        and the range line all honestly say 1h, not a leftover '15m'."""
+        text = describe(bars(UP), bars(UP), 107.0, is_long=False, higher_tf="1h")
+        self.assertIn("1h structure: up", text)
+        self.assertIn("against the 1h structure", text)
+        self.assertNotIn("15m", text)
+
+    def test_describe_still_defaults_to_15m_when_not_told_otherwise(self):
+        """Backward compatible: every existing caller that doesn't pass
+        higher_tf keeps behaving exactly as before."""
+        text = describe(bars(UP), bars(UP), 107.0, is_long=False)
+        self.assertIn("15m structure: up", text)
+
+    def test_pick_higher_timeframe_is_not_always_the_same_value(self):
+        """The whole point: repeated calls don't all land on 15m. Over many
+        draws from 3 options, seeing only one value would be a real
+        (astronomically unlikely, ~4e-53) coincidence, not evidence the
+        randomisation was quietly removed — but it is the only way this
+        test can fail, so a flake here means look again, not retry blindly."""
+        seen = {pick_higher_timeframe() for _ in range(100)}
+        self.assertTrue(seen.issubset(set(HIGHER_TIMEFRAMES)))
+        self.assertGreater(len(seen), 1)
 
 
 if __name__ == "__main__":

@@ -300,8 +300,10 @@ def _describe(pos, state, trend: float, now: datetime) -> str:
 def _chart(state, price: float, is_long: bool) -> str:
     """The candle picture, or nothing when the state carries no candles."""
     try:
-        from analysis.price_action import describe
-        text = describe(state.get_candles("5m"), state.get_candles("15m"), price, is_long)
+        from analysis.price_action import describe, pick_higher_timeframe
+        higher_tf = pick_higher_timeframe()
+        text = describe(state.get_candles("5m"), state.get_candles(higher_tf), price, is_long,
+                        higher_tf=higher_tf)
     except Exception:
         return ""
     return f"\n\nChart (read from the candles):\n{text}" if text else ""

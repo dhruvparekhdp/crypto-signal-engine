@@ -86,20 +86,39 @@ def candle_word(c) -> str:
     return ("big-" if body / rng > 0.7 else "") + side
 
 
-def describe(candles_5m, candles_15m, price: float, is_long: bool | None = None) -> str:
+# The higher-timeframe half of the read used to be hard-wired to 15m, every
+# call, forever. Nothing wrong with 15m itself, but a reviewer that is
+# always shown the exact same window ends up repeating the exact same
+# verdict against the exact same structure — the owner noticed the AI
+# review citing "15m structure" almost verbatim across unrelated signals.
+# Picking a different higher timeframe per call (still labelled honestly in
+# the output, never silently) gives the model a genuinely different read
+# each time instead of one fixed lens repeatedly disagreeing with whatever
+# fired. 5m stays fixed — it is the owner's own immediate-structure anchor,
+# named explicitly in this module's docstring, not the part that was
+# repeating.
+HIGHER_TIMEFRAMES = ("15m", "1h", "4h")
+
+
+def describe(candles_5m, candles_higher, price: float, is_long: bool | None = None,
+             higher_tf: str = "15m") -> str:
     """
     The chart, in words. Empty when there is too little history to say anything.
 
+    `candles_higher`/`higher_tf` is whichever higher timeframe this call
+    picked (see HIGHER_TIMEFRAMES and pick_higher_timeframe) — not always
+    15m, though it still might be.
+
     Example:
-      15m structure: up (last swing highs 2.410 -> 2.432, lows 2.380 -> 2.401)
+      1h structure: up (last swing highs 2.410 -> 2.432, lows 2.380 -> 2.401)
       Support 2.401 (-0.62%), resistance 2.432 (+0.66%)
-      Last 3h range 2.371-2.436; price at 48% of it
+      Last 12h range 2.371-2.436; price at 48% of it
       Last 6 x 5m: green big-green doji red hammer green
     """
     if price <= 0:
         return ""
     lines: list[str] = []
-    for tf, bars in (("15m", candles_15m), ("5m", candles_5m)):
+    for tf, bars in ((higher_tf, candles_higher), ("5m", candles_5m)):
         closed = [c for c in bars if getattr(c, "is_closed", True)]
         if len(closed) < 12:
             continue
@@ -111,7 +130,7 @@ def describe(candles_5m, candles_15m, price: float, is_long: bool | None = None)
             detail = (f" (swing highs {hs[0]:.6g} -> {hs[1]:.6g}, "
                       f"lows {ls[0]:.6g} -> {ls[1]:.6g})")
         lines.append(f"{tf} structure: {structure(closed)}{detail}")
-        if tf == "15m":
+        if tf == higher_tf:
             sup, res = levels(closed, price)
             parts = []
             if sup:
@@ -123,15 +142,24 @@ def describe(candles_5m, candles_15m, price: float, is_long: bool | None = None)
             recent = closed[-12:]
             lo, hi = min(c.low for c in recent), max(c.high for c in recent)
             if hi > lo:
-                lines.append(f"Last 3h range {lo:.6g}-{hi:.6g}; price at "
+                span = {"15m": "3h", "1h": "12h", "4h": "48h"}.get(higher_tf, "recent")
+                lines.append(f"Last {span} range {lo:.6g}-{hi:.6g}; price at "
                              f"{(price - lo) / (hi - lo) * 100:.0f}% of it")
         else:
             lines.append("Last 6 x 5m: " + " ".join(candle_word(c) for c in closed[-6:]))
     if not lines:
         return ""
     if is_long is not None:
-        s15 = structure([c for c in candles_15m if getattr(c, "is_closed", True)])
-        against = (is_long and s15 == "down") or (not is_long and s15 == "up")
+        s_higher = structure([c for c in candles_higher if getattr(c, "is_closed", True)])
+        against = (is_long and s_higher == "down") or (not is_long and s_higher == "up")
         if against:
-            lines.append("NOTE: this trade is against the 15m structure")
+            lines.append(f"NOTE: this trade is against the {higher_tf} structure")
     return "\n".join(lines)
+
+
+def pick_higher_timeframe() -> str:
+    """A different higher timeframe per call, not always 15m — see the note
+    above `describe`. Plain random.choice: no state to track, no bias to
+    justify, just not the same window every single time."""
+    import random
+    return random.choice(HIGHER_TIMEFRAMES)

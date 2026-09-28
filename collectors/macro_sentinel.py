@@ -146,8 +146,11 @@ class GroqSentinel:
             return 0.0, "", ""
 
         from analysis.price_action import describe as chart_text
-        chart = chart_text(state.get_candles("5m"), state.get_candles("15m"),
-                           sig.current_price, is_long=sig.direction.lower() == "long")
+        from analysis.price_action import pick_higher_timeframe
+        higher_tf = pick_higher_timeframe()
+        chart = chart_text(state.get_candles("5m"), state.get_candles(higher_tf),
+                           sig.current_price, is_long=sig.direction.lower() == "long",
+                           higher_tf=higher_tf)
 
         # Context payload
         funding_str = (f"{state.funding_rate_per_8h * 100:+.3f}%"
