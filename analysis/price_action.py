@@ -97,7 +97,7 @@ def candle_word(c) -> str:
 # fired. 5m stays fixed — it is the owner's own immediate-structure anchor,
 # named explicitly in this module's docstring, not the part that was
 # repeating.
-HIGHER_TIMEFRAMES = ("15m", "1h", "4h")
+HIGHER_TIMEFRAMES = ("30m", "1h", "4h", "15m")
 
 
 def describe(candles_5m, candles_higher, price: float, is_long: bool | None = None,
@@ -142,7 +142,7 @@ def describe(candles_5m, candles_higher, price: float, is_long: bool | None = No
             recent = closed[-12:]
             lo, hi = min(c.low for c in recent), max(c.high for c in recent)
             if hi > lo:
-                span = {"15m": "3h", "1h": "12h", "4h": "48h"}.get(higher_tf, "recent")
+                span = {"15m": "3h", "30m": "6h", "1h": "12h", "4h": "48h"}.get(higher_tf, "recent")
                 lines.append(f"Last {span} range {lo:.6g}-{hi:.6g}; price at "
                              f"{(price - lo) / (hi - lo) * 100:.0f}% of it")
         else:
