@@ -1,6 +1,7 @@
 """
 Unit tests for GroqSentinel AI sanity reviewer and pre-signal second opinion.
 """
+import asyncio
 from datetime import UTC, datetime
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -9,8 +10,19 @@ from pydantic import SecretStr
 
 from analysis.crypto_signal import CryptoSignal
 from analysis.crypto_state import CryptoState
-from collectors.macro_sentinel import GroqSentinel
+from collectors.macro_sentinel import GroqSentinel, _pretrade_review_cache
 from notifications.crypto_formatter import format_crypto_signal
+
+
+@pytest.fixture(autouse=True)
+def _clear_pretrade_review_cache():
+    """The pre-trade review cache is a module-level singleton, so without
+    this a review answered in one test could silently "answer" the next
+    test's identical-looking signal instead of the mocked HTTP response
+    that test set up."""
+    _pretrade_review_cache.clear()
+    yield
+    _pretrade_review_cache.clear()
 
 
 def _make_signal(ai_review: str = "") -> CryptoSignal:
@@ -72,6 +84,13 @@ async def test_groq_sentinel_clamping_and_review():
         assert delta == 0.0  # an approval never adds confidence
         assert "Clean breakout" in review
         assert verdict == "APPROVE"
+
+    # Same signal, same price as test 1 above — without clearing the
+    # pre-trade review cache here this would be served test 1's cached
+    # APPROVE answer instead of actually hitting the mocked HTTP response
+    # below, since both fall within the default cache window and price
+    # tolerance.
+    _pretrade_review_cache.clear()
 
     # Test 2: Groq returns large negative delta -> clamped to -0.04
     mock_resp_negative = MagicMock()
@@ -163,3 +182,134 @@ def test_a_reject_is_a_strong_opinion_not_a_veto():
 
     assert after(0.74) < threshold, "a typical setup should not survive a REJECT"
     assert after(0.92) >= threshold, "a strong setup should outvote the reviewer"
+
+
+# ── Pre-trade review cache: bounded staleness, not a blind time cache ──────
+#
+# Follows tests/test_cache.py::TestPaperNeverCachesMarkPrice's discipline:
+# proving the cache does NOT go stale matters more than proving it caches
+# at all, because a stale AI trade verdict is the failure mode that
+# actually costs money.
+
+def _mock_review_response(verdict="APPROVE", delta=0.0, summary="looks fine"):
+    resp = MagicMock()
+    resp.status_code = 200
+    resp.json.return_value = {"choices": [{"message": {"content": (
+        f'{{"verdict": "{verdict}", "confidence_delta": {delta}, '
+        f'"summary": "{summary}"}}'
+    )}}]}
+    return resp
+
+
+@pytest.mark.asyncio
+async def test_a_repeat_signal_within_price_tolerance_and_ttl_reuses_the_cached_answer():
+    """Same symbol/direction/setup, price barely moved, well inside the TTL
+    -> the second review must not touch Groq at all."""
+    sentinel = GroqSentinel()
+    sig = _make_signal()
+    sig.current_price = 65000.0
+    state = CryptoState(symbol="btcusdt", base_asset="BTC")
+    state.current_price = 65000.0
+
+    with patch("collectors.macro_sentinel.settings.groq_api_key", SecretStr("mock-key")), \
+         patch("collectors.macro_sentinel.settings.pre_trade_review_cache_ttl_seconds", 180), \
+         patch("httpx.AsyncClient.post", new_callable=AsyncMock) as mock_post:
+        mock_post.return_value = _mock_review_response(
+            verdict="CAUTION", delta=-0.02, summary="funding is a bit crowded")
+
+        first = await sentinel.review_signal_candidate(sig, state)
+        assert mock_post.call_count == 1
+
+        # A near-identical repeat, 0.05% away — well inside the 0.15% band.
+        sig2 = _make_signal()
+        sig2.current_price = 65000.0 * 1.0005
+        state.current_price = sig2.current_price
+        second = await sentinel.review_signal_candidate(sig2, state)
+
+        # The real call was never made a second time...
+        assert mock_post.call_count == 1, "a repeat within tolerance must not call Groq again"
+        # ...and the cached answer, not a default/empty one, came back.
+        assert second == first
+        assert second[2] == "CAUTION"
+        assert "funding is a bit crowded" in second[1]
+
+
+@pytest.mark.asyncio
+async def test_a_real_price_move_past_tolerance_is_never_served_from_cache():
+    """A genuine move (> 0.15%) must always be a cache miss, however
+    recently the last review ran — this is the guard against ever serving
+    a stale verdict on a real change."""
+    sentinel = GroqSentinel()
+    sig = _make_signal()
+    sig.current_price = 65000.0
+    state = CryptoState(symbol="btcusdt", base_asset="BTC")
+    state.current_price = 65000.0
+
+    with patch("collectors.macro_sentinel.settings.groq_api_key", SecretStr("mock-key")), \
+         patch("collectors.macro_sentinel.settings.pre_trade_review_cache_ttl_seconds", 180), \
+         patch("httpx.AsyncClient.post", new_callable=AsyncMock) as mock_post:
+        mock_post.return_value = _mock_review_response(
+            verdict="APPROVE", delta=0.0, summary="first look")
+        first = await sentinel.review_signal_candidate(sig, state)
+        assert mock_post.call_count == 1
+
+        # A full 1% move — well past the 0.15% tolerance, seconds later.
+        sig2 = _make_signal()
+        sig2.current_price = 65000.0 * 1.01
+        state.current_price = sig2.current_price
+        mock_post.return_value = _mock_review_response(
+            verdict="REJECT", delta=-0.04, summary="broke through the level")
+        second = await sentinel.review_signal_candidate(sig2, state)
+
+        assert mock_post.call_count == 2, "a real price move must always trigger a fresh call"
+        assert second != first
+        assert second[2] == "REJECT"
+        assert "broke through the level" in second[1]
+
+
+@pytest.mark.asyncio
+async def test_a_repeat_past_the_ttl_is_never_served_from_cache():
+    """Even with the price unchanged, an entry older than the TTL must be
+    treated as a miss — the window is a hard bound, not a suggestion."""
+    sentinel = GroqSentinel()
+    sig = _make_signal()
+    sig.current_price = 65000.0
+    state = CryptoState(symbol="btcusdt", base_asset="BTC")
+    state.current_price = 65000.0
+
+    with patch("collectors.macro_sentinel.settings.groq_api_key", SecretStr("mock-key")), \
+         patch("collectors.macro_sentinel.settings.pre_trade_review_cache_ttl_seconds", 0.05), \
+         patch("httpx.AsyncClient.post", new_callable=AsyncMock) as mock_post:
+        mock_post.return_value = _mock_review_response(
+            verdict="APPROVE", delta=0.0, summary="first look")
+        await sentinel.review_signal_candidate(sig, state)
+        assert mock_post.call_count == 1
+
+        await asyncio.sleep(0.08)  # past the 0.05s TTL
+
+        sig2 = _make_signal()
+        sig2.current_price = 65000.0  # identical price — only time passed
+        mock_post.return_value = _mock_review_response(
+            verdict="APPROVE", delta=0.0, summary="second look, still fine")
+        await sentinel.review_signal_candidate(sig2, state)
+
+        assert mock_post.call_count == 2, "an expired entry must not be served from cache"
+
+
+@pytest.mark.asyncio
+async def test_cache_disabled_when_ttl_is_zero():
+    """0 disables the cache outright, per its setting's own contract —
+    every review is a real call."""
+    sentinel = GroqSentinel()
+    sig = _make_signal()
+    sig.current_price = 65000.0
+    state = CryptoState(symbol="btcusdt", base_asset="BTC")
+    state.current_price = 65000.0
+
+    with patch("collectors.macro_sentinel.settings.groq_api_key", SecretStr("mock-key")), \
+         patch("collectors.macro_sentinel.settings.pre_trade_review_cache_ttl_seconds", 0), \
+         patch("httpx.AsyncClient.post", new_callable=AsyncMock) as mock_post:
+        mock_post.return_value = _mock_review_response()
+        await sentinel.review_signal_candidate(sig, state)
+        await sentinel.review_signal_candidate(sig, state)
+        assert mock_post.call_count == 2

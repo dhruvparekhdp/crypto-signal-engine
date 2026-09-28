@@ -746,6 +746,58 @@ class AppRunner:
         sig.confidence = max(0.50, min(0.95, round(before + delta, 4)))
         return verdict, ai_summary
 
+    async def _ai_review_pair(
+        self, sig, mirror, state, states, scfg,
+    ) -> tuple[tuple[str, str], tuple[str, str]]:
+        """
+        Round-0 counterpart to _ai_review_candidate: one combined Groq call
+        (GroqSentinel.review_signal_pair) judges the primary and the mirror
+        together instead of two separate calls back to back — same
+        information the two separate calls used to produce, half the AI
+        calls. Runs the same per-candidate penalty / save_review /
+        confidence-update logic _ai_review_candidate runs, just fed from
+        one shared reply instead of making its own call per candidate.
+
+        Only round 0 uses this: the live re-review loop (_mirror_review_job)
+        does not always have both sides still tracking to pair up, so it
+        keeps calling _ai_review_candidate one at a time.
+        """
+        if not (self.groq_sentinel.is_available and settings.groq_signal_review_enabled):
+            return ("", ""), ("", "")
+        news, briefing_id = await self._news_context(sig.symbol)
+        (delta_p, summary_p, verdict_p), (delta_m, summary_m, verdict_m) = (
+            await self.groq_sentinel.review_signal_pair(
+                sig, mirror, state, model=scfg.groq_model, book=states, news=news))
+        factors_p, factors_m = self.groq_sentinel.last_factors_pair
+
+        for cand_sig, verdict, delta, summary, factors in (
+            (sig, verdict_p, delta_p, summary_p, factors_p),
+            (mirror, verdict_m, delta_m, summary_m, factors_m),
+        ):
+            if verdict == "REJECT":
+                delta = -abs(settings.groq_reject_penalty)
+            elif verdict == "CAUTION":
+                delta = min(delta, -settings.groq_caution_min_penalty)
+            if summary:
+                cand_sig.ai_review = summary
+            try:
+                async with AsyncSessionFactory() as s2:
+                    await Repository(s2).save_review(
+                        "pre", cand_sig.symbol, signal_type=cand_sig.signal_type,
+                        verdict=verdict, summary=summary, factors=factors,
+                        confidence_delta=delta,
+                        model=self.groq_sentinel.last_model or "no_answer",
+                        latency_ms=self.groq_sentinel.last_latency_ms,
+                        briefing_id=briefing_id, news_context=news,
+                        **self._review_extras(state))
+            except Exception:
+                log.debug("mirror_review_not_saved", symbol=cand_sig.symbol,
+                          role=getattr(cand_sig, "candidate_role", "primary"))
+            before = cand_sig.confidence
+            cand_sig.confidence = max(0.50, min(0.95, round(before + delta, 4)))
+
+        return (verdict_p, summary_p), (verdict_m, summary_m)
+
     async def _settle_mirror_round(self, pair: TrackedPair, round_winners: list[TrackedCandidate],
                                     pcfg, states: dict) -> None:
         """
@@ -785,16 +837,18 @@ class AppRunner:
     async def _handle_mirror_candidates(self, sig, state, states, scfg, pcfg) -> None:
         """
         Round-0 of the mirror-review feature (settings.mirror_review_enabled):
-        build the opposite-direction candidate, review both independently,
-        and either open the stronger one immediately (today's behaviour,
-        preserved for signals already confident enough) or hold both for
-        the live re-review loop (_mirror_review_job).
+        build the opposite-direction candidate, review both together in one
+        combined Groq call (_ai_review_pair — independent verdicts on each,
+        half the calls two separate reviews used to cost), and either open
+        the stronger one immediately (today's behaviour, preserved for
+        signals already confident enough) or hold both for the live
+        re-review loop (_mirror_review_job).
         """
         mirror = make_mirror_signal(sig)
         now = datetime.now(UTC)
 
-        verdict_p, summary_p = await self._ai_review_candidate(sig, state, states, scfg)
-        verdict_m, summary_m = await self._ai_review_candidate(mirror, state, states, scfg)
+        (verdict_p, summary_p), (verdict_m, summary_m) = (
+            await self._ai_review_pair(sig, mirror, state, states, scfg))
 
         primary_log_id = await self._log_signal(sig)
         sig.log_id = primary_log_id

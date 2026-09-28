@@ -192,6 +192,9 @@ FIELDS: tuple[Field, ...] = (
     Field("position_review_enabled", "ai", "AI review of open trades",
           "Two close votes 10 minutes apart are needed."),
     Field("groq_postmortem_enabled", "ai", "AI post-mortem after a trade", ""),
+    Field("pre_trade_review_cache_ttl_seconds", "ai", "Pre-trade review cache (seconds)",
+          "Reuse the last review for a near-identical repeat signal (same symbol/direction/"
+          "setup, price within 0.15%). 0 disables.", kind="int", lo=0, hi=900),
     Field("event_monitor_enabled", "ai", "World event monitor",
           "Web-searched news, graded 1 to 5.", live=False),
     Field("move_attribution_enabled", "ai", "Why-it-moved analysis", "Hourly, on /moves."),

@@ -62,9 +62,15 @@ def _mock_groq(verdict="APPROVE", delta=0.0, summary="looks fine"):
     g.is_available = True
     g.postmortem_available = False
     g.last_factors = ""
+    g.last_factors_pair = ("", "")
     g.last_model = "mock-model"
     g.last_latency_ms = 5
     g.review_signal_candidate = AsyncMock(return_value=(delta, summary, verdict))
+    # Round-0's combined call: both sides get the same fixed verdict here,
+    # exactly matching what two separate review_signal_candidate() calls
+    # against this same mock used to return for primary and mirror.
+    g.review_signal_pair = AsyncMock(
+        return_value=((delta, summary, verdict), (delta, summary, verdict)))
     return g
 
 

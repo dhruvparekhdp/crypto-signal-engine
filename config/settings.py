@@ -65,6 +65,17 @@ class Settings(BaseSettings):
     # CAUTION is not REJECT.
     groq_caution_min_penalty: float = 0.01
 
+    # A second signal on the same symbol/direction/setup, fired minutes
+    # apart with the price barely moved, is not a new question — it is the
+    # same question asked twice. Cache the last real pre-trade review
+    # answer and reuse it while BOTH hold: within this many seconds, and
+    # within a small relative move of the price that was actually reviewed
+    # (collectors/macro_sentinel.py's _PreTradeReviewCache). Short on
+    # purpose — this is a safety-relevant AI review, not a read-heavy
+    # endpoint, so the window stays tight even though it is configurable.
+    # 0 disables the cache outright.
+    pre_trade_review_cache_ttl_seconds: int = 180
+
     # Two jobs, two models. The pre-trade check holds a signal up while it
     # runs, so it buys speed. The post-mortem runs after the money is already
     # decided and nothing waits on it, so it buys judgement instead.
