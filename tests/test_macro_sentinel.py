@@ -184,6 +184,34 @@ def test_a_reject_is_a_strong_opinion_not_a_veto():
     assert after(0.92) >= threshold, "a strong setup should outvote the reviewer"
 
 
+def test_reject_penalty_stays_a_real_say_against_todays_lower_floors():
+    """
+    1 Oct: the owner's own floors had drifted down (paper_min_confidence and
+    crypto_min_confidence often sit around 0.55-0.65 now, not the 0.70 this
+    penalty was originally sized against), and the OLD fixed 0.15 penalty
+    against a lower floor stopped being "a real say" and became "REJECT
+    almost always kills it" - only a setup that started above ~0.75 could
+    ever survive a REJECT at a 0.60 floor. The whole point of the paper
+    engine is to generate data on whether a signal was actually good or
+    bad; a signal discarded before it can open a trade never becomes that
+    data. 0.08 restores the original ratio at today's floors: a setup that
+    started reasonably strong (0.70) still gets a chance to open and prove
+    the reviewer right or wrong, while a setup already close to the floor
+    (0.62) still correctly does not survive.
+    """
+    from config.settings import settings
+    penalty = settings.groq_reject_penalty
+    floor = 0.60   # a realistic current paper_min_confidence, not the old 0.70
+
+    def after(conf):
+        return max(0.50, min(0.95, round(conf - penalty, 4)))
+
+    assert after(0.70) >= floor, (
+        "a setup that started reasonably strong must survive a REJECT at today's "
+        "lower floors, so it can actually open and generate real outcome data")
+    assert after(0.62) < floor, "a setup already close to the floor should still not survive"
+
+
 # ── Pre-trade review cache: bounded staleness, not a blind time cache ──────
 #
 # Follows tests/test_cache.py::TestPaperNeverCachesMarkPrice's discipline:

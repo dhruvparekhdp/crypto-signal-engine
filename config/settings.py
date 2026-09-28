@@ -51,11 +51,24 @@ class Settings(BaseSettings):
     groq_model: str = "qwen/qwen3.8-27b"
     groq_signal_review_enabled: bool = True
 
-    # What a REJECT verdict costs the signal's confidence. Sized to sink a
-    # typical 0.70-0.75 setup below the threshold while leaving a strong one
-    # standing: the reviewer gets a real say without a unilateral veto, and
-    # the confidence threshold stays the single place a signal is refused.
-    groq_reject_penalty: float = 0.15
+    # What a REJECT verdict costs the signal's confidence. This was 0.15,
+    # sized against a 0.70 paper floor - by design "sink a typical 0.70-0.75
+    # setup below the threshold while leaving a strong one standing." Both
+    # floors have since been lowered by the owner (paper_min_confidence and
+    # crypto_min_confidence now often sit around 0.55-0.65), and the same
+    # fixed 0.15 against a lower floor stopped being "a real say" and became
+    # "REJECT almost always kills it" - the owner's own read of the live
+    # behaviour (1 Oct), confirmed by the numbers: at a 0.60 floor, only a
+    # setup that started above 0.75 could ever survive a REJECT. 0.08
+    # restores the original ratio against today's floors: it still sinks a
+    # genuinely weak setup (one already close to the floor), but a setup
+    # that started strong gets to open as a real paper trade instead of
+    # being discarded before it can ever prove the AI right or wrong - which
+    # is the whole point of a data-generating paper engine. Matches the top
+    # of the calendar-caution/event-precedent penalty bucket (level 5) for
+    # the same reason: REJECT is the strongest single-call penalty this
+    # codebase applies, not a separate, unbounded veto mechanism.
+    groq_reject_penalty: float = 0.08
     # A CAUTION verdict used to cost nothing unless the model's own
     # confidence_delta happened to be negative — a diplomatic "proceed with
     # caution" could pass through at delta 0.0. This guarantees a minimum
