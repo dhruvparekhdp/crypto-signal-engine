@@ -405,9 +405,13 @@ class AppRunner:
                 if cycle is None:
                     return
 
-                cfg = config_for_cycle(cycle)
-                cfg = replace(cfg, max_concurrent=pcfg.max_concurrent,
-                              max_hold_minutes=pcfg.max_hold_minutes)
+                # live=pcfg: every risk/behaviour knob (confidence floor,
+                # leverage, stop size, sizing, trailing, ladder...) comes
+                # from the current Settings-page config, not the 16 Sep
+                # snapshot the cycle started under — see config_for_cycle's
+                # docstring. Only starting_wallet/target_wallet stay the
+                # cycle's own.
+                cfg = config_for_cycle(cycle, live=pcfg)
                 wallet = cycle.wallet
                 now = now_utc()
 

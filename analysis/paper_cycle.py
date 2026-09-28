@@ -54,8 +54,30 @@ class CycleState:
     position_ids: dict[int, int]      # index in `positions` -> DB row id
 
 
-def config_for_cycle(row) -> CycleConfig:
-    """Rebuild the exact configuration a cycle was started under."""
+def config_for_cycle(row, live=None) -> CycleConfig:
+    """
+    Build a cycle's config: wallet/target from `row` (the cycle's own
+    financial state — always the cycle's, never overridden), every tunable
+    risk/behaviour knob from `live` if given, else from `row` itself.
+
+    Until 29 Sep every knob came from `row` alone — the PaperCycle row,
+    written once when the cycle started and never touched again. A Settings
+    page change (confidence floor, leverage, stop size...) landed in the
+    live PaperTradingConfig table, but the running cycle kept reading its
+    own 16 Sep snapshot: `max_concurrent`/`max_hold_minutes` already got
+    patched onto the result at the one call site (scheduler/runner.py) as a
+    workaround, everything else silently didn't apply until the cycle
+    happened to end and a new one started under the current settings. The
+    owner's explicit choice: a running cycle should feel Settings changes
+    immediately, not lose them to that gap. `row` stays the source for
+    `starting_wallet`/`target_wallet` either way — those describe which run
+    this is, not how it's risk-managed, and changing them mid-cycle would
+    be resetting the simulation, not tuning it.
+
+    `live=None` keeps every existing caller's behaviour exactly as before
+    (a finished cycle's own row is still the only true record of what it
+    ran under, for history/comparison).
+    """
     from analysis.paper_trading import (
         LeverageConfig,
         ProfitLadder,
@@ -63,26 +85,29 @@ def config_for_cycle(row) -> CycleConfig:
         TrailingStop,
     )
 
+    knobs = row if live is None else live
     return CycleConfig(
         starting_wallet=row.starting_wallet,
         target_wallet=row.target_wallet,
-        leverage=row.leverage,
-        stop_pct_of_margin=row.stop_pct_of_margin,
-        reward_risk=row.reward_risk,
-        min_confidence=row.min_confidence,
-        sizing=(SizingConfig(floor_margin_pct=row.sizing_floor_pct,
-                            ceiling_margin_pct=row.sizing_ceiling_pct)
-               if row.scaled_sizing else None),
-        leverage_scaling=(LeverageConfig(ceiling_leverage=row.leverage)
-                          if getattr(row, "scaled_leverage", False) else None),
+        leverage=knobs.leverage,
+        stop_pct_of_margin=knobs.stop_pct_of_margin,
+        reward_risk=knobs.reward_risk,
+        min_confidence=knobs.min_confidence,
+        max_concurrent=getattr(knobs, "max_concurrent", 3),
+        max_hold_minutes=getattr(knobs, "max_hold_minutes", 240),
+        sizing=(SizingConfig(floor_margin_pct=knobs.sizing_floor_pct,
+                            ceiling_margin_pct=knobs.sizing_ceiling_pct)
+               if knobs.scaled_sizing else None),
+        leverage_scaling=(LeverageConfig(ceiling_leverage=knobs.leverage)
+                          if getattr(knobs, "scaled_leverage", False) else None),
         # The runner preset when trailing is on: arm at 0.75R, ride 1R behind
         # the high, release the fixed target. Distances in R rather than in
         # percent of margin, so the trail scales with the setup's own stop
         # instead of with the leverage dial.
-        trailing=(TrailingStop.runner() if row.trailing_enabled
+        trailing=(TrailingStop.runner() if knobs.trailing_enabled
                   else TrailingStop(enabled=False)),
-        ladder=(ProfitLadder.tight() if getattr(row, "ladder_tight", False)
-                else ProfitLadder(enabled=getattr(row, "ladder_enabled", False))),
+        ladder=(ProfitLadder.tight() if getattr(knobs, "ladder_tight", False)
+                else ProfitLadder(enabled=getattr(knobs, "ladder_enabled", False))),
     )
 
 
