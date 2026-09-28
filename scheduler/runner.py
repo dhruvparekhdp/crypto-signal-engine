@@ -617,8 +617,10 @@ class AppRunner:
                         await self.notifier.send_text(
                             f"📝 <b>Paper Trade Opened</b>\n"
                             f"<b>{pos.symbol.upper()}</b> · {arrow}\n"
-                            f"Entry <b>${pos.entry_price:,.4f}</b> · Margin <b>₹{pos.margin:,.0f}</b> ({pos.leverage:.0f}x)\n"
-                            f"Target <b>${pos.target_price:,.4f}</b> · Stop <b>${pos.stop_price:,.4f}</b>",
+                            f"Entry <b>${pos.entry_price:,.4f}</b> · "
+                            f"Margin <b>₹{pos.margin:,.0f}</b> ({pos.leverage:.0f}x)\n"
+                            f"Target <b>${pos.target_price:,.4f}</b> · "
+                            f"Stop <b>${pos.stop_price:,.4f}</b>",
                             parse_mode=ParseMode.HTML,
                         )
 
@@ -1183,9 +1185,11 @@ class AppRunner:
                     st = states.get(sig.symbol.lower())
                     if st is None or not st.candles_1m:
                         continue
-                    sig_ts = sig.timestamp.replace(tzinfo=None) if sig.timestamp.tzinfo else sig.timestamp
+                    sig_ts = (sig.timestamp.replace(tzinfo=None) if sig.timestamp.tzinfo
+                             else sig.timestamp)
                     after = [c for c in st.candles_1m
-                             if (c.timestamp.replace(tzinfo=None) if c.timestamp.tzinfo else c.timestamp) > sig_ts]
+                             if (c.timestamp.replace(tzinfo=None) if c.timestamp.tzinfo
+                                 else c.timestamp) > sig_ts]
                     if not after:
                         continue
 
@@ -1200,7 +1204,8 @@ class AppRunner:
                             favorable = (c.close >= c.open) if long_ else (c.close <= c.open)
                             if favorable:
                                 outcome = "won"
-                                pnl = (sig.target_price - sig.current_price) / sig.current_price * 100
+                                pnl = ((sig.target_price - sig.current_price)
+                                      / sig.current_price * 100)
                             else:
                                 outcome = "lost"
                                 pnl = (sig.stop_loss - sig.current_price) / sig.current_price * 100
@@ -1215,7 +1220,8 @@ class AppRunner:
                             break
 
                         # Signal is still running. Only expire if past maximum hold time
-                        last_c_ts = after[-1].timestamp.replace(tzinfo=None) if after[-1].timestamp.tzinfo else after[-1].timestamp
+                        last_c_ts = (after[-1].timestamp.replace(tzinfo=None)
+                                    if after[-1].timestamp.tzinfo else after[-1].timestamp)
                         span = last_c_ts - sig_ts
                         paper_max_hold_minutes = pcfg.max_hold_minutes
                         if span.total_seconds() / 60 < paper_max_hold_minutes:
@@ -1362,7 +1368,8 @@ class AppRunner:
 
                 signals = self.crypto_engine.process(state)
                 for sig in signals:
-                    if settings.crypto_min_confidence > 0 and sig.confidence < settings.crypto_min_confidence:
+                    if (settings.crypto_min_confidence > 0
+                            and sig.confidence < settings.crypto_min_confidence):
                         log.info("crypto_signal_below_min_confidence", symbol=sig.symbol,
                                  type=sig.signal_type, confidence=sig.confidence,
                                  threshold=settings.crypto_min_confidence)
@@ -2192,7 +2199,8 @@ class AppRunner:
                 cur_score = self.sentiment.score(titles)
                 await self.crypto_store.update_sentiment(cur, cur_score, len(titles))
 
-            log.info("crypto_news_sentiment_updated", global_score=global_sentiment, items_analyzed=len(news_items))
+            log.info("crypto_news_sentiment_updated", global_score=global_sentiment,
+                     items_analyzed=len(news_items))
         except Exception:
             log.exception("crypto_news_job_failed")
 
@@ -2586,7 +2594,8 @@ class AppRunner:
                 "coindcx_consecutive_failures": self.coindcx._consecutive_failures,
                 "coindcx_matched_symbols": len(self.coindcx.last_matched_symbols),
                 "coingecko_consecutive_failures": self.coingecko._consecutive_failures,
-                "binance_ws_connected": self.binance_ws._running and self.binance_ws._consecutive_failures == 0,
+                "binance_ws_connected": (self.binance_ws._running
+                                        and self.binance_ws._consecutive_failures == 0),
                 "binance_messages_received": self.binance_ws._total_messages_received,
                 "signals_today": len(self.crypto_engine.get_recent_signals(24)),
                 "sentiment_mode": self.sentiment._mode,
