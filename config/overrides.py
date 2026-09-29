@@ -47,7 +47,7 @@ GROUPS = {
 # Everything else of kind="secret" is a plain str field.
 SECRET_STR_KEYS = frozenset({
     "groq_api_key", "openrouter_api_key", "gemini_api_key", "anthropic_api_key",
-    "telegram_bot_token",
+    "telegram_bot_token", "hf_api_token",
 })
 
 FIELDS: tuple[Field, ...] = (
@@ -237,6 +237,12 @@ FIELDS: tuple[Field, ...] = (
           kind="secret", depends_on={"binance_only_mode": False}),
     Field("cryptopanic_auth_token", "keys", "CryptoPanic token",
           "News headlines for sentiment. cryptopanic.com/developers/api",
+          kind="secret"),
+    Field("hf_base_url", "keys", "Hugging Face Space URL",
+          "Dedicated web-search and market-analysis Space (e.g. https://user-analyst.hf.space)",
+          kind="choice"),
+    Field("hf_api_token", "keys", "Hugging Face API token",
+          "Optional HF user token if Space is private or for higher rate limits. huggingface.co/settings/tokens",
           kind="secret"),
 )
 BY_KEY = {f.key: f for f in FIELDS}

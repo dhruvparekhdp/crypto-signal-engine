@@ -143,8 +143,8 @@ class Settings(BaseSettings):
         "openrouter:nvidia/nemotron-3-ultra-550b-a55b:free")
     # The world-events briefing. Every entry can actually search.
     llm_chain_briefing: str = (
-        "groq:openai/gpt-oss-20b+search, groq:openai/gpt-oss-120b+search, "
-        "openrouter:qwen/qwen3-32b:online")
+        "groq:openai/gpt-oss-20b+search, hf:analyst:online, "
+        "groq:openai/gpt-oss-120b+search, openrouter:qwen/qwen3-32b:online")
     market_briefing_enabled: bool = True
     market_briefing_minutes: int = 30
     # Hourly: why each watchlist coin moved, and how our signals fared.
@@ -156,7 +156,7 @@ class Settings(BaseSettings):
     # against. Every entry here must be able to search; see the test in
     # tests/test_market_briefing.py.
     llm_chain_attribution: str = (
-        "groq:openai/gpt-oss-120b+search, openrouter:qwen/qwen3-32b:online")
+        "hf:analyst:online, groq:openai/gpt-oss-120b+search, openrouter:qwen/qwen3-32b:online")
     move_attribution_enabled: bool = True
     # The event monitor: adaptive, jittered web checks with a daily cap. The
     # free tier's daily requests are shared by every role, so the monitor
@@ -164,8 +164,8 @@ class Settings(BaseSettings):
     event_monitor_enabled: bool = True
     event_monitor_daily_cap: int = 120
     llm_chain_briefing_calm: str = (
-        "groq:openai/gpt-oss-20b+search, groq:openai/gpt-oss-120b+search, "
-        "openrouter:qwen/qwen3-32b:online")
+        "groq:openai/gpt-oss-20b+search, hf:analyst:online, "
+        "groq:openai/gpt-oss-120b+search, openrouter:qwen/qwen3-32b:online")
     # Labelling past moves from the Binance lake (scripts/review_history.py).
     # Local first: it is bulk work and the free Groq requests are shared with
     # live trading. The biggest moves use web search to find that day's news.
@@ -289,6 +289,9 @@ class Settings(BaseSettings):
     # asleep is not a problem to solve: it is the first entry in a chain, and
     # an unreachable first entry is what the rest of the chain is for.
     ollama_base_url: str = ""
+    # Hugging Face Space endpoint (e.g. https://user-space.hf.space) and optional token.
+    hf_base_url: str = ""
+    hf_api_token: SecretStr | None = None
 
     # Scoring a headline is a short structured classification — a number, a
     # confidence and one tag from a closed list. That is the shape of work a

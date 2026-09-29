@@ -107,7 +107,11 @@ def as_news_items(events: list[dict], model: str) -> list[dict]:
 
 
 async def fetch_briefing():
-    """Ask a web-searching model for the briefing. None if no model answered."""
+    """Ask a web-searching model for the briefing.
+
+    Returns a 5-tuple on success, a Reply on no-answer (so the caller can
+    inspect .failures and alert), or None on a parse error.
+    """
     from collectors.llm_client import ask_json
 
     reply = await ask_json(
@@ -115,7 +119,7 @@ async def fetch_briefing():
         f"Current time: {datetime.now(UTC).strftime('%Y-%m-%d %H:%M UTC')}. Brief me.",
         max_tokens=1500, temperature=0.2, timeout=90.0)
     if not reply or not isinstance(reply.data, dict):
-        return None
+        return reply          # caller checks reply.failures
     tone, summary, events = parse_briefing(reply.data)
     log.info("market_briefing", tone=round(tone, 2), events=len(events),
              served_by=reply.served_by, latency_ms=reply.latency_ms)

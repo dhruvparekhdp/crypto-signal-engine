@@ -169,6 +169,11 @@ PROVIDERS: dict[str, Provider] = {
     "ollama": Provider(
         "ollama", OPENAI_SHAPED, "/v1/chat/completions", "",
         endpoint_attr="ollama_base_url", needs_key=False),
+    # Hugging Face Space running a web-searching analyst microservice.
+    # Connects to https://<username>-<space>.hf.space/v1/chat/completions.
+    "hf": Provider(
+        "hf", OPENAI_SHAPED, "/v1/chat/completions", "hf_api_token",
+        endpoint_attr="hf_base_url", needs_key=False),
 }
 
 
@@ -292,7 +297,7 @@ async def _call_openai_shaped(provider: Provider, model: str, system: str,
         payload["reasoning_effort"] = "low"
 
     headers = {"Content-Type": "application/json"}
-    if provider.needs_key:
+    if provider.needs_key or provider.api_key:
         headers["Authorization"] = f"Bearer {provider.api_key}"
     if provider.name == "openrouter":
         # OpenRouter asks callers to identify themselves; without these the

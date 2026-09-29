@@ -229,6 +229,9 @@ class AppRunner:
         # and price, so the three of them cannot disagree with each other.
         self.collector_enabled: dict[str, bool] = {}
         self._binance_ws_task: asyncio.Task | None = None
+        # Consecutive LLM-chain failure counter per role — used to throttle
+        # Telegram alerts (fire on 1st failure, then every 3rd).
+        self._llm_fail_counts: dict[str, int] = {}
         self.sync_collectors()
 
 
@@ -253,6 +256,26 @@ class AppRunner:
         elif not self.collector_enabled.get("binance_ws") and running:
             self._binance_ws_task.cancel()
             log.info("binance_ws_task_stopped")
+
+    async def _alert_llm_outage(self, role: str, failures: list[str]) -> None:
+        """Send a Telegram alert when ALL LLM providers fail for a role.
+
+        Alerts on the 1st consecutive failure, then every 3rd, so the user
+        knows but isn't spammed every 30 minutes.
+        """
+        count = self._llm_fail_counts.get(role, 0) + 1
+        self._llm_fail_counts[role] = count
+        if count == 1 or count % 3 == 0:
+            short = "\n".join(f"• {f[:120]}" for f in failures[:4])
+            msg = (f"🔴 <b>ALL LLM providers failed</b> for <code>{role}</code> "
+                   f"({count}x in a row)\n\n{short}\n\n"
+                   f"No {role} will be generated until a provider recovers.")
+            await self.notifier.send_text(msg, parse_mode=ParseMode.HTML)
+            log.warning("llm_outage_alert_sent", role=role, consecutive=count)
+
+    def _reset_llm_fail(self, role: str) -> None:
+        """Clear the failure counter when a role succeeds."""
+        self._llm_fail_counts.pop(role, None)
 
     async def load_settings_overrides(self) -> list[str]:
         """Apply the settings saved on /settings (database beats .env)."""
@@ -1905,15 +1928,21 @@ class AppRunner:
         Stored, fed into news_sentiment as macro headlines (so it reaches the
         sentiment score and the trading pause), and handed to every reviewer.
         """
-        from collectors.llm_client import chain_for
+        from collectors.llm_client import Reply, chain_for
         from collectors.market_briefing import as_news_items, fetch_briefing
 
         if not settings.market_briefing_enabled or not chain_for("briefing"):
             return
         try:
             got = await fetch_briefing()
-            if got is None:
+            # fetch_briefing returns a Reply when no model answered, or a tuple
+            # on success.  Alert the user on outage.
+            if isinstance(got, Reply) or got is None:
+                failures = getattr(got, "failures", []) if got else []
+                if failures:
+                    await self._alert_llm_outage("briefing", failures)
                 return
+            self._reset_llm_fail("briefing")
             tone, summary, events, model, latency = got
             async with AsyncSessionFactory() as session:
                 repo = Repository(session)
@@ -2116,7 +2145,9 @@ class AppRunner:
                                    max_tokens=3000, temperature=0.2, timeout=120.0)
             if not reply or not isinstance(reply.data, dict):
                 log.warning("move_attribution_no_answer", failures=reply.failures)
+                await self._alert_llm_outage("attribution", reply.failures if reply else [])
                 return
+            self._reset_llm_fail("attribution")
             result = parse_attribution(reply.data, {m.symbol for m in moves})
             # Why the web-search model was skipped, shown on the page.
             result["skipped"] = reply.failures[:4]
