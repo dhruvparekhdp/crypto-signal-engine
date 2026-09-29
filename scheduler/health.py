@@ -5933,9 +5933,102 @@ async def make_app(runner) -> web.Application:
     app.router.add_get("/api/debug/binance", _bind(_api_binance_probe))
     app.router.add_get("/api/debug/perf", _bind(_api_debug_perf))
     app.router.add_get("/api/debug/null-test", _bind(_api_debug_null_test))
+    app.router.add_get("/api/pipeline/progress", _bind(_api_pipeline_progress))
+    app.router.add_get("/pipeline", _pipeline_page)
     from scheduler.v2_pages import register as _register_v2_pages
     _register_v2_pages(app, runner)
     return app
+
+
+async def _api_pipeline_progress(runner, request: web.Request) -> web.Response:
+    from pathlib import Path
+    p_file = Path("data/reports/pipeline_progress.json")
+    if p_file.exists():
+        try:
+            return web.Response(text=p_file.read_text(), content_type="application/json")
+        except Exception:
+            pass
+    return web.Response(text=json.dumps({"status": "idle"}), content_type="application/json")
+
+
+async def _pipeline_page(request: web.Request) -> web.Response:
+    html = """<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Pipeline & Multi-Year Backtest Monitor</title>
+<style>
+body { background: #0f172a; color: #f8fafc; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, monospace; padding: 24px; line-height: 1.5; }
+.card { background: #1e293b; border-radius: 12px; padding: 20px; margin-bottom: 20px; border: 1px solid #334155; }
+.title { font-size: 20px; font-weight: bold; margin-bottom: 12px; color: #38bdf8; }
+.phase { margin: 12px 0; }
+.bar-bg { background: #334155; border-radius: 6px; height: 12px; overflow: hidden; margin-top: 4px; }
+.bar-fill { background: #10b981; height: 100%; width: 0%; transition: width 0.4s ease; }
+.grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 12px; margin-top: 16px; }
+.stat-box { background: #0f172a; padding: 12px; border-radius: 8px; border: 1px solid #334155; }
+.stat-val { font-size: 22px; font-weight: bold; color: #38bdf8; }
+.stat-label { font-size: 12px; color: #94a3b8; text-transform: uppercase; }
+.refresh-badge { font-size: 12px; color: #64748b; margin-top: 8px; }
+</style>
+</head>
+<body>
+<div class="card">
+  <div class="title">🚀 Multi-Year Backtest & HF Pipeline Monitor</div>
+  <div id="meta" style="color: #94a3b8; font-size: 13px;">Connecting...</div>
+  <div class="refresh-badge">Auto-refreshing every 3 seconds</div>
+</div>
+
+<div class="card">
+  <div class="title">Execution Phases</div>
+  <div id="phases"></div>
+</div>
+
+<div class="card">
+  <div class="title">Hugging Face AI Batches & Categorization</div>
+  <div id="stats" class="grid"></div>
+</div>
+
+<script>
+async function refresh() {
+  try {
+    const res = await fetch('/api/pipeline/progress');
+    const data = await res.json();
+    if (!data || !data.phases) return;
+    document.getElementById('meta').innerText = 'Started: ' + (data.started_at || 'n/a') + ' | Updated: ' + (data.updated_at || 'n/a');
+    
+    let phaseHtml = '';
+    for (const [k, p] of Object.entries(data.phases || {})) {
+      const pct = p.total_tasks > 0 ? Math.round((p.completed_tasks / p.total_tasks) * 100) : (p.status === 'completed' ? 100 : 0);
+      phaseHtml += `<div class="phase">
+        <div style="display:flex; justify-content:space-between; font-size:14px;">
+          <span><strong>${p.name}</strong> ${p.current_item ? '<span style="color:#94a3b8">(' + p.current_item + ')</span>' : ''}</span>
+          <span>${pct}% (${p.completed_tasks}/${p.total_tasks || '?'})</span>
+        </div>
+        <div class="bar-bg"><div class="bar-fill" style="width: ${pct}%;"></div></div>
+      </div>`;
+    }
+    document.getElementById('phases').innerHTML = phaseHtml;
+
+    let statsHtml = `
+      <div class="stat-box"><div class="stat-label">Batches Done</div><div class="stat-val">${data.ai_batches_completed || 0}</div></div>
+      <div class="stat-box"><div class="stat-label">Batches Total</div><div class="stat-val">${data.ai_batches_total || 0}</div></div>
+      <div class="stat-box"><div class="stat-label">Failed / Retried</div><div class="stat-val" style="color:#f43f5e;">${data.ai_batches_failed || 0}</div></div>
+    `;
+    for (const [cat, count] of Object.entries(data.ai_categories || {})) {
+      statsHtml += `<div class="stat-box"><div class="stat-label">${cat.replace('_', ' ')}</div><div class="stat-val">${count}</div></div>`;
+    }
+    document.getElementById('stats').innerHTML = statsHtml;
+  } catch (e) {
+    console.error(e);
+  }
+}
+setInterval(refresh, 3000);
+refresh();
+</script>
+</body>
+</html>"""
+    return web.Response(text=html, content_type="text/html")
 
 
 async def _dashboard(request: web.Request) -> web.Response:
