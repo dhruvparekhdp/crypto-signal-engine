@@ -414,7 +414,12 @@ async def _call_hf(model: str, system: str, user: str, max_tokens: int,
     try:
         from huggingface_hub import AsyncInferenceClient
 
-        client = AsyncInferenceClient(token=token or None, base_url=base_url, timeout=timeout)
+        client = AsyncInferenceClient(
+            token=token or None,
+            api_key=token or None,
+            base_url=base_url,
+            timeout=timeout,
+        )
         resp = await client.chat.completions.create(
             model=model,
             messages=[
