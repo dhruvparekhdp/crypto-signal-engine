@@ -38,6 +38,9 @@ BRIEFING_SYSTEM = (
     "hacks or outages, large liquidations. Only include things you found in "
     "search results from the last 12 hours. If nothing important happened, "
     "say so and return an empty list — do not pad it.\n\n"
+    "Be specific with concrete numbers: state BTC and ETH price changes (e.g. 'BTC +2.1% to $83.4k'), "
+    "exact interest rate numbers, ETF net inflow/outflow dollar amounts, or liquidation totals. "
+    "Vague summaries like 'the market is relatively stable' are strictly prohibited — cite the real numbers.\n\n"
     f"event_type, use only these: {', '.join(EVENT_TYPES)}\n\n"
     "The reader is in India: in every text field (summary, titles, notes) "
     "write times in IST (UTC+5:30), e.g. '19:05 IST'. Only the `when` field "
@@ -85,12 +88,13 @@ def parse_briefing(data: dict) -> tuple[float, str, list[dict]]:
 
 def as_news_items(events: list[dict], model: str) -> list[dict]:
     """Briefing events in the shape /api/sentiment/ingest and the repository take."""
+    import re
     now = datetime.now(UTC).replace(tzinfo=None).isoformat()
     items = []
     for e in events:
-        # Keyed on the headline alone, so the same event found by two
-        # briefings half an hour apart is stored once.
-        key = hashlib.sha256(("briefing|" + e["headline"].lower()).encode()).hexdigest()[:32]
+        # Normalized headline hash for robust deduplication across model variations
+        norm = re.sub(r'[^a-z0-9]', '', e["headline"].lower())
+        key = hashlib.sha256(("briefing|" + norm).encode()).hexdigest()[:32]
         items.append({
             "external_id": key,
             "symbol": "all",

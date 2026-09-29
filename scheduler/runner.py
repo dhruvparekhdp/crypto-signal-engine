@@ -521,9 +521,28 @@ class AppRunner:
                     trade = resolve_at_price(pos, current_price, now, cfg, wallet,
                                              lock=self._profit_lock())
                     if trade is None:
-                        # 1. Dual Mode Trailing Ladder (TP1 partial 50% scale-out + R-ladder)
                         from analysis.paper_cycle import fees_for
                         fees = fees_for(pos.symbol)
+
+                        # Smart 60-Minute Rule: cut stagnant loser/flat, trail profitable runner
+                        atr_val = getattr(st, "atr_14", None) if st is not None else None
+                        act_60m, lvl_60m = pos.smart_60m_check(current_price, now, fees, atr=atr_val)
+                        if act_60m == "exit_stagnant":
+                            from analysis.paper_trading import ExitReason, close_position
+                            trade = close_position(pos, current_price, ExitReason.STAGNANT_TIMEOUT, now, fees, wallet)
+                            self._tick_notes.append("Smart 60m rule: position flat/losing after 60 mins -> closed stagnant")
+                            log.info("paper_trade_stagnant_timeout", symbol=pos.symbol, net=round(trade.net_pnl, 2))
+                        elif act_60m == "trail_active":
+                            self._tick_notes.append(f"Smart 60m rule: in profit after 60 mins -> trailing stop ratcheted to {lvl_60m:.6g}")
+                            log.info("paper_trade_60m_trail_active", symbol=pos.symbol, new_stop=lvl_60m)
+
+                    if trade is None:
+                        # Smart Breakeven Ratchet: lock zero-risk stop at +0.8% move
+                        if pos.apply_smart_breakeven_ratchet(current_price, fees):
+                            self._tick_notes.append(f"Smart breakeven ratchet at +0.8%: stop locked at {pos.stop_price:.6g}")
+                            log.info("paper_trade_breakeven_ratchet", symbol=pos.symbol, new_stop=pos.stop_price)
+
+                        # 1. Dual Mode Trailing Ladder (TP1 partial 50% scale-out + R-ladder)
                         trail_moved, credit = pos.apply_dual_mode_trailing(current_price, fees)
                         if credit > 0:
                             wallet += credit
@@ -666,6 +685,12 @@ class AppRunner:
                         await self._mark_skipped(log_id, why_not)
                         continue
                     sig = self._apply_sentiment(sig, st.funding_rate_per_8h)
+                    if (getattr(sig, "candidate_role", "") == "mirror_shadow"
+                            and sig.confidence < getattr(settings, "counter_trend_short_min_confidence", 0.80)):
+                        log.info("paper_trade_skipped", symbol=sig.symbol, reason="counter_trend_short_shadow_held",
+                                 confidence=sig.confidence, required=settings.counter_trend_short_min_confidence)
+                        await self._mark_skipped(log_id, "counter_trend_short_shadow_held")
+                        continue
                     ok, _why = should_open(sig, cfg, cstate, now)
                     if ok:
                         from analysis.instruments import spec_for

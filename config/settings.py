@@ -390,6 +390,7 @@ class Settings(BaseSettings):
     bank_size: float = 10000.0
     signal_cooldown_minutes: int = 10
     crypto_min_confidence: float = 0.60
+    counter_trend_short_min_confidence: float = 0.80
     crypto_signal_cooldown_minutes: int = 45
     crypto_snapshot_interval_seconds: int = 120
     crypto_alert_telegram: bool = True

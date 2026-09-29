@@ -137,7 +137,12 @@ class CryptoEngine:
             if self._opposes_htf_trend(sig, state):
                 log.info("crypto_signal_opposes_htf_trend", symbol=sig.symbol,
                          direction=sig.direction, type=sig.signal_type)
-                continue
+                if sig.direction == "short":
+                    # Run as mirror shadow trade to collect data for analysis without risking paper wallet
+                    sig.candidate_role = "mirror_shadow"
+                    sig.veto_reason = "counter_trend_short_shadow"
+                else:
+                    continue
 
             if self._is_on_cooldown(sig.symbol, sig.signal_type):
                 log.debug("crypto_signal_on_cooldown", symbol=sig.symbol, type=sig.signal_type)

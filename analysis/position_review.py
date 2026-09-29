@@ -279,18 +279,22 @@ def _describe(pos, state, trend: float, now: datetime) -> str:
     if not is_long:
         move = -move
     to_stop = abs(price - pos.stop_price) / price * 100.0
+    to_target = abs(pos.target_price - price) / price * 100.0 if pos.target_price else 0.0
     held_min = (now - pos.opened_at).total_seconds() / 60.0
     left_min = ((pos.expires_at - now).total_seconds() / 60.0
                 if pos.expires_at else None)
+    atr = getattr(state, "atr_14", 0.0) or 0.0
+    atr_pct = (atr / price * 100.0) if price > 0 else 0.0
     return (
         f"{pos.symbol.upper()} {'LONG' if is_long else 'SHORT'} — "
-        f"{pos.signal_type or 'setup'} at {round((pos.confidence or 0) * 100)}%\n"
+        f"{pos.signal_type or 'setup'} at {round((pos.confidence or 0) * 100)}% ({pos.timeframe or 'intraday'})\n"
+        f"Entry {pos.entry_price:.6g}, Current {price:.6g}, Stop {pos.stop_price:.6g} ({to_stop:.2f}% away), "
+        f"Target {pos.target_price:.6g} ({to_target:.2f}% away), Lev {pos.leverage:.0f}x\n"
         f"{'Up' if move >= 0 else 'Down'} {abs(move):.3f}% since entry "
         f"({'in profit — trail only, will not be closed on this' if move >= 0 else 'in the red'})\n"
-        f"Stop is {to_stop:.3f}% away\n"
         f"Held {held_min:.0f} min"
         + (f", {left_min:.0f} min left before it expires\n" if left_min is not None else "\n")
-        + f"RSI {state.rsi_14:.0f}, MACD histogram {getattr(state, 'macd_histogram', 0.0):+.4f}, "
+        + f"RSI {state.rsi_14:.0f}, ATR% {atr_pct:.2f}%, MACD histogram {getattr(state, 'macd_histogram', 0.0):+.4f}, "
           f"flow {getattr(state, 'cvd_trend', None) or 'n/a'}\n"
         f"Local read of all this: {trend:.2f} out of 1.00"
         + _chart(state, price, is_long)

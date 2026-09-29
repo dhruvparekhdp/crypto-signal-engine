@@ -52,6 +52,7 @@ class ExitReason(str, Enum):
     SIGNAL_FLIP = "signal_flip"          # the setup now points the other way
     CONVICTION_LOST = "conviction_lost"  # confidence decayed below the floor
     MARKET_SHOCK = "market_shock"        # violent move against an open position
+    STAGNANT_TIMEOUT = "stagnant_timeout"  # flat/negative after 60 minutes
 
 
 @dataclass(frozen=True)
@@ -284,16 +285,34 @@ def stop_and_target(
     leverage: float,
     stop_pct_of_margin: float,
     reward_risk: float,
+    confidence: float | None = None,
+    atr_pct: float | None = None,
 ) -> tuple[float, float]:
     """
     Convert a risk budget expressed in margin terms into actual prices.
 
-    stop_pct_of_margin=0.20 at 10x means "risk 20% of margin", which is a
-    20%/10 = 2.0% adverse price move. The target is placed reward_risk times
-    that distance away, which is the ratio that decides whether the strategy
-    can survive fees at all.
+    Calibrates stop distance adaptively:
+    - High confidence (>=0.80): tight 0.25 margin stop, floor 1.5x ATR
+    - Standard confidence (0.70-0.79): standard 0.30 margin stop, floor 1.8x ATR
+    - Lower/marginal (<0.70): wider 0.35 margin stop, floor 2.2x ATR
     """
-    stop_move = stop_pct_of_margin / leverage
+    base_stop_pct = stop_pct_of_margin
+    atr_floor_mult = 1.8
+    if confidence is not None:
+        if confidence >= 0.80:
+            base_stop_pct = min(stop_pct_of_margin, 0.25)
+            atr_floor_mult = 1.5
+        elif confidence >= 0.70:
+            base_stop_pct = max(stop_pct_of_margin, 0.30)
+            atr_floor_mult = 1.8
+        else:
+            base_stop_pct = max(stop_pct_of_margin, 0.35)
+            atr_floor_mult = 2.2
+
+    stop_move = base_stop_pct / leverage
+    if atr_pct is not None and atr_pct > 0:
+        stop_move = max(stop_move, atr_floor_mult * atr_pct)
+
     target_move = stop_move * reward_risk
     s = sign_of(side)
     return entry * (1.0 - s * stop_move), entry * (1.0 + s * target_move)
@@ -746,6 +765,61 @@ class Position:
                     self.trail_active = True
                 return True
         return False
+
+    def apply_smart_breakeven_ratchet(self, mark: float, fees: FeeModel, min_gain_pct: float = 0.008) -> bool:
+        """
+        Ratchet stop to breakeven + fees as soon as price moves +0.8% in favor (or +1.0R).
+        Eliminates downside risk on winning trades.
+        """
+        if self.entry_price <= 0 or mark <= 0:
+            return False
+        s = self.sign
+        gain_pct = s * (mark - self.entry_price) / self.entry_price
+        r = self.r_multiple(mark)
+        if gain_pct < min_gain_pct and r < 1.0:
+            return False
+
+        cost = fees.round_trip_pct() + 0.0005  # round trip + small safety buffer
+        be_stop = self.entry_price * (1 + s * cost)
+        if s * (be_stop - self.stop_price) > 0:
+            self.stop_price = be_stop
+            self.stop_moved_by_profit_lock = True
+            self.trail_active = True
+            return True
+        return False
+
+    def smart_60m_check(self, mark: float, now: datetime, fees: FeeModel,
+                        atr: float | None = None) -> tuple[str, float]:
+        """
+        Smart 60-Minute Rule:
+        - If held >= 60 minutes and flat/losing (favourable_move <= round_trip): exit stagnant
+        - If held >= 60 minutes and in profit: activate trailing stop to let winner run
+        """
+        if not self.opened_at:
+            return ("hold", 0.0)
+        held_mins = (now - self.opened_at).total_seconds() / 60.0
+        if held_mins < 60.0:
+            return ("hold", 0.0)
+
+        s = self.sign
+        favour_pct = s * (mark - self.entry_price) / self.entry_price
+        cost_pct = fees.round_trip_pct()
+
+        if favour_pct <= cost_pct:
+            # Stagnant flat or losing trade after 60 minutes -> cut it
+            return ("exit_stagnant", mark)
+
+        # In profit -> do not close! Dynamically trail by 0.6x ATR or 0.5R
+        risk = self.risk_per_unit
+        trail_dist = (0.6 * atr) if (atr and atr > 0) else (0.5 * risk if risk > 0 else self.entry_price * 0.008)
+        new_stop = mark - s * trail_dist
+        if s * (new_stop - self.stop_price) > 0:
+            self.stop_price = new_stop
+            self.stop_moved_by_profit_lock = True
+            self.trail_active = True
+            return ("trail_active", new_stop)
+
+        return ("hold", 0.0)
 
     @property
     def entry_slippage_pct(self) -> float:

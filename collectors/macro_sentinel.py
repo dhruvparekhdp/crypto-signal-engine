@@ -525,6 +525,9 @@ class GroqSentinel:
             "Use the news listed below, from around the time of the trade, "
             "to judge whether the world moved against it; if it did not, say "
             "the trade stood on its numbers. Never invent news.\n\n"
+            "Your lesson must cite AT LEAST ONE specific number from the trade "
+            "(e.g. stop distance %, actual adverse move %, hold hours, or net PnL). "
+            "Vague advice like 'use wider stops' is forbidden — say exactly what numbers justify it.\n\n"
             f"Tags, use only these: {_POST_FACTOR_HELP}\n\n"
             "JSON only:\n"
             '{"reasoning": "what actually decided it, under 150 chars", '

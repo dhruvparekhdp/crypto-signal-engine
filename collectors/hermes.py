@@ -69,6 +69,28 @@ EVENT_TYPES = [
     "exchange_outage", "macro_other", "crypto_other", "noise",
 ]
 
+# Alias map to gracefully normalize model variants to canonical event types
+EVENT_TYPE_ALIASES = {
+    "macro_central_bank": "rate_decision",
+    "central_bank": "rate_decision",
+    "fomc": "rate_decision",
+    "rate_hike": "rate_decision",
+    "rate_cut": "rate_decision",
+    "macro_inflation": "inflation_data",
+    "cpi": "inflation_data",
+    "macro_employment": "jobs_data",
+    "nfp": "jobs_data",
+    "employment": "jobs_data",
+    "macro_geopolitical": "war",
+    "geopolitical": "war",
+    "macro_trade": "tariff",
+    "macro_regulatory": "regulation",
+    "crypto_etf": "etf_flow",
+    "crypto_liquidation": "liquidation",
+    "crypto_outage": "exchange_outage",
+    "crypto_adoption": "adoption",
+}
+
 # Which events have ever been worth standing aside for. Used by the caller to
 # decide on a blackout, not by the scorer.
 HIGH_IMPACT = {"rate_decision", "inflation_data", "jobs_data", "war", "tariff"}
@@ -349,6 +371,7 @@ async def score_headline(headline: Headline) -> Headline:
         return headline
 
     event = str(reply.data.get("event_type") or "").strip().lower()
+    event = EVENT_TYPE_ALIASES.get(event, event)
     headline.event_type = event if event in EVENT_TYPES else "noise"
     headline.model = reply.served_by
     return headline

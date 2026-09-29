@@ -426,14 +426,16 @@ class VolumeSpikeAnalyzer:
                     return None
 
         # Earned confidence based on volume ratio and candle solidity
-        confidence = 0.66
+        confidence = 0.68
+        if ratio >= 2.5 and candle_range > 0 and body / candle_range >= 0.50:
+            confidence += 0.08  # High conviction volume surge priority bonus
         if ratio >= 4.0:
             confidence += 0.05
         if candle_range > 0 and body / candle_range >= 0.50:
             confidence += 0.03
         if structure and structure == (1 if is_bullish else -1):
             confidence += 0.03
-        confidence = min(0.80, confidence)
+        confidence = min(0.88, confidence)
 
         return _emit(
             state,
