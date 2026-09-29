@@ -416,7 +416,6 @@ async def _call_hf(model: str, system: str, user: str, max_tokens: int,
 
         client = AsyncInferenceClient(
             token=token or None,
-            api_key=token or None,
             base_url=base_url,
             timeout=timeout,
         )
