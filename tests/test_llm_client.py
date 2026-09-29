@@ -26,6 +26,14 @@ from collectors.llm_client import (
 )
 
 
+@pytest.fixture(autouse=True)
+def reset_circuit_breakers():
+    from collectors import llm_client
+    llm_client._circuit_breakers.clear()
+    yield
+    llm_client._circuit_breakers.clear()
+
+
 class TestChainParsing(unittest.TestCase):
     def test_a_chain_is_ordered_preference(self):
         self.assertEqual(
@@ -382,4 +390,35 @@ class TestHuggingFaceProvider(unittest.IsolatedAsyncioTestCase):
         system_content = captured["messages"][0]["content"]
         self.assertIn("Real-time web search results", system_content)
         self.assertIn("BTC ETF: Inflows reached $500M", system_content)
+
+
+class TestCircuitBreaker(unittest.IsolatedAsyncioTestCase):
+    def tearDown(self):
+        from collectors import llm_client
+        llm_client._circuit_breakers.clear()
+
+    async def test_circuit_breaker_trips_and_resets(self):
+        from datetime import UTC, datetime, timedelta
+        from collectors import llm_client
+
+        self.assertFalse(llm_client.is_circuit_open("groq"))
+        llm_client.trip_circuit_breaker("groq", seconds=45, reason="HTTP 429")
+        self.assertTrue(llm_client.is_circuit_open("groq"))
+
+        # After expiration, circuit resets
+        llm_client._circuit_breakers["groq"] = datetime.now(UTC) - timedelta(seconds=1)
+        self.assertFalse(llm_client.is_circuit_open("groq"))
+
+    async def test_ask_json_skips_open_circuit_breaker_and_falls_back(self):
+        from collectors import llm_client
+
+        llm_client.trip_circuit_breaker("groq", seconds=45, reason="rate limited")
+
+        with patch.object(llm_client, "chain_for", return_value=[("groq", "model-a"), ("hf", "model-b")]), \
+             patch.object(llm_client, "_call_hf", new=AsyncMock(return_value='{"status": "ok"}')):
+            reply = await llm_client.ask_json("test_role", "sys", "usr")
+            self.assertEqual(reply.data, {"status": "ok"})
+            self.assertEqual(reply.provider, "hf")
+            self.assertIn("circuit breaker open", reply.failures[0])
+
 

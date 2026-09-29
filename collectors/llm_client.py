@@ -40,7 +40,7 @@ import asyncio
 import json
 import time
 from dataclasses import dataclass, field
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 from typing import Any
 
 import httpx
@@ -116,6 +116,29 @@ def calls_today() -> dict[str, int]:
     if _calls_today_date != today:
         return {}
     return dict(_calls_today)
+
+
+_circuit_breakers: dict[str, datetime] = {}  # provider_name -> active_until_utc
+
+
+def trip_circuit_breaker(provider_name: str, seconds: int = 45, reason: str = "") -> None:
+    """Pause a provider for 45 seconds when hitting rate limits or repeated errors."""
+    until = datetime.now(UTC) + timedelta(seconds=seconds)
+    _circuit_breakers[provider_name] = until
+    log.warning("llm_circuit_breaker_tripped", provider=provider_name, pause_seconds=seconds,
+                until=until.isoformat(), reason=reason[:120])
+
+
+def is_circuit_open(provider_name: str) -> bool:
+    """Return True if this provider is currently paused in a circuit breaker cooldown."""
+    until = _circuit_breakers.get(provider_name)
+    if not until:
+        return False
+    if datetime.now(UTC) >= until:
+        del _circuit_breakers[provider_name]
+        log.info("llm_circuit_breaker_reset", provider=provider_name)
+        return False
+    return True
 
 
 @dataclass(frozen=True)
@@ -474,8 +497,16 @@ async def ask_json(role: str, system: str, user: str, *, max_tokens: int = 512,
     _record_call(role)
 
     for provider_name, model in chain_for(role):
-        provider = PROVIDERS[provider_name]
         attempts.append(f"{provider_name}/{model}")
+        if is_circuit_open(provider_name):
+            failures.append(f"{provider_name}/{model}: circuit breaker open (paused 45s)")
+            continue
+
+        if len(attempts) > 1:
+            # Pacing gap: at least 1.0 second delay between 1st and 2nd API attempts
+            await asyncio.sleep(1.0)
+
+        provider = PROVIDERS[provider_name]
         try:
             if provider.kind == ANTHROPIC_SHAPED:
                 text = await _call_anthropic(model, system, user, max_tokens, timeout)
@@ -501,6 +532,9 @@ async def ask_json(role: str, system: str, user: str, *, max_tokens: int = 512,
                          latency_ms=elapsed, attempts=attempts, failures=failures)
 
         except Exception as exc:
+            err_str = str(exc).lower()
+            if any(k in err_str for k in ("429", "rate limit", "quota", "too many requests", "resource_exhausted")):
+                trip_circuit_breaker(provider_name, seconds=45, reason=str(exc))
             log.warning("llm_provider_failed", role=role, provider=provider_name,
                         model=model, error=str(exc)[:200])
             failures.append(f"{provider_name}/{model}: {str(exc)[:160] or type(exc).__name__}")

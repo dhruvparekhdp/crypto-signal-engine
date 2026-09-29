@@ -161,6 +161,8 @@ async def call_hf_batch_reasoning(
 
     batch_chunks = [anomalies[i:i + 3] for i in range(0, min(12, len(anomalies)), 3)]
     for chunk in batch_chunks:
+        # Pacing delay between batch dispatches to prevent rate limits
+        await asyncio.sleep(2.0)
         system_prompt = (
             "You are a crypto quantitative analyst. Analyze the following volume spike anomalies. "
             "Determine the probable market cause from price movement, volume magnitude, and context. "
