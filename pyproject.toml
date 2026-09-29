@@ -22,6 +22,8 @@ dependencies = [
     "pandas>=2.0",
     "pyarrow>=14.0",
     "websockets>=13.0",
+    "huggingface-hub>=0.28.0",
+    "ddgs>=9.0.0",
 ]
 
 [project.optional-dependencies]

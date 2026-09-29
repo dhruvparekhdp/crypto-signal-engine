@@ -36,6 +36,7 @@ later trust. `served_by` is not diagnostics; it is a column.
 """
 from __future__ import annotations
 
+import asyncio
 import json
 import time
 from dataclasses import dataclass, field
@@ -146,6 +147,8 @@ class Provider:
 
     @property
     def configured(self) -> bool:
+        if self.name == "hf":
+            return bool(self.api_key) or bool(self.url)
         return bool(self.api_key) if self.needs_key else bool(self.url)
 
 
@@ -169,11 +172,11 @@ PROVIDERS: dict[str, Provider] = {
     "ollama": Provider(
         "ollama", OPENAI_SHAPED, "/v1/chat/completions", "",
         endpoint_attr="ollama_base_url", needs_key=False),
-    # Hugging Face Space running a web-searching analyst microservice.
-    # Connects to https://<username>-<space>.hf.space/v1/chat/completions.
+    # Hugging Face: serverless inference API or custom space endpoint.
+    # Supported natively via huggingface_hub AsyncInferenceClient with DDGS web search.
     "hf": Provider(
         "hf", OPENAI_SHAPED, "/v1/chat/completions", "hf_api_token",
-        endpoint_attr="hf_base_url", needs_key=False),
+        endpoint_attr="hf_base_url", needs_key=True),
 }
 
 
@@ -342,6 +345,109 @@ async def _call_anthropic(model: str, system: str, user: str,
     return "".join(b.text for b in message.content if b.type == "text")
 
 
+def _search_ddg(query: str, max_results: int = 5) -> str:
+    """Run a real-time web search on EC2 via DuckDuckGo."""
+    try:
+        try:
+            from ddgs import DDGS
+        except ImportError:
+            from duckduckgo_search import DDGS
+        with DDGS() as ddgs:
+            results = list(ddgs.text(query, max_results=max_results))
+        if not results:
+            return ""
+        snippets = []
+        for r in results:
+            title = (r.get("title") or "").strip()
+            body = (r.get("body") or "").strip()
+            if title and body:
+                snippets.append(f"- {title}: {body}")
+        return "\n".join(snippets)
+    except Exception as exc:
+        log.warning("hf_search_ddg_failed", query=query[:60], error=str(exc))
+        return ""
+
+
+def _derive_search_query(user: str) -> str:
+    """Extract a clean, targeted query for DuckDuckGo from the prompt text."""
+    lowered = user.lower()
+    if "briefing" in lowered or "brief me" in lowered:
+        return "crypto market news bitcoin ethereum macro economy today"
+    if "attribution" in lowered or "why" in lowered or "%" in user:
+        return "crypto market movers bitcoin altcoins news why market moving today"
+    words = [w for w in user.split() if "{" not in w and "}" not in w and len(w) < 20]
+    clean = " ".join(words[:15])
+    return f"crypto news {clean}" if clean else "crypto market news today"
+
+
+async def _call_hf(model: str, system: str, user: str, max_tokens: int,
+                   temperature: float, timeout: float) -> str:
+    """
+    Call Hugging Face via serverless router or custom space endpoint.
+    If the model ends in +search or :online, performs real-time DuckDuckGo
+    search on EC2 and injects fresh snippets into the prompt.
+    """
+    search = model.endswith("+search") or model.endswith(":online")
+    if model.endswith("+search"):
+        model = model[:-len("+search")]
+    elif model.endswith(":online"):
+        model = model[:-len(":online")]
+
+    if model in ("analyst", "default", ""):
+        model = "meta-llama/Llama-3.1-8B-Instruct"
+
+    if search:
+        query = _derive_search_query(user)
+        snippets = await asyncio.to_thread(_search_ddg, query, 5)
+        if snippets:
+            system = (
+                f"{system}\n\n"
+                f"Real-time web search results (retrieved just now for context):\n"
+                f"{snippets}\n\n"
+                "Use the factual findings above from recent news to ground your response. "
+                "Output valid JSON only."
+            )
+
+    token = PROVIDERS["hf"].api_key
+    base_url = (getattr(settings, "hf_base_url", "") or "").strip().rstrip("/") or None
+
+    try:
+        from huggingface_hub import AsyncInferenceClient
+
+        client = AsyncInferenceClient(token=token or None, base_url=base_url, timeout=timeout)
+        resp = await client.chat.completions.create(
+            model=model,
+            messages=[
+                {"role": "system", "content": system},
+                {"role": "user", "content": user},
+            ],
+            max_tokens=max_tokens,
+            temperature=temperature,
+        )
+        if resp.choices:
+            return resp.choices[0].message.content or ""
+        return ""
+    except ImportError:
+        endpoint = base_url or "https://router.huggingface.co"
+        url = f"{endpoint}/v1/chat/completions"
+        headers = {"Content-Type": "application/json"}
+        if token:
+            headers["Authorization"] = f"Bearer {token}"
+        payload = {
+            "model": model,
+            "messages": [{"role": "system", "content": system},
+                         {"role": "user", "content": user}],
+            "temperature": temperature,
+            "max_tokens": max_tokens,
+        }
+        async with httpx.AsyncClient(timeout=timeout) as client:
+            resp = await client.post(url, json=payload, headers=headers)
+            if resp.status_code != 200:
+                raise RuntimeError(f"hf returned {resp.status_code}: {resp.text[:200]}")
+            choices = resp.json().get("choices", [])
+            return choices[0]["message"].get("content", "") if choices else ""
+
+
 async def ask_json(role: str, system: str, user: str, *, max_tokens: int = 512,
                    temperature: float = 0.2, timeout: float = 20.0) -> Reply:
     """
@@ -369,6 +475,8 @@ async def ask_json(role: str, system: str, user: str, *, max_tokens: int = 512,
         try:
             if provider.kind == ANTHROPIC_SHAPED:
                 text = await _call_anthropic(model, system, user, max_tokens, timeout)
+            elif provider_name == "hf":
+                text = await _call_hf(model, system, user, max_tokens, temperature, timeout)
             else:
                 text = await _call_openai_shaped(
                     provider, model, system, user, max_tokens, temperature, timeout)

@@ -68,7 +68,7 @@ class TestRouting(unittest.TestCase):
     def test_groq_leads_every_review_role(self):
         from collectors.llm_client import _parse_chain
         from config.settings import settings
-        for role in ("pre_trade", "post_trade", "position_review", "briefing"):
+        for role in ("pre_trade", "post_trade", "position_review"):
             with self.subTest(role=role):
                 chain = _parse_chain(getattr(settings, f"llm_chain_{role}"))
                 self.assertEqual(chain[0][0], "groq")

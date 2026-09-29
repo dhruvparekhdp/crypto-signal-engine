@@ -340,3 +340,46 @@ class TestSearchSuffix(unittest.IsolatedAsyncioTestCase):
                 "s", "u", 100, 0.2, 5.0)
         self.assertEqual(sent["model"], "qwen/qwen3-32b:online")
         self.assertNotIn("tools", sent)
+
+
+class TestHuggingFaceProvider(unittest.IsolatedAsyncioTestCase):
+    def test_hf_configured_when_token_is_set(self):
+        from collectors.llm_client import PROVIDERS
+        with patch.object(type(PROVIDERS["hf"]), "api_key", property(lambda self: "hf_test_token")):
+            self.assertTrue(PROVIDERS["hf"].configured)
+
+    async def test_call_hf_with_search_injects_snippets(self):
+        from collectors import llm_client
+
+        mock_snippets = "- BTC ETF: Inflows reached $500M"
+        captured = {}
+
+        class MockAsyncClient:
+            def __init__(self, token=None, base_url=None, timeout=None):
+                pass
+
+            class chat:
+                class completions:
+                    @staticmethod
+                    async def create(model, messages, max_tokens, temperature):
+                        captured["model"] = model
+                        captured["messages"] = messages
+                        return type("Resp", (), {"choices": [
+                            type("Choice", (), {"message": type("Msg", (), {"content": '{"risk_tone": 0.5}'})()})()
+                        ]})()
+
+        with patch("collectors.llm_client._search_ddg", return_value=mock_snippets), \
+             patch("huggingface_hub.AsyncInferenceClient", MockAsyncClient):
+            res = await llm_client._call_hf(
+                "meta-llama/Llama-3.1-8B-Instruct+search",
+                "Briefing system prompt",
+                "Current time: 2026-09-30 02:00 UTC. Brief me.",
+                500, 0.2, 30.0
+            )
+
+        self.assertEqual(res, '{"risk_tone": 0.5}')
+        self.assertEqual(captured["model"], "meta-llama/Llama-3.1-8B-Instruct")
+        system_content = captured["messages"][0]["content"]
+        self.assertIn("Real-time web search results", system_content)
+        self.assertIn("BTC ETF: Inflows reached $500M", system_content)
+

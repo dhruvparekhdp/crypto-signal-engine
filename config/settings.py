@@ -141,22 +141,20 @@ class Settings(BaseSettings):
     llm_chain_post_trade: str = (
         "groq:openai/gpt-oss-120b+search, groq:openai/gpt-oss-120b, anthropic:claude-sonnet-5, "
         "openrouter:nvidia/nemotron-3-ultra-550b-a55b:free")
-    # The world-events briefing. Every entry can actually search.
+    # The world-events briefing. Hugging Face with DuckDuckGo search leads to offload Groq quota.
     llm_chain_briefing: str = (
-        "groq:openai/gpt-oss-20b+search, hf:analyst:online, "
-        "groq:openai/gpt-oss-120b+search, openrouter:qwen/qwen3-32b:online")
+        "hf:meta-llama/Llama-3.1-8B-Instruct+search, groq:openai/gpt-oss-20b+search, "
+        "openrouter:qwen/qwen3-32b:online")
     market_briefing_enabled: bool = True
     market_briefing_minutes: int = 30
     # Hourly: why each watchlist coin moved, and how our signals fared.
     #
-    # This chain used to fall through to a plain (non-searching) Groq model
-    # when browser_search hit its rate limit — the fabricated "surprise US
-    # PMI" story on /moves was that model answering "what moved the market"
-    # from its training data instead of admitting it had no news to check
-    # against. Every entry here must be able to search; see the test in
+    # Hugging Face with DuckDuckGo search leads, falling back to Groq and OpenRouter.
+    # Every entry here must be able to search; see the test in
     # tests/test_market_briefing.py.
     llm_chain_attribution: str = (
-        "hf:analyst:online, groq:openai/gpt-oss-120b+search, openrouter:qwen/qwen3-32b:online")
+        "hf:meta-llama/Llama-3.1-8B-Instruct+search, groq:openai/gpt-oss-120b+search, "
+        "openrouter:qwen/qwen3-32b:online")
     move_attribution_enabled: bool = True
     # The event monitor: adaptive, jittered web checks with a daily cap. The
     # free tier's daily requests are shared by every role, so the monitor
@@ -164,8 +162,8 @@ class Settings(BaseSettings):
     event_monitor_enabled: bool = True
     event_monitor_daily_cap: int = 120
     llm_chain_briefing_calm: str = (
-        "groq:openai/gpt-oss-20b+search, hf:analyst:online, "
-        "groq:openai/gpt-oss-120b+search, openrouter:qwen/qwen3-32b:online")
+        "hf:meta-llama/Llama-3.1-8B-Instruct+search, groq:openai/gpt-oss-20b+search, "
+        "openrouter:qwen/qwen3-32b:online")
     # Labelling past moves from the Binance lake (scripts/review_history.py).
     # Local first: it is bulk work and the free Groq requests are shared with
     # live trading. The biggest moves use web search to find that day's news.
