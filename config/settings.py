@@ -51,6 +51,9 @@ class Settings(BaseSettings):
     groq_model: str = "qwen/qwen3.8-27b"
     groq_signal_review_enabled: bool = True
 
+    # SambaNova Cloud (DeepSeek-R1 671B, Llama 3.3 70B)
+    sambanova_api_key: SecretStr | None = None
+
     # What a REJECT verdict costs the signal's confidence. Sized to sink a
     # typical 0.70-0.75 setup below the threshold while leaving a strong one
     # standing: the reviewer gets a real say without a unilateral veto, and
@@ -139,31 +142,25 @@ class Settings(BaseSettings):
     # retired the chain just logs one more failure and tries the next link,
     # same as any other model going away.
     llm_chain_post_trade: str = (
-        "groq:openai/gpt-oss-120b+search, groq:openai/gpt-oss-120b, anthropic:claude-sonnet-5, "
-        "openrouter:nvidia/nemotron-3-ultra-550b-a55b:free")
-    # The world-events briefing. Hugging Face with DuckDuckGo search leads to offload Groq quota.
+        "groq:openai/gpt-oss-120b+search, hf:meta-llama/Llama-3.3-70B-Instruct+search, "
+        "groq:openai/gpt-oss-120b, openrouter:nvidia/nemotron-3-ultra-550b-a55b:free")
+    # The world-events briefing. 70B / 120B reasoning models with DuckDuckGo search.
     llm_chain_briefing: str = (
-        "hf:meta-llama/Llama-3.1-8B-Instruct+search, groq:openai/gpt-oss-20b+search, "
-        "openrouter:qwen/qwen3-32b:online")
+        "hf:meta-llama/Llama-3.3-70B-Instruct+search, groq:openai/gpt-oss-120b+search, "
+        "hf:Qwen/Qwen2.5-72B-Instruct+search, hf:meta-llama/Llama-3.1-8B-Instruct+search")
     market_briefing_enabled: bool = True
     market_briefing_minutes: int = 30
     # Hourly: why each watchlist coin moved, and how our signals fared.
-    #
-    # Hugging Face with DuckDuckGo search leads, falling back to Groq and OpenRouter.
-    # Every entry here must be able to search; see the test in
-    # tests/test_market_briefing.py.
     llm_chain_attribution: str = (
-        "hf:meta-llama/Llama-3.1-8B-Instruct+search, groq:openai/gpt-oss-120b+search, "
-        "openrouter:qwen/qwen3-32b:online")
+        "hf:meta-llama/Llama-3.3-70B-Instruct+search, groq:openai/gpt-oss-120b+search, "
+        "hf:Qwen/Qwen2.5-72B-Instruct+search")
     move_attribution_enabled: bool = True
-    # The event monitor: adaptive, jittered web checks with a daily cap. The
-    # free tier's daily requests are shared by every role, so the monitor
-    # takes at most 120 of them. Shadow mode only.
+    # The event monitor: adaptive, jittered web checks with a daily cap.
     event_monitor_enabled: bool = True
     event_monitor_daily_cap: int = 120
     llm_chain_briefing_calm: str = (
-        "hf:meta-llama/Llama-3.1-8B-Instruct+search, groq:openai/gpt-oss-20b+search, "
-        "openrouter:qwen/qwen3-32b:online")
+        "hf:meta-llama/Llama-3.3-70B-Instruct+search, groq:openai/gpt-oss-120b+search, "
+        "hf:Qwen/Qwen2.5-72B-Instruct+search")
     # Labelling past moves from the Binance lake (scripts/review_history.py).
     # Local first: it is bulk work and the free Groq requests are shared with
     # live trading. The biggest moves use web search to find that day's news.

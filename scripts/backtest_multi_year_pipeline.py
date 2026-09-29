@@ -293,11 +293,16 @@ async def call_hf_batch_reasoning(
         } for ev in need_llm]
 
         system_prompt = (
-            "You are a crypto quantitative analyst. Analyze the following volume spike anomalies. "
-            "Determine the probable market cause from price movement, volume magnitude, and context. "
+            "You are an institutional crypto quantitative analyst specializing in market microstructure. "
+            "Analyze the following volume spike anomalies. Determine the probable market cause from price movement, volume magnitude, and context. "
             "Categorize each event strictly into one of: "
             "macro_economic, regulatory, technical_breakout, whale_manipulation, "
             "exchange_event, news_panic, no_correlation.\n\n"
+            "Evaluation Rules:\n"
+            "1. Macro Times: 12:30 UTC (US jobs/CPI) / 13:30 UTC (US cash open) / 18:00 UTC (FOMC) on major coins prioritize macro_economic.\n"
+            "2. Absorption: Vol Z-Score >= 4.0σ with price move < 2.0% indicates limit absorption / iceberg execution (whale_manipulation).\n"
+            "3. Liquidity: High volume on weekends or off-hours (22:00-02:00 UTC) on altcoins indicates liquidity stop sweeps (whale_manipulation) rather than breakouts.\n"
+            "4. Liquidation Cascade: Single-candle drop exceeding -4.0% indicates forced liquidations (news_panic).\n\n"
             "JSON response only:\n"
             '{"events": [{"timestamp": "...", "category": "category_tag", '
             '"confidence": 0.0-1.0, "reasoning": "1-2 sentences"}]}'

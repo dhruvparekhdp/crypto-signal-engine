@@ -200,6 +200,10 @@ PROVIDERS: dict[str, Provider] = {
     "hf": Provider(
         "hf", OPENAI_SHAPED, "/v1/chat/completions", "hf_api_token",
         endpoint_attr="hf_base_url", needs_key=True),
+    # SambaNova Cloud: high-speed inference for Llama 3.3 70B & DeepSeek
+    "sambanova": Provider(
+        "sambanova", OPENAI_SHAPED,
+        "https://api.sambanova.ai/v1/chat/completions", "sambanova_api_key"),
 }
 
 
@@ -417,7 +421,7 @@ async def _call_hf(model: str, system: str, user: str, max_tokens: int,
         model = model[:-len(":online")]
 
     if model in ("analyst", "default", ""):
-        model = "meta-llama/Llama-3.1-8B-Instruct"
+        model = "meta-llama/Llama-3.3-70B-Instruct"
 
     if search:
         query = _derive_search_query(user)
