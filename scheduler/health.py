@@ -72,6 +72,8 @@ async def _api_crypto_signals(runner, request: web.Request) -> web.Response:
     async with AsyncSessionFactory() as session:
         repo = Repository(session)
         rows = await repo.get_recent_crypto_signals(hours=24)
+        mirror_mode = request.query.get('mirror', '') == '1'
+        rows = [r for r in rows if getattr(r, 'candidate_role', 'primary') == ('mirror' if mirror_mode else 'primary')]
         # Mirror review's per-signal "review trail" — every round for the
         # primary and its mirror. Only fetched for round-0 primary rows
         # (mirror_of_log_id 0, review_round 0): a mirror's own round-0 row
@@ -1852,6 +1854,7 @@ section h2{color:var(--accent-soft)}
   <div class="side-item" data-tab="dashboard" onclick="switchTab('dashboard')"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12h7V3H3zM14 21h7v-9h-7zM14 9h7V3h-7zM3 21h7v-6H3z"/></svg><span>Dashboard</span></div>
   <a class="side-item side-secondary" data-tab="predict" href="/predict"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12h4l3-8 4 16 3-8h4"/></svg><span>Price Outlook</span></a>
   <div class="side-item" data-tab="crypto" onclick="switchTab('crypto')"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 17l6-6 4 4 8-8"/><path d="M17 7h4v4"/></svg><span>Signals</span></div>
+  <div class="side-item" data-tab="mirror" onclick="switchTab('mirror')"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 14c.2-1 .7-1.7 1.5-2.5 1-.9 1.5-2.2 1.5-3.5A6 6 0 0 0 6 8c0 1 .2 2.2 1.5 3.5.7.9 1.2 1.5 1.5 2.5"/><path d="M9 18h6"/><path d="M10 22h4"/></svg><span>Mirror Signals</span></div>
   <div class="side-item" data-tab="paper" onclick="switchTab('paper')"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18M3 12h18M3 18h12"/></svg><span>Paper Trading</span></div>
   <div class="side-item" data-tab="guard" onclick="switchTab('guard')"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l8 4v5c0 5-3.4 8.5-8 10-4.6-1.5-8-5-8-10V7z"/></svg><span>Session Guard</span></div>
   <div class="side-group">Analysis</div>
@@ -2075,6 +2078,15 @@ section h2{color:var(--accent-soft)}
   <section id="cr-commodities-section" style="display:none">
     <h2>Commodities</h2>
     <div id="cr-commodities"></div>
+  </section>
+</div>
+
+<div id="tab-mirror" class="tab-content">
+  <section>
+    <h2>Mirror Signals (last 24h)</h2>
+    <div class="cr-sig-tabs" id="cr-mirror-sig-tabs"></div>
+    <div id="cr-mirror-signals"><div class="empty">No mirror signals fired yet</div></div>
+    <div class="cr-pagination" id="cr-mirror-sig-pagination"></div>
   </section>
 </div>
 
@@ -2753,6 +2765,7 @@ async function loadHistoric(){
 const TAB_META = {
   dashboard:{title:'Dashboard',       sub:'Last 7 days'},
   crypto:   {title:'Signals',         sub:'Live market and recent predictions'},
+  mirror:   {title:'Mirror Signals',  sub:'Opposite direction setup review candidates'},
   paper:    {title:'Paper Trading',   sub:'Simulated only — never places a real order'},
   guard:    {title:'Session Guard',   sub:'Behavioural flags from your own trades'},
   accuracy: {title:'Accuracy',        sub:'Calibration, move size and setup performance'},
@@ -2975,6 +2988,72 @@ function renderCryptoSignalsPage(){
   }
 }
 
+let _crMirrorSignalsAll=[];
+let _crMirrorSignalFilter='ALL';
+let _crMirrorSignalPage=0;
+
+function renderMirrorSignals(signals){
+  _crMirrorSignalsAll=signals||[];
+  if(_crMirrorSignalFilter!=='ALL' && !_crMirrorSignalsAll.some(s=>s.symbol===_crMirrorSignalFilter)){
+    _crMirrorSignalFilter='ALL';
+  }
+  renderMirrorSignalTabs();
+  renderMirrorSignalsPage();
+}
+
+function renderMirrorSignalTabs(){
+  const el=document.getElementById('cr-mirror-sig-tabs');
+  if(!el) return;
+  const withSignals = new Set(_crMirrorSignalsAll.map(s=>s.symbol));
+  const symbols=[...new Set([..._crWatchlistSymbols, ...withSignals])].sort();
+  if(!symbols.length){el.innerHTML='';return;}
+  const counts={};
+  _crMirrorSignalsAll.forEach(s=>{counts[s.symbol]=(counts[s.symbol]||0)+1;});
+  const tab=(t,label,n)=>
+    `<button class="cr-sig-tab ${t===_crMirrorSignalFilter?'active':''}${n===0?' quiet':''}"
+      onclick="setMirrorSignalFilter('${esc(t)}')">${esc(label)}${
+      n===undefined?'':`<span class="cr-tab-n">${n}</span>`}</button>`;
+  el.innerHTML = tab('ALL','All',_crMirrorSignalsAll.length)
+    + symbols.map(sym=>tab(sym,sym,counts[sym]||0)).join('');
+}
+
+function setMirrorSignalFilter(sym){
+  _crMirrorSignalFilter=sym;
+  _crMirrorSignalPage=0;
+  renderMirrorSignalTabs();
+  renderMirrorSignalsPage();
+}
+
+function changeMirrorSignalPage(delta){
+  _crMirrorSignalPage+=delta;
+  renderMirrorSignalsPage();
+}
+
+function renderMirrorSignalsPage(){
+  const el=document.getElementById('cr-mirror-signals');
+  const pageEl=document.getElementById('cr-mirror-sig-pagination');
+  const filtered=_crMirrorSignalFilter==='ALL'?_crMirrorSignalsAll:_crMirrorSignalsAll.filter(s=>s.symbol===_crMirrorSignalFilter);
+
+  if(!filtered.length){
+    el.innerHTML='<div class="empty">No mirror signals in the last 24 hours</div>';
+    if(pageEl) pageEl.innerHTML='';
+    return;
+  }
+
+  const totalPages=Math.max(1,Math.ceil(filtered.length/CR_SIG_PAGE_SIZE));
+  _crMirrorSignalPage=Math.min(Math.max(0,_crMirrorSignalPage),totalPages-1);
+  const start=_crMirrorSignalPage*CR_SIG_PAGE_SIZE;
+  el.innerHTML=filtered.slice(start,start+CR_SIG_PAGE_SIZE).map(renderCryptoSignalCard).join('');
+
+  if(pageEl){
+    pageEl.innerHTML = totalPages<=1 ? '' : `
+      <button class="cr-page-btn" ${_crMirrorSignalPage===0?'disabled':''} onclick="changeMirrorSignalPage(-1)">‹ Prev</button>
+      <span class="cr-page-label">Page ${_crMirrorSignalPage+1} of ${totalPages}</span>
+      <button class="cr-page-btn" ${_crMirrorSignalPage>=totalPages-1?'disabled':''} onclick="changeMirrorSignalPage(1)">Next ›</button>`;
+  }
+}
+
+
 // Both readings, because they answer different questions: the stamp says
 // which row this was, the relative time says whether to care.
 //
@@ -3181,6 +3260,7 @@ function setHTML(id, value){
 const TAB_NEEDS = {
   dashboard: ['coins','signals'],
   crypto:    ['coins','signals','commodities'],
+  mirror:    ['mirror_signals'],
   watchlist: ['coins'],
   paper:     ['paper'],
 };
@@ -3200,15 +3280,17 @@ async function refresh(){
     setText('side-uptime', 'up ' + fmtUptime(status.uptime_seconds));
     setText('side-status', 'Running');
 
-    if(need.includes('coins') || need.includes('signals') || need.includes('commodities')){
-      const [crCoins,crSignals,crCommodities]=await Promise.all([
+    if(need.includes('coins') || need.includes('signals') || need.includes('commodities') || need.includes('mirror_signals')){
+      const [crCoins,crSignals,crCommodities, crMirrorSignals]=await Promise.all([
         need.includes('coins')       ? jget('/api/crypto/coins',[])   : Promise.resolve(null),
         need.includes('signals')     ? jget('/api/crypto/signals',[]) : Promise.resolve(null),
         need.includes('commodities') ? jget('/api/commodities',[])    : Promise.resolve(null),
+        need.includes('mirror_signals') ? jget('/api/crypto/signals?mirror=1',[]) : Promise.resolve(null),
       ]);
       if(crCoins){ setText('stat-crypto-coins', crCoins.length); renderCryptoCoins(crCoins); }
       if(crSignals){ setText('stat-crypto-signals', crSignals.length); renderCryptoSignals(crSignals); }
       if(crCommodities) renderCommodities(crCommodities);
+      if(crMirrorSignals){ setText('stat-mirror-signals', crMirrorSignals.length); renderMirrorSignals(crMirrorSignals); }
     }
 
     if(need.includes('paper')) await loadPaper();

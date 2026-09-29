@@ -111,7 +111,7 @@ class TestDroppedSignalsAreForgotten(unittest.TestCase):
         self.assertNotIn(("btcusdt", "confluence"), eng._cooldowns)
 
     def test_both_drop_points_call_it(self):
-        self.assertEqual(RUNNER.count("self.crypto_engine.forget(sig)"), 2)
+        self.assertEqual(RUNNER.count("self.crypto_engine.forget(sig)"), 3)
 
 
 class TestSmallerFixes(unittest.TestCase):

@@ -121,7 +121,7 @@ class Settings(BaseSettings):
     # The reviews it writes are stored with their news context so the local
     # model can study them later.
     llm_chain_pre_trade: str = (
-        "groq:openai/gpt-oss-120b, groq:openai/gpt-oss-20b, openrouter:qwen/qwen3.8-27b:free, openrouter:qwen/qwen3-32b")
+        "groq:qwen/qwen3.8-27b, groq:openai/gpt-oss-120b, groq:openai/gpt-oss-20b, openrouter:qwen/qwen3.8-27b:free, openrouter:qwen/qwen3-32b")
     # A quota is per-organization on Groq's free tier, so when it is hit
     # every Groq model in a chain fails together — the 21-25 Sep pattern
     # where the whole "why did it move" job went silent for hours because
@@ -296,14 +296,13 @@ class Settings(BaseSettings):
     # a few hundred headlines a day it is also the one that would cost the
     # most through a metered API. Local first, and the free tiers behind it.
     llm_chain_news_scoring: str = (
-        "ollama:qwen3:1.7b, groq:openai/gpt-oss-20b, gemini:gemini-3.1-flash-lite, "
-        "openrouter:qwen/qwen3-32b")
+        "groq:qwen/qwen3.8-27b, groq:openai/gpt-oss-20b")
 
     # Groq leads, not the laptop: this call sits inside the 30-second paper
     # tick with a 12-second budget, and an 8B model on the i5 needs 10-25 s
     # just to read the prompt. gemini-2.5-* is being shut down in October.
     llm_chain_position_review: str = (
-        "groq:openai/gpt-oss-120b, gemini:gemini-3.1-flash-lite, gemini:gemini-3.6-flash")
+        "groq:qwen/qwen3.8-27b, groq:openai/gpt-oss-20b, groq:openai/gpt-oss-120b")
 
     llm_chain_research: str = (
         "anthropic:claude-opus-5-5, anthropic:claude-opus-5, gemini:gemini-3.1-pro-preview")
@@ -390,7 +389,7 @@ class Settings(BaseSettings):
     bank_size: float = 10000.0
     signal_cooldown_minutes: int = 10
     crypto_min_confidence: float = 0.60
-    crypto_signal_cooldown_minutes: int = 15
+    crypto_signal_cooldown_minutes: int = 45
     crypto_snapshot_interval_seconds: int = 120
     crypto_alert_telegram: bool = True
     crypto_volume_spike_enabled: bool = True
@@ -470,6 +469,7 @@ class Settings(BaseSettings):
     delivery_leverage: float = 2.0                  # 1x to 3x swing leverage
     max_concurrent_intraday: int = 3                # Max simultaneous active intraday trades
     consecutive_loss_cooldown_minutes: int = 60     # Adaptive cooldown on 2 losses (60m-180m)
+    anti_flip_cooldown_minutes: int = 90
 
     # Ingest / API Auth & Security
     api_auth_token: str = ""

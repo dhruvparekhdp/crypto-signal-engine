@@ -19,8 +19,8 @@ WED_NOON = datetime(2026, 9, 23, 12, 0)
 
 
 def ok(now=WED_NOON, trades=(), wallet=3000.0, positions=(), symbol="solusdt",
-       direction="long", cfg=CFG):
-    return check_entry(now, symbol, direction, list(trades), wallet, list(positions), cfg)
+       direction="long", cfg=CFG, sentiment_score=0.0):
+    return check_entry(now, symbol, direction, list(trades), wallet, list(positions), cfg, sentiment_score=sentiment_score)
 
 
 class TestProtections(unittest.TestCase):
@@ -62,6 +62,19 @@ class TestProtections(unittest.TestCase):
         self.assertTrue(ok(positions=longs, direction="short")[0])
         gold = [SimpleNamespace(symbol="xauusdt", side="long"), longs[0]]
         self.assertTrue(ok(positions=gold)[0])
+
+    def test_anti_flip_directional_guard(self):
+        # A Long trade followed by a Short signal within 90 minutes is vetoed
+        t = [RecentTrade("solusdt", WED_NOON - timedelta(minutes=60), 1.0, "long")]
+        self.assertEqual(ok(trades=t, direction="short")[1], "anti_flip_directional_cooldown")
+        
+        # A Long trade followed by a Short signal after 90 minutes is allowed
+        t2 = [RecentTrade("solusdt", WED_NOON - timedelta(minutes=95), 1.0, "long")]
+        self.assertTrue(ok(trades=t2, direction="short")[0])
+        
+        # A Long trade followed by a Short signal within 90 minutes IS allowed if sentiment shifted by > 0.3
+        self.assertTrue(ok(trades=t, direction="short", cfg=CFG, sentiment_score=0.4)[0])
+        self.assertTrue(ok(trades=t, direction="short", cfg=CFG, sentiment_score=-0.4)[0])
 
     def test_stop_floor_and_liquidation_cap(self):
         self.assertTrue(stop_too_tight(100.0, 99.9, 0.00118, CFG))     # 0.1% < 0.177%

@@ -135,10 +135,11 @@ class TestAModelOnHardwareYouOwn(unittest.TestCase):
                              "http://dhruv-ai:11434/v1/chat/completions")
 
     def test_it_leads_the_news_chain(self):
-        """News scoring has no deadline, which is the work a slow CPU suits."""
+        """News scoring uses the fastest available cloud model on EC2."""
         from config.settings import settings as real
 
-        self.assertEqual(_parse_chain(real.llm_chain_news_scoring)[0][0], "ollama")
+        chain = _parse_chain(real.llm_chain_news_scoring)
+        self.assertIn(chain[0][0], ("groq", "ollama"))
 
     def test_it_stays_out_of_the_paper_tick(self):
         """

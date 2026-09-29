@@ -588,7 +588,7 @@ class AppRunner:
                 day_start_wallet = 0.0
                 if pending and protect.enabled:
                     rows_t = await repo.get_cycle_trades(cycle.id, 50)
-                    recent = [RecentTrade(t.symbol, t.closed_at, t.net_pnl)
+                    recent = [RecentTrade(t.symbol, t.closed_at, t.net_pnl, getattr(t, "direction", ""))
                               for t in rows_t if t.closed_at is not None]
                     today0 = now.replace(tzinfo=None, hour=0, minute=0, second=0,
                                          microsecond=0)
@@ -1609,6 +1609,85 @@ class AppRunner:
         except Exception:
             log.exception("news_sentiment_job_failed")
 
+    async def _hermes_rss_job(self) -> None:
+        """Fetch RSS feeds and score new headlines."""
+        if not settings.news_sentiment_enabled:
+            return
+
+        from collectors.hermes import fetch_feeds, set_watchlist, EVENT_TYPES
+        from collectors.llm_client import ask_json
+        from storage.repository import Repository
+        from storage.models import NewsSentiment
+        from storage.database import AsyncSessionFactory
+        from sqlalchemy import select
+
+        try:
+            symbols = await self.crypto_store.get_symbols()
+            set_watchlist(symbols)
+
+            batch = await fetch_feeds()
+            if not batch.headlines:
+                return
+
+            # Exclude already processed headlines
+            new_headlines = []
+            async with AsyncSessionFactory() as session:
+                for headline in batch.headlines:
+                    existing = await session.execute(
+                        select(NewsSentiment).where(NewsSentiment.external_id == headline.external_id).limit(1)
+                    )
+                    if existing.scalar_one_or_none() is None:
+                        new_headlines.append(headline)
+
+            if not new_headlines:
+                return
+
+            SYSTEM_PROMPT = (
+                "Score a news headline for a crypto trading desk. One headline, one JSON "
+                "object, nothing else.\n\n"
+                "score: -1.0 to 1.0, how this moves risk assets. A rate HIKE is negative. "
+                "A rate CUT is positive. War and tariffs are negative. ETF inflows and "
+                "adoption are positive. An exchange hack is negative.\n\n"
+                "confidence: 0.0 to 1.0. Be honest. A vague headline about 'experts "
+                "predicting' deserves 0.1, a stated Fed decision deserves 0.9.\n\n"
+                "Most headlines are noise. Price-prediction pieces, opinion, 'what to "
+                "watch', anything about a token nobody trades — score those 0.0 with "
+                "event_type 'noise'. A scorer that finds meaning in everything is a "
+                "scorer nobody can act on.\n\n"
+                f"event_type, use only these: {', '.join(EVENT_TYPES)}\n\n"
+                "symbol: which coin this is about, or 'all' if it affects the whole market.\n\n"
+                'JSON only: {"score": 0.0, "confidence": 0.0, "event_type": "noise", "symbol": "all"}'
+            )
+
+            scored_items = []
+            for headline in new_headlines:
+                try:
+                    reply = await ask_json("news_scoring", SYSTEM_PROMPT,
+                                           f"{headline.source}: {headline.headline}",
+                                           max_tokens=300, temperature=0.0, timeout=30.0)
+                    if not reply:
+                        continue
+                        
+                    headline.score = max(-1.0, min(1.0, float(reply.data.get("score") or 0.0)))
+                    headline.confidence = max(0.0, min(1.0, float(reply.data.get("confidence") or 0.0)))
+                    event = str(reply.data.get("event_type") or "").strip().lower()
+                    headline.event_type = event if event in EVENT_TYPES else "noise"
+                    headline.symbol = str(reply.data.get("symbol") or "all").lower()
+                    headline.model = reply.served_by
+                    
+                    scored_items.append(headline.as_payload())
+                except Exception as exc:
+                    log.warning("hermes_score_failed", error=str(exc)[:140])
+
+            if scored_items:
+                async with AsyncSessionFactory() as session:
+                    repo = Repository(session)
+                    accepted, duplicates = await repo.ingest_news_sentiment(scored_items)
+                    log.info("hermes_rss_job_completed", scored=len(scored_items), accepted=accepted, duplicates=duplicates)
+
+        except Exception:
+            log.exception("hermes_rss_job_failed")
+
     _CATEGORY_TO_EVENT_TYPE = {
         "central_bank": "rate_decision", "inflation": "inflation_data", "jobs": "jobs_data",
         "geopolitics_war": "war", "sanctions": "war", "trade_tariffs": "tariff",
@@ -2592,6 +2671,13 @@ class AppRunner:
             id="news_sentiment",
             max_instances=1,
             next_run_time=datetime.now(UTC),
+        )
+        self.scheduler.add_job(
+            self._hermes_rss_job,
+            "interval",
+            minutes=5,
+            id="hermes_rss",
+            max_instances=1,
         )
         if not settings.binance_only_mode:
             self.scheduler.add_job(

@@ -50,6 +50,7 @@ REASON_WORDS = {
     "losing_streak_pause": "3 losses in a row: 2-hour pause",
     "losing_streak_day_over": "5 losses in a row: done for the day",
     "pair_cooldown": "same coin closed < 15 min ago",
+    "anti_flip_directional_cooldown": "opposite direction trade too recent — waiting for market to settle",
     "correlated_exposure": "already 2 trades in that direction",
     "book_full_premium": "premium trade open: book full",
     "max_concurrent": "max open trades reached",

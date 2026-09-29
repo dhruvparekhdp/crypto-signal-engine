@@ -342,6 +342,7 @@ class Position:
     # keeps being labelled profit_lock rather than stop. Read by
     # close_position() to pick the exit reason.
     stop_moved_by_profit_lock: bool = False
+    runner_extended: bool = False
 
     trade_mode: str = "intraday"         # "intraday" | "delivery"
     tp1_price: float = 0.0               # First scale-out target (+1.0R)
@@ -708,11 +709,17 @@ class Position:
         trade into deep profit (>= 1.8R), while ratcheting trailing stop.
         Returns True if target was extended.
         """
-        r = self.r_multiple(mark)
-        if r < 1.8:
+        if getattr(self, "runner_extended", False):
             return False
 
         s = self.sign
+        # If target has already been reached or passed, do not extend — allow clean exit at target
+        if s * (mark - self.target_price) >= 0:
+            return False
+
+        r = self.r_multiple(mark)
+        if r < 1.8:
+            return False
         risk = self.risk_per_unit
         if risk <= 0:
             return False
@@ -723,6 +730,7 @@ class Position:
             new_target = self.entry_price + s * (max(current_target_r, r) + r_extension) * risk
             if s * (new_target - self.target_price) > 0:
                 self.target_price = new_target
+                self.runner_extended = True
                 # Ratchet stop to lock in at least +1.2R
                 lock_stop = self.entry_price + s * 1.2 * risk
                 if s * (lock_stop - self.stop_price) > 0:

@@ -52,10 +52,12 @@ class TestLiveCrossCheckWarning(unittest.TestCase):
 
     def test_the_check_runs_after_load_and_on_every_edit(self):
         from scheduler.settings_page import PAGE
+        import re
         # Wired into both the initial load and the two live-edit handlers,
         # so a change to either field re-evaluates it without a page reload.
         self.assertIn("renderPaper();\n  checkConfidenceFloors();", PAGE)
-        self.assertRegex(PAGE, r"function mark\(k,v\)\{.*checkConfidenceFloors\(\);\}")
+        # mark() may span multiple lines, so use re.DOTALL
+        self.assertTrue(re.search(r"function mark\(k,v\)\{.*checkConfidenceFloors\(\);", PAGE, re.DOTALL))
         self.assertRegex(PAGE, r"function markP\(k,v\)\{.*checkConfidenceFloors\(\);\}")
 
 

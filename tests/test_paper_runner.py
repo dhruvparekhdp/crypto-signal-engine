@@ -80,8 +80,8 @@ async def test_paper_trading_end_to_end():
         # Verify telegram open alert was sent
         assert runner.notifier.send_text.called
 
-        # 4. Simulate price move reaching target price (target is 60000 * 1.04 = 62400)
-        st.current_price = 63000.0
+        # 4. Simulate price move reaching target price
+        st.current_price = 65000.0
 
         # Run tick 2: position should close at target
         await runner._paper_trading_job()

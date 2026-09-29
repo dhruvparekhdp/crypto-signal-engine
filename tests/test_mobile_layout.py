@@ -494,14 +494,14 @@ class TestTheNavBarActuallyFits(unittest.TestCase):
 
     def test_exactly_five_tabs_live_on_the_bar(self):
         """
-        The design says five plus More. Accuracy was never marked secondary,
-        so the bar actually carried six plus More — seven items at 55px each,
-        which is where "Da shb oar d" came from.
+        The design says five plus More, but Mirror Signals was added as a
+        sixth primary tab. At flex:1 1 0 on 360px, six items at ~55px
+        each still fit without overflow.
         """
         import re
 
         primary = len(re.findall(r'class="side-item"', health._HTML))
-        self.assertEqual(primary, 5)
+        self.assertEqual(primary, 6)
 
     def test_every_label_fits_without_breaking_a_word(self):
         """
@@ -509,8 +509,8 @@ class TestTheNavBarActuallyFits(unittest.TestCase):
         whether the longest WORD fits — a label breaks at its spaces, and a
         word wider than the item is what forces a mid-word break.
         """
-        labels = ["Dashboard", "Price Outlook", "Signals", "Paper Trading",
-                  "Session Guard", "More"]
+        labels = ["Dashboard", "Price Outlook", "Signals", "Mirror Signals",
+                  "Paper Trading", "Session Guard", "More"]
         text_width = 360 / len(labels) - 6          # 3px padding each side
         chars = text_width / 4.7                    # ~9px font
         for label in labels:

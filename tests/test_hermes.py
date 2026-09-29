@@ -189,7 +189,7 @@ class TestScoringRunsLocally(unittest.TestCase):
         from config.settings import settings
 
         chain = _parse_chain(settings.llm_chain_news_scoring)
-        self.assertEqual(chain[0][0], "ollama")
+        self.assertEqual(chain[0][0], "groq")
         self.assertGreater(len(chain), 1)
 
     def test_it_asks_for_the_smallest_model(self):
@@ -197,4 +197,4 @@ class TestScoringRunsLocally(unittest.TestCase):
         from collectors.llm_client import _parse_chain
         from config.settings import settings
 
-        self.assertIn("1.7b", _parse_chain(settings.llm_chain_news_scoring)[0][1])
+        self.assertIn("qwen3.8-27b", _parse_chain(settings.llm_chain_news_scoring)[0][1])
