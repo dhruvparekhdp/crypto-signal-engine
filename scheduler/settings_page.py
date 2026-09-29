@@ -462,8 +462,12 @@ function control(f){const v=f.value, id='f-'+f.key;
   if(f.kind==='secret') return '<input class="inset" id="'+id+'" type="password" autocomplete="off" '
     +'spellcheck="false" style="width:170px;text-align:right;padding:9px 11px" placeholder="'
     +(f.is_set?'set — paste to replace':'not set')+'" '
-    +'onchange="if(this.value.trim())mark(\''+f.key+'\',this.value.trim());'
-    +'else this.value=\'\'">';
+    +'oninput="if(this.value.trim())mark(\''+f.key+'\',this.value.trim());else mark(\''+f.key+'\',\'\')" '
+    +'onchange="if(this.value.trim())mark(\''+f.key+'\',this.value.trim());else this.value=\'\'">';
+  if(f.kind==='str'||f.kind==='string') return '<input class="inset" id="'+id+'" type="text" autocomplete="off" '
+    +'spellcheck="false" style="width:230px;padding:9px 11px;font-size:12px" placeholder="https://..." value="'+esc(v||'')+'" '
+    +'oninput="mark(\''+f.key+'\',this.value.trim())" '
+    +'onchange="mark(\''+f.key+'\',this.value.trim())">';
   const utcHour=f.key.endsWith('_utc');
   return '<input class="num inset" id="'+id+'" type="number" step="'+(f.kind==='int'?1:0.01)+'"'
     +(f.lo!=null?' min="'+f.lo+'"':'')+(f.hi!=null?' max="'+f.hi+'"':'')+' value="'+esc(v)

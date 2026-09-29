@@ -23,7 +23,7 @@ class Field:
     group: str
     label: str
     help: str
-    kind: str = "bool"          # bool | int | float | choice | secret
+    kind: str = "bool"          # bool | int | float | choice | secret | str
     live: bool = True           # False: read once at startup
     lo: float | None = None
     hi: float | None = None
@@ -240,7 +240,7 @@ FIELDS: tuple[Field, ...] = (
           kind="secret"),
     Field("hf_base_url", "keys", "Hugging Face Space URL",
           "Dedicated web-search and market-analysis Space (e.g. https://user-analyst.hf.space)",
-          kind="choice"),
+          kind="str"),
     Field("hf_api_token", "keys", "Hugging Face API token",
           "Optional HF user token if Space is private or for higher rate limits. huggingface.co/settings/tokens",
           kind="secret"),
@@ -273,6 +273,8 @@ def coerce(field: Field, value):
         if value not in field.choices:
             raise ValueError(f"{field.key}: not one of {field.choices}")
         return value
+    if field.kind in ("str", "string"):
+        return "" if value is None else str(value).strip()
     if field.kind == "secret":
         # "" means "leave it as it is" — a key is never cleared by accident
         # from a blank box, and the caller filters "" out before saving so a
