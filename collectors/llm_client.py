@@ -200,10 +200,6 @@ PROVIDERS: dict[str, Provider] = {
     "hf": Provider(
         "hf", OPENAI_SHAPED, "/v1/chat/completions", "hf_api_token",
         endpoint_attr="hf_base_url", needs_key=True),
-    # SambaNova Cloud: high-speed inference for Llama 3.3 70B & DeepSeek
-    "sambanova": Provider(
-        "sambanova", OPENAI_SHAPED,
-        "https://api.sambanova.ai/v1/chat/completions", "sambanova_api_key"),
 }
 
 

@@ -51,9 +51,6 @@ class Settings(BaseSettings):
     groq_model: str = "qwen/qwen3.8-27b"
     groq_signal_review_enabled: bool = True
 
-    # SambaNova Cloud (DeepSeek-R1 671B, Llama 3.3 70B)
-    sambanova_api_key: SecretStr | None = None
-
     # What a REJECT verdict costs the signal's confidence. Sized to sink a
     # typical 0.70-0.75 setup below the threshold while leaving a strong one
     # standing: the reviewer gets a real say without a unilateral veto, and
