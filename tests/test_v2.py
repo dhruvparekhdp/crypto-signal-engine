@@ -337,3 +337,8 @@ class TestOwnerStyleExit(unittest.TestCase):
                 (100.3, 100.35, 98.9, 99.0)]
         (t,) = simulate([cand(target=103.0)], bars(rows), ex)
         self.assertEqual(t.reason, "stop")
+
+    def test_setup_c_range_fade_config(self):
+        cfg = V2Config(setups=("C",), session_filter=False)
+        self.assertEqual(cfg.range_min_bars, 10)
+        self.assertIn("C", cfg.setups)

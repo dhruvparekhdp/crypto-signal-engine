@@ -74,9 +74,16 @@ def _bench_summary(bench: dict) -> dict:
 
 def run_backtest(symbols: list[str], years: float = 2.0, cfg: V2Config = V2Config(),
                  ex: ExecConfig = ExecConfig(), root: str = "data/lake",
-                 log=print, benchmarks: bool = True, setup_variants: bool = True) -> dict:
-    end = pd.Timestamp.now("UTC").tz_localize(None).normalize()
-    start = end - pd.Timedelta(days=int(years * 365))
+                 log=print, benchmarks: bool = True, setup_variants: bool = True,
+                 start_ts: pd.Timestamp | None = None, end_ts: pd.Timestamp | None = None) -> dict:
+    if end_ts is not None:
+        end = pd.Timestamp(end_ts).tz_localize(None).normalize() if getattr(end_ts, "tzinfo", None) else pd.Timestamp(end_ts).normalize()
+    else:
+        end = pd.Timestamp.now("UTC").tz_localize(None).normalize()
+    if start_ts is not None:
+        start = pd.Timestamp(start_ts).tz_localize(None).normalize() if getattr(start_ts, "tzinfo", None) else pd.Timestamp(start_ts).normalize()
+    else:
+        start = end - pd.Timedelta(days=int(years * 365))
     warm = start - pd.Timedelta(days=40)     # indicators need history before the window
     all_trades, per_symbol, missing = [], {}, []
     from collections import defaultdict
@@ -175,3 +182,37 @@ def run_backtest(symbols: list[str], years: float = 2.0, cfg: V2Config = V2Confi
         "trades": trades_to_rows(all_trades),
     }
     return report
+
+
+def run_chunked_backtest(symbols: list[str], total_years: float = 4.0, chunk_years: float = 2.0,
+                         cfg: V2Config = V2Config(), ex: ExecConfig = ExecConfig(),
+                         root: str = "data/lake", log=print) -> dict:
+    """
+    Run backtest across sequential 2-year rolling chunks to prevent CPU/RAM exhaustion,
+    then merge the results into a unified multi-cycle report.
+    """
+    now_end = pd.Timestamp.now("UTC").tz_localize(None).normalize()
+    num_chunks = max(1, int(round(total_years / chunk_years)))
+    chunks_reports = []
+
+    for chunk_idx in range(num_chunks):
+        c_end = now_end - pd.Timedelta(days=int(chunk_idx * chunk_years * 365))
+        c_start = now_end - pd.Timedelta(days=int((chunk_idx + 1) * chunk_years * 365))
+        log(f"--- Running chunk {chunk_idx + 1}/{num_chunks}: {c_start.date()} to {c_end.date()} ---")
+        rep = run_backtest(symbols, years=chunk_years, cfg=cfg, ex=ex, root=root,
+                           log=log, benchmarks=(chunk_idx == 0), setup_variants=(chunk_idx == 0),
+                           start_ts=c_start, end_ts=c_end)
+        chunks_reports.append(rep)
+
+    primary = chunks_reports[0]
+    primary["multi_chunk"] = {
+        "num_chunks": num_chunks,
+        "total_years": total_years,
+        "chunk_years": chunk_years,
+        "chunks": [{"window": cr["window"],
+                    "trades": cr["overall"]["stats"]["trades"],
+                    "win_rate": cr["overall"]["stats"]["win_rate"],
+                    "expectancy_r": cr["overall"]["stats"]["expectancy_r"]}
+                   for cr in chunks_reports],
+    }
+    return primary

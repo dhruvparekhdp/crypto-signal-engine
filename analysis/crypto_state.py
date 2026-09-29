@@ -77,6 +77,7 @@ class CryptoState:
     volume_24h_avg: float = 0.0
     high_24h: float = 0.0
     low_24h: float = 0.0
+    btc_change_24h_pct: float | None = None
 
     # Candle histories for multiple timeframes
     candles_1m: list[OHLCVCandle] = field(default_factory=list)    # last 120-480 candles

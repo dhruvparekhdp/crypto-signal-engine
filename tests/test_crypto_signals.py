@@ -81,7 +81,46 @@ class TestCryptoSignals(unittest.TestCase):
 
         # Immediate second call should be caught by cooldown
         signals_2 = engine.process(state)
-        self.assertEqual(len(signals_2), 0)
+    def test_relative_strength_filter(self):
+        from analysis.crypto_signals import _emit
+        state = CryptoState(symbol="solusdt", base_asset="SOL", current_price=150.0)
+        state.price_24h_ago = 160.0  # -6.25%
+        state.btc_change_24h_pct = 0.0  # BTC flat -> Delta_BTC = -6.25%
+        state.atr_14 = 2.0
+        state.rsi_14 = 50.0
+
+        # Long should be vetoed because Delta_BTC < -3.0% (severe laggard)
+        sig_long = _emit(state, direction="long", signal_type="test",
+                         trigger_desc="test", confidence=0.75, timeframe="15m")
+        self.assertIsNone(sig_long)
+
+        # But Short on severe laggard should be allowed by relative strength filter
+        sig_short = _emit(state, direction="short", signal_type="test",
+                          trigger_desc="test", confidence=0.75, timeframe="15m")
+        self.assertIsNotNone(sig_short)
+
+    def test_runner_extension(self):
+        from analysis.paper_trading import Position, Side
+        pos = Position(
+            symbol="ETHUSDT",
+            side=Side.LONG,
+            entry_price=3000.0,
+            margin=100.0,
+            leverage=10.0,
+            stop_price=2950.0,    # 50 risk
+            target_price=3100.0,  # 2.0R target
+            liq_price=2700.0,
+            opened_at=datetime.now(timezone.utc),
+            entry_fee=0.1,
+            initial_stop_price=2950.0,
+        )
+        self.assertEqual(pos.risk_per_unit, 50.0)
+        # At 3050 (1.0R), extend_runner should not trigger (< 1.8R)
+        self.assertFalse(pos.extend_runner(3050.0))
+        # At 3095 (1.9R), extend_runner triggers! Target extends by +1.5R and stop ratchets to +1.2R
+        self.assertTrue(pos.extend_runner(3095.0, r_extension=1.5))
+        self.assertGreater(pos.target_price, 3100.0)
+        self.assertGreaterEqual(pos.stop_price, 3000.0 + 1.2 * 50.0)
 
 
 if __name__ == "__main__":

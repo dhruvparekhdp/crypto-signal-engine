@@ -483,6 +483,18 @@ class AppRunner:
 
                     before = _trade_snapshot(pos)
                     self._tick_notes = []
+                    # Dynamic Runner Extension:
+                    # If trade reaches >= 1.8R, extend target dynamically into runner mode (+1.5R)
+                    # and lock in at least +1.2R with trailing stop before resolve_at_price evaluates.
+                    if current_price is not None and current_price > 0 and pos.extend_runner(current_price):
+                        self._tick_notes.append(
+                            f"Runner extension activated at {pos.r_multiple(current_price):.1f}R: "
+                            f"target extended to {pos.target_price:.6g}, stop ratcheted to {pos.stop_price:.6g}"
+                        )
+                        log.info("paper_trade_runner_extended", symbol=pos.symbol,
+                                 r=round(pos.r_multiple(current_price), 2),
+                                 new_target=pos.target_price, new_stop=pos.stop_price)
+
                     trade = resolve_at_price(pos, current_price, now, cfg, wallet,
                                              lock=self._profit_lock())
                     if trade is None:
@@ -1152,6 +1164,11 @@ class AppRunner:
                 from analysis.paper_cycle import fees_for
                 pos.update_trail(state.current_price, state.current_price,
                                  cfg.trailing, fees_for(pos.symbol))
+            if review.confidence >= 0.70 and pos.extend_runner(state.current_price, r_extension=2.0):
+                self._tick_notes.append(
+                    f"AI Runner Extension: target extended to {pos.target_price:.6g}, "
+                    f"stop {pos.stop_price:.6g} (confidence {review.confidence:.2f})"
+                )
             return None
 
         if review.hold:
@@ -1162,12 +1179,15 @@ class AppRunner:
             self._tick_notes.append(
                 f"AI review: {review.verdict} · confidence {review.confidence:.2f} "
                 f"(chart read {review.trend:.2f}) · {review.summary[:140]}")
-        if review.asked_model:
-            held = (now - pos.opened_at).total_seconds() / 60.0
-            if held < settings.position_review_min_hold_minutes:
-                log.info("position_close_too_early", symbol=pos.symbol,
-                         held_minutes=round(held, 1))
-                return None
+
+        # Unconditional minimum hold guard: NO position may be closed early for conviction loss
+        # before the minimum hold time has elapsed (default 30 min, minimum 15 min).
+        held = (now - pos.opened_at).total_seconds() / 60.0
+        if held < max(15.0, float(settings.position_review_min_hold_minutes)):
+            log.info("position_close_too_early", symbol=pos.symbol,
+                     held_minutes=round(held, 1),
+                     min_required=max(15.0, float(settings.position_review_min_hold_minutes)))
+            return None
         if review.asked_model and settings.position_review_confirm_close:
             first = self._close_votes.get(pos.symbol)
             gap = settings.position_review_confirm_gap_minutes * 60
@@ -1446,11 +1466,15 @@ class AppRunner:
     async def _analyse_states(self, states, scfg, pcfg) -> None:
         """Run the detectors over every priced coin and hand on what fires."""
         try:
+            btc_state = next(
+                (s for s in states if s.symbol.lower() in ("btcusdt", "btc") or getattr(s, "base_asset", "").upper() == "BTC"),
+                None,
+            )
             for state in states:
                 if state.current_price <= 0:
                     continue
 
-                signals = self.crypto_engine.process(state)
+                signals = self.crypto_engine.process(state, btc_state=btc_state)
                 for sig in signals:
                     if (settings.crypto_min_confidence > 0
                             and sig.confidence < settings.crypto_min_confidence):
@@ -1928,8 +1952,12 @@ class AppRunner:
                 pass
 
         cmd = [sys.executable, "-m", "scripts.backtest_v2", "--latest",
-               "--symbols", ",".join(symbols), "--years", str(settings.v2_backtest_years),
+               "--symbols", ",".join(symbols),
                "--root", settings.v2_lake_dir, "--reports", settings.v2_reports_dir]
+        if settings.v2_backtest_years > 2.0:
+            cmd.extend(["--total-years", str(settings.v2_backtest_years), "--chunk-years", "2.0"])
+        else:
+            cmd.extend(["--years", str(settings.v2_backtest_years)])
         if settings.v2_backtest_download:
             cmd.append("--download")
         if not settings.session_filter_enabled:

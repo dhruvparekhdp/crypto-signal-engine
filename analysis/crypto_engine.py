@@ -39,8 +39,10 @@ class CryptoEngine:
         # same trade at a slightly later price, not a new idea.
         self._live: dict[tuple[str, str], CryptoSignal] = {}
 
-    def process(self, state: CryptoState) -> list[CryptoSignal]:
+    def process(self, state: CryptoState, btc_state: CryptoState | None = None) -> list[CryptoSignal]:
         """Evaluate all signal strategies against current crypto market state."""
+        if btc_state is not None and state.btc_change_24h_pct is None:
+            state.btc_change_24h_pct = btc_state.price_change_24h_pct
         if getattr(settings, "orderflow_enabled", True) and state.candles_1m:
             from analysis.orderflow import compute_cvd_trend
             state.cvd_trend = compute_cvd_trend(state.candles_1m)

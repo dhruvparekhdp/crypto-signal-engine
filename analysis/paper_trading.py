@@ -702,6 +702,36 @@ class Position:
             return True
         return False
 
+    def extend_runner(self, mark: float, r_extension: float = 1.5) -> bool:
+        """
+        Dynamically extend target price into runner mode when strong momentum pushes
+        trade into deep profit (>= 1.8R), while ratcheting trailing stop.
+        Returns True if target was extended.
+        """
+        r = self.r_multiple(mark)
+        if r < 1.8:
+            return False
+
+        s = self.sign
+        risk = self.risk_per_unit
+        if risk <= 0:
+            return False
+
+        current_target_r = self.r_multiple(self.target_price)
+        # If target has not been extended into deep runner mode (e.g. <= r + 0.5)
+        if current_target_r <= r + 0.5:
+            new_target = self.entry_price + s * (max(current_target_r, r) + r_extension) * risk
+            if s * (new_target - self.target_price) > 0:
+                self.target_price = new_target
+                # Ratchet stop to lock in at least +1.2R
+                lock_stop = self.entry_price + s * 1.2 * risk
+                if s * (lock_stop - self.stop_price) > 0:
+                    self.stop_price = lock_stop
+                    self.stop_moved_by_profit_lock = True
+                    self.trail_active = True
+                return True
+        return False
+
     @property
     def entry_slippage_pct(self) -> float:
         """How far the fill landed from the quoted price, signed against us."""

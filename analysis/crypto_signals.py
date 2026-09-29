@@ -155,6 +155,72 @@ def _emit(
         pipeline.no_setup("1h macro trend is bullish - shorting against macro trend", signal_type)
         return None
 
+    # RSI Velocity / Nose-Dive Filter:
+    # If 15m RSI dropped by > 15 points in the last 3 bars (free-fall dump),
+    # block Longs until 2 consecutive 15m candles close green AND RSI stabilizes > 35.
+    if direction == "long":
+        c15 = state.get_candles("15m")
+        closed_15m = [c for c in c15 if c.is_closed]
+        if len(closed_15m) >= 17:
+            closes15 = [c.close for c in closed_15m]
+            rsi_series_15m = ind.rsi_series(closes15, 14)
+            if len(rsi_series_15m) >= 4:
+                rsi_drop = rsi_series_15m[-4] - rsi_series_15m[-1]
+                if rsi_drop > 15.0:
+                    two_green = len(closed_15m) >= 2 and all(c.close > c.open for c in closed_15m[-2:])
+                    if not (two_green and state.rsi_14 > 35.0):
+                        log.info("signal_vetoed_rsi_velocity_drop", symbol=state.symbol,
+                                 rsi_drop=round(rsi_drop, 1), rsi=round(state.rsi_14, 1))
+                        pipeline.no_setup(
+                            f"RSI velocity drop ({rsi_drop:.1f} pts in 3 bars) - awaiting 2 green 15m bars & RSI > 35",
+                            signal_type,
+                        )
+                        return None
+
+    # Flash Liquidation Wick Volume Filter:
+    # Extreme volume spike (>4x median) with >=50% wick requires a 2-bar stabilization delay.
+    closed_1m = [c for c in state.candles_1m if c.is_closed]
+    if len(closed_1m) >= 22:
+        for offset in (1, 2):
+            idx = len(closed_1m) - offset
+            spike_bar = closed_1m[idx]
+            past_vols = [c.volume for c in closed_1m[max(0, idx - 20):idx]]
+            if len(past_vols) >= 10:
+                med_vol = sorted(past_vols)[len(past_vols) // 2]
+                if med_vol > 0 and spike_bar.volume >= 4.0 * med_vol:
+                    rng = spike_bar.high - spike_bar.low
+                    body = abs(spike_bar.close - spike_bar.open)
+                    if rng > 0 and (rng - body) / rng >= 0.5:
+                        if offset == 1:
+                            ratio = spike_bar.volume / med_vol
+                            log.info("signal_vetoed_flash_wick_stabilization", symbol=state.symbol,
+                                     vol_ratio=round(ratio, 1))
+                            pipeline.no_setup(
+                                f"1m flash volume spike ({ratio:.1f}x) - awaiting 2-bar stabilization",
+                                signal_type,
+                            )
+                            return None
+
+    # Market Movers Relative Strength Filter:
+    # Do not buy severe laggards (Delta_BTC < -3.0%)
+    # Do not short runaway market leaders (Delta_BTC > +3.0%)
+    if state.btc_change_24h_pct is not None and state.symbol.lower() not in ("btcusdt", "btc"):
+        delta_btc = state.price_change_24h_pct - state.btc_change_24h_pct
+        if direction == "long" and delta_btc < -3.0:
+            log.info("signal_vetoed_lagging_dump", symbol=state.symbol, delta_btc=round(delta_btc, 2))
+            pipeline.no_setup(
+                f"Relative weakness vs BTC ({delta_btc:+.1f}%) - not buying laggards",
+                signal_type,
+            )
+            return None
+        if direction == "short" and delta_btc > 3.0:
+            log.info("signal_vetoed_surging_leader", symbol=state.symbol, delta_btc=round(delta_btc, 2))
+            pipeline.no_setup(
+                f"Relative strength vs BTC ({delta_btc:+.1f}%) - not shorting market leader",
+                signal_type,
+            )
+            return None
+
     # Dual-Mode Routing: "delivery" (macro aligned swing) vs "intraday" (scalp)
     is_delivery = (
         timeframe in ("4h", "1d") or

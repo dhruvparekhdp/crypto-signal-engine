@@ -24,7 +24,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from analysis.v2_backtest import ExecConfig
-from analysis.v2_report import run_backtest
+from analysis.v2_report import run_backtest, run_chunked_backtest
 from analysis.v2_setups import SETUP_NAMES, V2Config
 
 DEFAULT_SYMBOLS = ["BTCUSDT", "ETHUSDT", "SOLUSDT", "XRPUSDT", "BNBUSDT", "LTCUSDT", "BCHUSDT"]
@@ -49,6 +49,10 @@ def main() -> int:
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--symbols", default=",".join(DEFAULT_SYMBOLS))
     ap.add_argument("--years", type=float, default=2.0)
+    ap.add_argument("--total-years", type=float, default=None,
+                    help="Total span in years to backtest in sequential chunks")
+    ap.add_argument("--chunk-years", type=float, default=2.0,
+                    help="Chunk window size in years (default 2.0 to conserve RAM/CPU)")
     ap.add_argument("--setups", default="A,B,C,D")
     ap.add_argument("--no-session", action="store_true", help="Trade all hours and days")
     ap.add_argument("--root", default="data/lake")
@@ -59,6 +63,7 @@ def main() -> int:
                     help="Also write backtest_v2_latest.json (what /v2 shows)")
     args = ap.parse_args()
 
+    load_years = args.total_years or args.years
     if args.download:
         import asyncio
         from argparse import Namespace
@@ -66,14 +71,19 @@ def main() -> int:
         from scripts.load_binance_lake import load
         asyncio.run(load(Namespace(
             market="um", kinds="klines,fundingRate", intervals="5m,15m,4h,1d",
-            symbols=args.symbols, years=args.years + 0.15, days=0, since="",
+            symbols=args.symbols, years=load_years + 0.15, days=0, since="",
             root=args.root, concurrency=4, dry_run=False)))
 
     cfg = V2Config(setups=tuple(s.strip().upper() for s in args.setups.split(",")),
                    session_filter=not args.no_session)
     ex = ExecConfig()
     symbols = [s.strip().upper() for s in args.symbols.split(",") if s.strip()]
-    report = run_backtest(symbols, args.years, cfg, ex, root=args.root)
+    if args.total_years and args.total_years > args.chunk_years:
+        report = run_chunked_backtest(symbols, total_years=args.total_years,
+                                      chunk_years=args.chunk_years, cfg=cfg, ex=ex,
+                                      root=args.root)
+    else:
+        report = run_backtest(symbols, args.years, cfg, ex, root=args.root)
     report["args"] = vars(args)
 
     print(f"\nv2 backtest {report['window'][0]} -> {report['window'][1]}, costs: maker "

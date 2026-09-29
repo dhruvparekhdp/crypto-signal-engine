@@ -9,8 +9,8 @@ judged on its own, all long/short mirrored:
                         (engulfing, pin, or 5m change of character up)
   B  sweep & reclaim    a 5m bar wicks through the previous day's low or the
                         last 15m swing low and closes back above it on volume
-  C  range fade         15m has made no break for 24+ bars; a rejection at the
-                        range edge, targeting the middle
+  C  range fade         15m has made no break for 8-12 bars; a rejection at the
+                        range edge, targeting the opposite boundary
   D  breakout-retest    15m broke a swing high in the last 8 bars; price comes
                         back to the level, holds it, and closes above
 
@@ -53,7 +53,7 @@ class V2Config:
     funding_z_max: float = 2.0
     trigger_vol_mult: float = 1.2
     sweep_vol_mult: float = 1.5
-    range_min_bars: int = 24
+    range_min_bars: int = 10
     retest_max_bars: int = 8
     stop_atr_buffer: float = 0.25          # used by A
     # D used a bare 0.1 hardcoded in the rule, 2.5x tighter than A's
@@ -229,7 +229,7 @@ def generate(symbol: str, k5: pd.DataFrame, k15: pd.DataFrame, k4h: pd.DataFrame
             / k5["volume"].groupby(day).cumsum().replace(0, np.nan)).to_numpy()
 
     o15, c15 = k15["open"].to_numpy(), k15["close"].to_numpy()
-    chop = choppiness(k15).to_numpy() if cfg.regime_routing else None
+    chop = choppiness(k15).to_numpy() if (cfg.regime_routing or "C" in cfg.setups) else None
     hot = None
     if cfg.regime_routing:
         atr_pct = pd.Series(a15) / k15["close"].reset_index(drop=True)
@@ -347,17 +347,25 @@ def generate(symbol: str, k5: pd.DataFrame, k15: pd.DataFrame, k4h: pd.DataFrame
                     add("B", "short", stop, entry - 2 * (stop - entry), level=float(level))
                     break
 
-        # C. range fade at the edge of a quiet 15m range, target the middle.
-        if st15[j] == "range" or since15[j] >= cfg.range_min_bars:
+        # C. range fade at the edge of an oscillating 15m range, targeting the opposite boundary.
+        is_range_regime = (st15[j] == "range") or (since15[j] >= cfg.range_min_bars) or (
+            chop is not None and not np.isnan(chop[j]) and chop[j] > 50
+        )
+        if is_range_regime:
             w0 = max(0, j - cfg.range_min_bars + 1)
             top, bot = h15[w0:j + 1].max(), l15[w0:j + 1].min()
-            mid = (top + bot) / 2
-            if since15[j] >= cfg.range_min_bars and top > bot:
-                if allow_long and lo[i] <= bot + 0.1 * atr15 and (bull_pin or bull_engulf):
-                    add("C", "long", bot - cfg.stop_atr_buffer * atr15, mid,
+            if top > bot and (top - bot) >= 1.2 * atr15:
+                # Fading the edge targets the opposite boundary with a 0.2 ATR buffer,
+                # ensuring risk:reward >= 1.8R and easily clearing the 3x fee hurdle.
+                target_long = top - 0.2 * atr15
+                target_short = bot + 0.2 * atr15
+                stop_long = bot - cfg.stop_atr_buffer * atr15
+                stop_short = top + cfg.stop_atr_buffer * atr15
+                if allow_long and lo[i] <= bot + 0.2 * atr15 and (bull_pin or bull_engulf or green):
+                    add("C", "long", stop_long, target_long,
                         range_low=float(bot), range_high=float(top))
-                if allow_short and h[i] >= top - 0.1 * atr15 and (bear_pin or bear_engulf):
-                    add("C", "short", top + cfg.stop_atr_buffer * atr15, mid,
+                if allow_short and h[i] >= top - 0.2 * atr15 and (bear_pin or bear_engulf or red):
+                    add("C", "short", stop_short, target_short,
                         range_low=float(bot), range_high=float(top))
 
         # D. retest of a level the 15m just broke.
