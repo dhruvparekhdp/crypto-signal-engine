@@ -987,6 +987,8 @@ def _trade_row(t) -> dict:
         "closed_at": _iso(t.closed_at),
         "opened_at": _iso(t.opened_at),
         "qty": t.coin_qty,
+        "trade_mode": getattr(t, "trade_mode", "intraday"),
+        "partial_pnl": round(getattr(t, "partial_pnl", 0.0) or 0.0, 2),
         # Money on this row is INR at the rate the trade was booked at, not
         # today's. Sent so the page converts instead of assuming.
         "usdt_inr": getattr(t, "usdt_inr", 0.0) or 102.0,

@@ -492,6 +492,13 @@ class Position:
         self.peak_price = s * max(s * (self.peak_price or price), s * price)
         best = self.peak_price
         at_pct = lock.at_pct
+        trail_pct = lock.trail_pct
+        # Breathable cap: Delivery swing positions target macro moves (7-15% targets)
+        # with wide stops (2-3%), so profit-lock must not strangle them at 0.5% with 0.15% trail.
+        if getattr(self, "trade_mode", "intraday") == "delivery":
+            at_pct = max(at_pct * 3.0, 1.5)
+            trail_pct = max((trail_pct or 0.15) * 3.0, 0.50)
+
         if lock.defers_to_trail and trail is not None and trail.enabled:
             risk = self.risk_per_unit
             if risk > 0 and self.entry_price > 0:
@@ -505,10 +512,10 @@ class Position:
             cost += 2 * slippage.spread_pct + slippage.stop_extra_pct
         lock_to = max(lock.to_pct / 100, cost)
         new = self.entry_price * (1 + s * lock_to)
-        if lock.trail_pct:
-            trail_level = best * (1 - s * lock.trail_pct / 100)
+        if trail_pct:
+            trail_level = best * (1 - s * trail_pct / 100)
             new = max(new, trail_level) if s > 0 else min(new, trail_level)
-        ceiling = price * (1 - s * (lock.trail_pct or 0.05) / 100)
+        ceiling = price * (1 - s * (trail_pct or 0.05) / 100)
         new = min(new, ceiling) if s > 0 else max(new, ceiling)
         if s * (new - self.stop_price) <= 0:
             return False
