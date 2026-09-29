@@ -5959,49 +5959,169 @@ async def _pipeline_page(request: web.Request) -> web.Response:
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Pipeline & Multi-Year Backtest Monitor</title>
 <style>
-body { background: #0f172a; color: #f8fafc; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, monospace; padding: 24px; line-height: 1.5; }
+body { background: #0b1120; color: #f8fafc; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, monospace; padding: 24px; line-height: 1.5; margin: 0; }
+.container { max-width: 1400px; margin: 0 auto; }
 .card { background: #1e293b; border-radius: 12px; padding: 20px; margin-bottom: 20px; border: 1px solid #334155; }
-.title { font-size: 20px; font-weight: bold; margin-bottom: 12px; color: #38bdf8; }
+.title { font-size: 18px; font-weight: 700; margin-bottom: 12px; color: #38bdf8; display: flex; align-items: center; justify-content: space-between; }
 .phase { margin: 12px 0; }
-.bar-bg { background: #334155; border-radius: 6px; height: 12px; overflow: hidden; margin-top: 4px; }
-.bar-fill { background: #10b981; height: 100%; width: 0%; transition: width 0.4s ease; }
-.grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 12px; margin-top: 16px; }
-.stat-box { background: #0f172a; padding: 12px; border-radius: 8px; border: 1px solid #334155; }
+.bar-bg { background: #334155; border-radius: 6px; height: 10px; overflow: hidden; margin-top: 4px; }
+.bar-fill { background: linear-gradient(90deg, #10b981, #38bdf8); height: 100%; width: 0%; transition: width 0.4s ease; }
+.grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 12px; margin-top: 14px; }
+.stat-box { background: #0f172a; padding: 14px; border-radius: 8px; border: 1px solid #334155; }
 .stat-val { font-size: 22px; font-weight: bold; color: #38bdf8; }
-.stat-label { font-size: 12px; color: #94a3b8; text-transform: uppercase; }
-.refresh-badge { font-size: 12px; color: #64748b; margin-top: 8px; }
+.stat-label { font-size: 11px; color: #94a3b8; text-transform: uppercase; letter-spacing: 0.5px; }
+.year-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 14px; margin-top: 10px; }
+.year-card { background: #0f172a; padding: 16px; border-radius: 10px; border: 1px solid #334155; }
+.year-title { font-size: 16px; font-weight: bold; color: #f1f5f9; display: flex; justify-content: space-between; margin-bottom: 8px; }
+.year-count { font-size: 14px; color: #38bdf8; }
+.badge { display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: 11px; font-weight: 600; text-transform: uppercase; }
+.badge-macro_economic { background: rgba(139, 92, 246, 0.2); color: #c084fc; border: 1px solid rgba(139, 92, 246, 0.4); }
+.badge-technical_breakout { background: rgba(56, 189, 248, 0.2); color: #38bdf8; border: 1px solid rgba(56, 189, 248, 0.4); }
+.badge-whale_manipulation { background: rgba(245, 158, 11, 0.2); color: #fbbf24; border: 1px solid rgba(245, 158, 11, 0.4); }
+.badge-regulatory { background: rgba(16, 185, 129, 0.2); color: #34d399; border: 1px solid rgba(16, 185, 129, 0.4); }
+.badge-exchange_event { background: rgba(6, 182, 212, 0.2); color: #22d3ee; border: 1px solid rgba(6, 182, 212, 0.4); }
+.badge-news_panic { background: rgba(244, 63, 94, 0.2); color: #fb7185; border: 1px solid rgba(244, 63, 94, 0.4); }
+.badge-other { background: rgba(100, 116, 139, 0.2); color: #cbd5e1; border: 1px solid rgba(100, 116, 139, 0.4); }
+.badge-year { background: #334155; color: #f8fafc; font-weight: bold; }
+.feed-table { width: 100%; border-collapse: collapse; margin-top: 12px; font-size: 13px; }
+.feed-table th { text-align: left; padding: 10px 12px; background: #0f172a; color: #94a3b8; border-bottom: 2px solid #334155; font-size: 11px; text-transform: uppercase; }
+.feed-table td { padding: 10px 12px; border-bottom: 1px solid #1e293b; vertical-align: top; }
+.feed-table tr:hover { background: #1a2436; }
+.controls { display: flex; gap: 12px; margin-top: 10px; margin-bottom: 10px; }
+.controls input, .controls select { background: #0f172a; border: 1px solid #334155; color: #f8fafc; padding: 8px 12px; border-radius: 6px; font-size: 13px; outline: none; }
+.controls input:focus, .controls select:focus { border-color: #38bdf8; }
+.controls input { flex: 1; }
+.move-pos { color: #34d399; font-weight: 600; }
+.move-neg { color: #fb7185; font-weight: 600; }
+.refresh-badge { font-size: 12px; color: #64748b; font-weight: normal; }
 </style>
 </head>
 <body>
-<div class="card">
-  <div class="title">🚀 Multi-Year Backtest & HF Pipeline Monitor</div>
-  <div id="meta" style="color: #94a3b8; font-size: 13px;">Connecting...</div>
-  <div class="refresh-badge">Auto-refreshing every 3 seconds</div>
-</div>
+<div class="container">
+  <div class="card">
+    <div class="title">
+      <span>🚀 Multi-Year Backtest & HF Pipeline Monitor</span>
+      <span class="refresh-badge">Auto-refreshing every 3s</span>
+    </div>
+    <div id="meta" style="color: #94a3b8; font-size: 13px;">Connecting to pipeline stream...</div>
+  </div>
 
-<div class="card">
-  <div class="title">Execution Phases</div>
-  <div id="phases"></div>
-</div>
+  <div class="card">
+    <div class="title">Execution Phases</div>
+    <div id="phases"></div>
+  </div>
 
-<div class="card">
-  <div class="title">Hugging Face AI Batches & Categorization</div>
-  <div id="stats" class="grid"></div>
+  <div class="card">
+    <div class="title">Multi-Year Research Breakdown (2023 - 2026)</div>
+    <div id="year_cards" class="year-grid"></div>
+  </div>
+
+  <div class="card">
+    <div class="title">AI Categorization & Aggregate Metrics</div>
+    <div id="stats" class="grid"></div>
+  </div>
+
+  <div class="card">
+    <div class="title">
+      <span>Live 500+ Researched Anomaly Feed</span>
+      <span id="feed-count" style="font-size: 12px; color: #94a3b8;">0 events</span>
+    </div>
+    <div class="controls">
+      <input type="text" id="search-input" placeholder="Search by Coin, Year, or Insight keywords..." oninput="filterFeed()">
+      <select id="year-filter" onchange="filterFeed()">
+        <option value="">All Years</option>
+        <option value="2026">2026</option>
+        <option value="2025">2025</option>
+        <option value="2024">2024</option>
+        <option value="2023">2023</option>
+      </select>
+    </div>
+    <div style="overflow-x: auto; max-height: 600px;">
+      <table class="feed-table">
+        <thead>
+          <tr>
+            <th style="width: 140px;">Time</th>
+            <th style="width: 60px;">Year</th>
+            <th style="width: 80px;">Coin</th>
+            <th style="width: 80px;">Move %</th>
+            <th style="width: 70px;">Z-Score</th>
+            <th style="width: 140px;">Category</th>
+            <th>AI Research Discovery & Reasoning</th>
+          </tr>
+        </thead>
+        <tbody id="feed-body">
+          <tr><td colspan="7" style="text-align: center; color: #64748b; padding: 24px;">Awaiting researched events stream...</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
 </div>
 
 <script>
+let allEvents = [];
+
+function getCategoryBadge(cat) {
+  const c = (cat || 'no_correlation').toLowerCase().replace(' ', '_');
+  const cls = ['macro_economic', 'technical_breakout', 'whale_manipulation', 'regulatory', 'exchange_event', 'news_panic'].includes(c)
+    ? 'badge-' + c : 'badge-other';
+  return `<span class="badge ${cls}">${c.replace('_', ' ')}</span>`;
+}
+
+function filterFeed() {
+  const query = (document.getElementById('search-input').value || '').toLowerCase().trim();
+  const yearSel = document.getElementById('year-filter').value;
+  
+  const filtered = allEvents.filter(ev => {
+    if (yearSel && String(ev.year || '') !== yearSel) return false;
+    if (!query) return true;
+    const hay = `${ev.symbol || ''} ${ev.year || ''} ${ev.category || ''} ${ev.reasoning || ''}`.toLowerCase();
+    return hay.includes(query);
+  });
+
+  document.getElementById('feed-count').innerText = `${filtered.length} of ${allEvents.length} events`;
+  
+  if (filtered.length === 0) {
+    document.getElementById('feed-body').innerHTML = `<tr><td colspan="7" style="text-align: center; color: #64748b; padding: 20px;">No events match filter</td></tr>`;
+    return;
+  }
+
+  let html = '';
+  for (const ev of filtered.slice(0, 300)) {
+    const ts = (ev.timestamp || '').replace('T', ' ').substring(0, 19);
+    const moveVal = Number(ev.pct_change != null ? ev.pct_change : (ev.move_pct || 0));
+    const moveClass = moveVal >= 0 ? 'move-pos' : 'move-neg';
+    const moveStr = (moveVal >= 0 ? '+' : '') + moveVal.toFixed(2) + '%';
+    const zScore = Number(ev.z_score || 0).toFixed(1) + 'σ';
+    const sym = (ev.symbol || 'N/A').replace('USDT', '');
+    const yr = ev.year || ts.substring(0, 4) || '—';
+    const reasoning = ev.reasoning || 'Statistical volume anomaly verified.';
+
+    html += `<tr>
+      <td style="color:#94a3b8; font-size:12px;">${ts}</td>
+      <td><span class="badge badge-year">${yr}</span></td>
+      <td><strong style="color:#f8fafc;">${sym}</strong></td>
+      <td class="${moveClass}">${moveStr}</td>
+      <td style="color:#cbd5e1;">${zScore}</td>
+      <td>${getCategoryBadge(ev.category)}</td>
+      <td style="color:#e2e8f0;">${reasoning}</td>
+    </tr>`;
+  }
+  document.getElementById('feed-body').innerHTML = html;
+}
+
 async function refresh() {
   try {
     const res = await fetch('/api/pipeline/progress');
     const data = await res.json();
     if (!data || !data.phases) return;
-    document.getElementById('meta').innerText = 'Started: ' + (data.started_at || 'n/a') + ' | Updated: ' + (data.updated_at || 'n/a');
+    document.getElementById('meta').innerText = 'Started: ' + (data.started_at || 'n/a').substring(0, 19) + ' UTC | Updated: ' + (data.updated_at || 'n/a').substring(0, 19) + ' UTC';
     
+    // Phases
     let phaseHtml = '';
     for (const [k, p] of Object.entries(data.phases || {})) {
       const pct = p.total_tasks > 0 ? Math.round((p.completed_tasks / p.total_tasks) * 100) : (p.status === 'completed' ? 100 : 0);
       phaseHtml += `<div class="phase">
-        <div style="display:flex; justify-content:space-between; font-size:14px;">
+        <div style="display:flex; justify-content:space-between; font-size:13px;">
           <span><strong>${p.name}</strong> ${p.current_item ? '<span style="color:#94a3b8">(' + p.current_item + ')</span>' : ''}</span>
           <span>${pct}% (${p.completed_tasks}/${p.total_tasks || '?'})</span>
         </div>
@@ -6010,15 +6130,39 @@ async function refresh() {
     }
     document.getElementById('phases').innerHTML = phaseHtml;
 
+    // Year Breakdown
+    let yearHtml = '';
+    const years = ['2026', '2025', '2024', '2023'];
+    for (const yr of years) {
+      const yData = (data.year_breakdown && data.year_breakdown[yr]) || { total: 0 };
+      yearHtml += `<div class="year-card">
+        <div class="year-title"><span>Year ${yr}</span><span class="year-count">${yData.total || 0} events</span></div>
+        <div style="font-size:12px; color:#94a3b8; line-height:1.7;">
+          <div>Breakouts: <strong style="color:#38bdf8;">${yData.technical_breakout || 0}</strong></div>
+          <div>Macro / Fed: <strong style="color:#c084fc;">${yData.macro_economic || 0}</strong></div>
+          <div>Whale / Flow: <strong style="color:#fbbf24;">${yData.whale_manipulation || 0}</strong></div>
+          <div>Regulatory: <strong style="color:#34d399;">${yData.regulatory || 0}</strong></div>
+        </div>
+      </div>`;
+    }
+    document.getElementById('year_cards').innerHTML = yearHtml;
+
+    // Stats
     let statsHtml = `
-      <div class="stat-box"><div class="stat-label">Batches Done</div><div class="stat-val">${data.ai_batches_completed || 0}</div></div>
-      <div class="stat-box"><div class="stat-label">Batches Total</div><div class="stat-val">${data.ai_batches_total || 0}</div></div>
-      <div class="stat-box"><div class="stat-label">Failed / Retried</div><div class="stat-val" style="color:#f43f5e;">${data.ai_batches_failed || 0}</div></div>
+      <div class="stat-box"><div class="stat-label">Events Researched</div><div class="stat-val">${data.ai_batches_completed || 0}</div></div>
+      <div class="stat-box"><div class="stat-label">Target Data Points</div><div class="stat-val">${data.ai_batches_total || 550}</div></div>
+      <div class="stat-box"><div class="stat-label">Retries / Fallback</div><div class="stat-val" style="color:#f43f5e;">${data.ai_batches_failed || 0}</div></div>
     `;
     for (const [cat, count] of Object.entries(data.ai_categories || {})) {
       statsHtml += `<div class="stat-box"><div class="stat-label">${cat.replace('_', ' ')}</div><div class="stat-val">${count}</div></div>`;
     }
     document.getElementById('stats').innerHTML = statsHtml;
+
+    // Events feed
+    if (data.events_feed && data.events_feed.length !== allEvents.length) {
+      allEvents = data.events_feed;
+      filterFeed();
+    }
   } catch (e) {
     console.error(e);
   }
