@@ -168,7 +168,7 @@ class ProgressTracker:
                 p.details.update(details)
             self.save()
 
-    def add_event_detail(self, event: dict) -> None:
+    def add_event_detail(self, event: dict, auto_save: bool = True) -> None:
         """Record an individual analyzed event with year attribution and insight."""
         cat_clean = event.get("category", "no_correlation").lower().strip()
         if cat_clean not in self.state.ai_categories:
@@ -194,13 +194,14 @@ class ProgressTracker:
         self.state.year_breakdown[year]["total"] += 1
         self.state.year_breakdown[year][cat_clean] = self.state.year_breakdown[year].get(cat_clean, 0) + 1
 
-        # Append to feed (prepend so most recent is first, capped at 1000)
+        # Append to feed (prepend so most recent is first, capped at 3500)
         self.state.events_feed.insert(0, event)
-        if len(self.state.events_feed) > 1000:
-            self.state.events_feed = self.state.events_feed[:1000]
+        if len(self.state.events_feed) > 3500:
+            self.state.events_feed = self.state.events_feed[:3500]
 
         self.state.ai_batches_completed += 1
-        self.save()
+        if auto_save:
+            self.save()
 
     def record_ai_batch(self, category: str, success: bool = True) -> None:
         if success:
