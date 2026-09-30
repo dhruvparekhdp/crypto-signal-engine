@@ -576,8 +576,8 @@ async def call_ai_batch_trade_reasoning(
             if attempt > 0:
                 await asyncio.sleep(1.0)
             try:
-                reply = await ask_json("briefing", system_prompt, user_content,
-                                       max_tokens=600, temperature=0.1, timeout=30.0)
+                reply = await ask_json("position_review", system_prompt, user_content,
+                                       max_tokens=600, temperature=0.1, timeout=20.0)
                 if reply and isinstance(reply.data, dict) and reply.data.get("trades"):
                     break
             except Exception as e:
