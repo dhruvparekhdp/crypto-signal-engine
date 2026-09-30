@@ -5935,7 +5935,12 @@ async def make_app(runner) -> web.Application:
     app.router.add_get("/api/debug/null-test", _bind(_api_debug_null_test))
     app.router.add_get("/api/pipeline/progress", _bind(_api_pipeline_progress))
     app.router.add_get("/pipeline", _pipeline_page)
+    from scheduler.chart_page import api_chart_klines, api_chart_overlays, chart_page
+    app.router.add_get("/api/chart/klines", _bind(api_chart_klines))
+    app.router.add_get("/api/chart/overlays", _bind(api_chart_overlays))
+    app.router.add_get("/chart", chart_page)
     from scheduler.v2_pages import register as _register_v2_pages
+
     _register_v2_pages(app, runner)
     return app
 
@@ -5998,13 +6003,21 @@ body { background: #0b1120; color: #f8fafc; font-family: -apple-system, BlinkMac
 </head>
 <body>
 <div class="container">
+  <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:16px;">
+    <div style="display:flex; gap:16px; font-size:13px;">
+      <a href="/" style="color:#94a3b8; text-decoration:none; font-weight:500;">← Main Dashboard</a>
+      <a href="/pipeline" style="color:#38bdf8; text-decoration:none; font-weight:bold;">⚡ Pipeline Monitor</a>
+      <a href="/chart" style="color:#38bdf8; text-decoration:none; font-weight:500;">📊 Interactive TradingView Chart</a>
+    </div>
+    <span class="refresh-badge">Auto-refreshing every 3s</span>
+  </div>
   <div class="card">
     <div class="title">
       <span>🚀 Multi-Year Backtest & HF Pipeline Monitor</span>
-      <span class="refresh-badge">Auto-refreshing every 3s</span>
     </div>
     <div id="meta" style="color: #94a3b8; font-size: 13px;">Connecting to pipeline stream...</div>
   </div>
+
 
   <div class="card">
     <div class="title">Execution Phases</div>
