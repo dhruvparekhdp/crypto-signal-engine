@@ -6025,9 +6025,36 @@ body { background: #0b1120; color: #f8fafc; font-family: -apple-system, BlinkMac
   </div>
 
   <div class="card">
+    <div class="title">
+      <span>📈 Multi-Window Strategy & Paper Trading Scorecards (1m, 6m, 1y, 2y, 3y)</span>
+      <span style="font-size: 12px; color: #94a3b8;" id="scorecard-summary">Live Simulated Performance</span>
+    </div>
+    <div style="overflow-x: auto; max-height: 480px;">
+      <table class="feed-table" id="scorecard-table">
+        <thead>
+          <tr>
+            <th style="width: 100px;">Coin</th>
+            <th style="width: 80px;">Window</th>
+            <th style="width: 130px;">Paper Trades</th>
+            <th style="width: 110px;">Win Rate %</th>
+            <th style="width: 110px;">Profit Factor</th>
+            <th style="width: 120px;">Max DD (R)</th>
+            <th style="width: 120px;">Anti-Flip Vetos</th>
+            <th>60m Timeouts Saved</th>
+          </tr>
+        </thead>
+        <tbody id="scorecard-body">
+          <tr><td colspan="8" style="text-align:center; color:#94a3b8;">Loading multi-window strategy scorecards...</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <div class="card">
     <div class="title">Multi-Year Research Breakdown (2023 - 2026)</div>
     <div id="year_cards" class="year-grid"></div>
   </div>
+
 
   <div class="card">
     <div class="title">AI Categorization & Aggregate Metrics</div>
@@ -6133,15 +6160,50 @@ async function refresh() {
     let phaseHtml = '';
     for (const [k, p] of Object.entries(data.phases || {})) {
       const pct = p.total_tasks > 0 ? Math.round((p.completed_tasks / p.total_tasks) * 100) : (p.status === 'completed' ? 100 : 0);
+      let unit = '';
+      if (k.includes('cycle')) unit = ' cycles';
+      else if (k.includes('volume')) unit = ' events';
+      else if (k.includes('backtest')) unit = ' paper trades';
+      else if (k.includes('data_download')) unit = ' coins';
+      else if (k.includes('reasoning')) unit = ' AI batches';
+
+      const compStr = Number(p.completed_tasks).toLocaleString();
+      const totStr = Number(p.total_tasks || 0).toLocaleString();
       phaseHtml += `<div class="phase">
         <div style="display:flex; justify-content:space-between; font-size:13px;">
           <span><strong>${p.name}</strong> ${p.current_item ? '<span style="color:#94a3b8">(' + p.current_item + ')</span>' : ''}</span>
-          <span>${pct}% (${p.completed_tasks}/${p.total_tasks || '?'})</span>
+          <span>${pct}% (${compStr} / ${totStr}${unit})</span>
         </div>
         <div class="bar-bg"><div class="bar-fill" style="width: ${pct}%;"></div></div>
       </div>`;
     }
     document.getElementById('phases').innerHTML = phaseHtml;
+
+    // Multi-Window Scorecards
+    if (data.backtest_scorecards && Object.keys(data.backtest_scorecards).length > 0) {
+      let scHtml = '';
+      let totalTradesSum = 0;
+      for (const [k, sc] of Object.entries(data.backtest_scorecards)) {
+        totalTradesSum += (sc.trades || 0);
+        const wr = (sc.win_rate * 100).toFixed(1);
+        const pf = sc.profit_factor;
+        const pfClass = pf >= 1.2 ? 'move-pos' : (pf >= 1.0 ? 'style="color:#38bdf8;"' : 'move-neg');
+        const wrClass = wr >= 45.0 ? 'move-pos' : 'style="color:#f1f5f9;"';
+        scHtml += `<tr>
+          <td><strong style="color:#f8fafc;">${sc.symbol}</strong></td>
+          <td><span class="badge badge-year">${sc.window_label || sc.window_years + 'y'}</span></td>
+          <td style="font-weight:bold; color:#38bdf8;">${Number(sc.trades).toLocaleString()}</td>
+          <td class="${wrClass}">${wr}%</td>
+          <td class="${pfClass}">${pf}</td>
+          <td style="color:#fb7185;">${sc.max_drawdown_r} R</td>
+          <td style="color:#34d399;">${sc.anti_flip_vetos || 0}</td>
+          <td style="color:#fbbf24;">${sc.stagnation_exits || 0}</td>
+        </tr>`;
+      }
+      document.getElementById('scorecard-body').innerHTML = scHtml;
+      document.getElementById('scorecard-summary').innerText = `${Object.keys(data.backtest_scorecards).length} runs • ${totalTradesSum.toLocaleString()} total paper trades evaluated`;
+    }
+
 
     // Year Breakdown
     let yearHtml = '';

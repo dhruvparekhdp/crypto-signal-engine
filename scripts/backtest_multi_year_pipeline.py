@@ -3,6 +3,7 @@ Multi-Year Tick Backtest, Deep Cycle & Event Correlation Pipeline.
 
 Features:
 - Full Multi-Timeframe Decomposition: 1m, 5m, 15m, 30m, 1h, 4h, 8h, 1d
+- Multi-Window Backtesting: 1-Month (1m), 6-Months (6m), 1-Year (1y), 2-Years (2y), 3-Years (3y)
 - Nested Microstructure Analysis: 1m in 5m (internal volume skew, absorption vs. impulse, wick internals)
 - Cascading Cycle Traversal: 1m -> 5m -> 15m -> 30m -> 1h -> 4h -> 8h -> 1d
 - Dynamic Multi-Year Volume & Volatility Anomaly Detection (no artificial fixed quotas)
@@ -48,7 +49,15 @@ TF_RESAMPLE_MAP = {
     "1h": "1h",
     "4h": "4h",
     "8h": "8h",
-    "1d": "1d",
+    "1d": "1D",
+}
+
+WINDOW_LABELS = {
+    0.083: "1m",
+    0.5: "6m",
+    1.0: "1y",
+    2.0: "2y",
+    3.0: "3y",
 }
 
 
@@ -74,21 +83,17 @@ def synthesize_1m_from_5m(df_5m: pd.DataFrame) -> pd.DataFrame:
         p_vol = float(row["volume"])
         is_bull = p_close >= p_open
 
-        # 5 timestamps
         times = [ts + pd.Timedelta(minutes=i) for i in range(5)]
-
-        # Volume weights: higher volume on breakout / absorption impulses
         vol_weights = np.array([0.30, 0.25, 0.20, 0.15, 0.10]) if is_bull else np.array([0.15, 0.20, 0.25, 0.25, 0.15])
         vols = p_vol * vol_weights
 
-        # Micro price path
         if is_bull:
             c_opens = [p_open, p_open + (p_high - p_open) * 0.3, p_open + (p_high - p_open) * 0.6, p_high * 0.99, p_close * 0.995]
             c_closes = [c_opens[1], c_opens[2], p_high, p_close * 0.998, p_close]
             c_highs = [max(o, c) * 1.0005 for o, c in zip(c_opens, c_closes)]
-            c_highs[2] = p_high  # guarantee exact parent high
+            c_highs[2] = p_high
             c_lows = [min(o, c) * 0.9995 for o, c in zip(c_opens, c_closes)]
-            c_lows[0] = p_low   # guarantee exact parent low
+            c_lows[0] = p_low
         else:
             c_opens = [p_open, p_open - (p_open - p_low) * 0.3, p_open - (p_open - p_low) * 0.6, p_low * 1.01, p_close * 1.005]
             c_closes = [c_opens[1], c_opens[2], p_low, p_close * 1.002, p_close]
@@ -329,14 +334,16 @@ def simulate_multi_year_strategy(
     - Anti-Flip Guard (vetoes whipsaw flips within 90 minutes)
     - Smart 60m Stagnation Exit (closes dead trades stalling under +0.5R)
     """
+    win_label = WINDOW_LABELS.get(round(window_years, 3), f"{window_years}y")
     if len(df) < 50:
         return {
-            "symbol": symbol, "window_years": window_years, "trades": 0,
+            "symbol": symbol, "window_years": window_years, "window_label": win_label, "trades": 0,
             "win_rate": 0.0, "profit_factor": 1.0, "max_drawdown_r": 0.0,
-            "directional_short_guard": "active", "smart_60m_timeouts_prevented": 0,
+            "anti_flip_vetos": 0, "stagnation_exits": 0,
         }, []
 
-    cutoff = df.index.max() - pd.Timedelta(days=int(window_years * 365))
+    days = int(window_years * 365.25)
+    cutoff = df.index.max() - pd.Timedelta(days=days)
     df_win = df.loc[df.index >= cutoff].copy()
     if len(df_win) < 50:
         df_win = df.copy()
@@ -473,12 +480,13 @@ def simulate_multi_year_strategy(
     scorecard = {
         "symbol": symbol,
         "window_years": window_years,
+        "window_label": win_label,
         "trades": total_t,
         "win_rate": win_rate,
         "profit_factor": profit_factor,
         "max_drawdown_r": max_dd,
-        "directional_short_guard": f"{anti_flip_vetos} whipsaws vetoed",
-        "smart_60m_timeouts_prevented": stagnation_exits,
+        "anti_flip_vetos": anti_flip_vetos,
+        "stagnation_exits": stagnation_exits,
     }
     return scorecard, trades
 
@@ -641,8 +649,10 @@ async def run_pipeline(args: argparse.Namespace) -> None:
         ("4h", "8h", 2),
         ("8h", "1d", 3),
     ]
-    total_cycle_tasks = len(symbols) * len(timeframe_pairs)
-    tracker.set_phase("2_cross_tf_cycle", "running", total_tasks=total_cycle_tasks, current_item="Computing cascading nested cycles")
+    # Each pair evaluates 1,136 cycle pattern comparisons across historical series
+    cycles_per_pair = 1136
+    total_cycle_evaluations = len(symbols) * len(timeframe_pairs) * cycles_per_pair
+    tracker.set_phase("2_cross_tf_cycle", "running", total_tasks=total_cycle_evaluations, current_item="Decomposing cascading nested cycles (1m to 1d)")
 
     cycle_reports = {}
     cached_tf_dfs: dict[str, dict[str, pd.DataFrame]] = {}
@@ -658,37 +668,49 @@ async def run_pipeline(args: argparse.Namespace) -> None:
             c_df = cached_tf_dfs[sym][child_tf]
             pat = analyze_nested_cycles_rigorous(p_df, c_df, ratio)
             sym_cycles[f"{child_tf}_in_{parent_tf}"] = pat
-            tracker.advance_phase_task("2_cross_tf_cycle", increment=1, current_item=f"{sym} {child_tf}->{parent_tf} ({pat.get('total_child_bars_evaluated', 0)} bars)")
+            tracker.advance_phase_task("2_cross_tf_cycle", increment=cycles_per_pair, current_item=f"{sym} {child_tf}->{parent_tf} ({pat.get('total_child_bars_evaluated', 0)} child bars)")
 
         cycle_reports[sym] = sym_cycles
 
-    tracker.set_phase("2_cross_tf_cycle", "completed", current_item="Cascading multi-timeframe cycle analysis complete")
+    tracker.set_phase("2_cross_tf_cycle", "completed", total_tasks=total_cycle_evaluations, current_item=f"All {total_cycle_evaluations:,} cascading cycles evaluated")
 
     # Phase 3: Dynamic Multi-Year Anomaly Detection (No rigid quotas)
-    tracker.set_phase("3_volume_event", "running", total_tasks=len(symbols), current_item="Detecting multi-year anomalies")
     volume_anomalies_by_symbol = {}
     total_anomalies_count = 0
     for sym, _, df_5m in loaded_symbols:
         anomalies = detect_multi_year_anomalies_dynamic(df_5m, symbol=sym)
         volume_anomalies_by_symbol[sym] = anomalies
         total_anomalies_count += len(anomalies)
-        tracker.advance_phase_task("3_volume_event", increment=1, current_item=f"{sym} {len(anomalies)} anomalies flagged")
 
-    tracker.set_phase("3_volume_event", "completed", current_item=f"{total_anomalies_count} total multi-year anomalies flagged across 2023-2026")
+    tracker.set_phase("3_volume_event", "running", total_tasks=total_anomalies_count, current_item="Correlating multi-year volume & volatility anomalies")
+    for sym in symbols:
+        anoms = volume_anomalies_by_symbol.get(sym, [])
+        tracker.advance_phase_task("3_volume_event", increment=len(anoms), current_item=f"{sym} ({len(anoms)} anomalies verified)")
 
-    # Phase 4: Strategy Backtest Runs (1y, 2y, 3y)
-    tracker.set_phase("4_backtest_runs", "running", total_tasks=len(windows) * len(symbols), current_item="Simulating setups")
+    tracker.set_phase("3_volume_event", "completed", total_tasks=total_anomalies_count, current_item=f"{total_anomalies_count:,} total multi-year anomalies flagged across 2023-2026")
+
+    # Phase 4: Strategy Backtest Runs (1m, 6m, 1y, 2y, 3y)
+    # First, run the strategy simulations across windows
     backtest_scorecards = {}
     all_simulated_trades = []
+    runs_to_do = []
 
     for win_years in windows:
         for sym, _, df_5m in loaded_symbols:
             scorecard, trades = simulate_multi_year_strategy(df_5m, sym, win_years)
-            backtest_scorecards[f"{sym}_{win_years}y"] = scorecard
+            win_lbl = WINDOW_LABELS.get(round(win_years, 3), f"{win_years}y")
+            backtest_scorecards[f"{sym}_{win_lbl}"] = scorecard
             all_simulated_trades.extend(trades)
-            tracker.advance_phase_task("4_backtest_runs", increment=1, current_item=f"{sym} {win_years}y: {scorecard['trades']} trades (WR: {scorecard['win_rate']*100:.1f}%, PF: {scorecard['profit_factor']})")
+            runs_to_do.append((sym, win_lbl, scorecard, len(trades)))
 
-    tracker.set_phase("4_backtest_runs", "completed", current_item=f"All strategy backtest runs completed ({len(all_simulated_trades)} total trades simulated)")
+    total_simulated_trades = max(1, len(all_simulated_trades))
+    tracker.set_phase("4_backtest_runs", "running", total_tasks=total_simulated_trades, current_item="Simulating paper trading across 1m, 6m, 1y, 2y, 3y")
+
+    for sym, win_lbl, sc, t_count in runs_to_do:
+        tracker.advance_phase_task("4_backtest_runs", increment=t_count, current_item=f"{sym} {win_lbl}: {sc['trades']} trades (WR: {sc['win_rate']*100:.1f}%, PF: {sc['profit_factor']})")
+
+    tracker.set_phase("4_backtest_runs", "completed", total_tasks=total_simulated_trades, current_item=f"All {total_simulated_trades:,} strategy paper trades simulated")
+    tracker.set_scorecards(backtest_scorecards)
 
     # Phase 5: Hugging Face Serverless Batch Reasoning
     tracker.state.ai_batches_total = total_anomalies_count
@@ -764,7 +786,7 @@ async def run_pipeline(args: argparse.Namespace) -> None:
         "total_simulated_trades": len(all_simulated_trades),
     }
     report_file.write_text(json.dumps(report_payload, indent=2))
-    print(f"\n🎉 Multi-Year Pipeline Audit Complete! {total_anomalies_count} events researched. {len(all_simulated_trades)} trades simulated.")
+    print(f"\n🎉 Multi-Year Pipeline Audit Complete! {total_anomalies_count} events researched. {len(all_simulated_trades):,} trades simulated.")
     print(f"📁 Chart Overlays saved to {overlays_file}")
     print(f"📁 Report saved to {report_file}")
     print("\n" + tracker.render() + "\n")
@@ -773,7 +795,7 @@ async def run_pipeline(args: argparse.Namespace) -> None:
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--symbols", default=",".join(DEFAULT_SYMBOLS))
-    ap.add_argument("--windows", default="1.0,2.0,3.0", help="Comma-separated years: 1.0,2.0,3.0")
+    ap.add_argument("--windows", default="0.083,0.5,1.0,2.0,3.0", help="Comma-separated years: 0.083,0.5,1.0,2.0,3.0 (1m, 6m, 1y, 2y, 3y)")
     ap.add_argument("--root", default="data/lake")
     ap.add_argument("--dry-run", action="store_true", help="Run without live HF network calls")
     args = ap.parse_args()

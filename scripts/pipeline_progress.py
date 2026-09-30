@@ -68,6 +68,7 @@ class PipelineProgress:
     ai_batches_total: int = 0
     ai_batches_completed: int = 0
     ai_batches_failed: int = 0
+    backtest_scorecards: dict = field(default_factory=dict)
 
 
 class ProgressTracker:
@@ -100,6 +101,7 @@ class ProgressTracker:
                 self.state.ai_batches_total = data.get("ai_batches_total", 0)
                 self.state.ai_batches_completed = data.get("ai_batches_completed", 0)
                 self.state.ai_batches_failed = data.get("ai_batches_failed", 0)
+                self.state.backtest_scorecards = data.get("backtest_scorecards", {})
                 for k, p in data.get("phases", {}).items():
                     if k in self.state.phases:
                         self.state.phases[k] = PhaseStatus(**p)
@@ -121,6 +123,10 @@ class ProgressTracker:
         )
         self.save()
 
+    def set_scorecards(self, scorecards: dict) -> None:
+        self.state.backtest_scorecards = scorecards
+        self.save()
+
     def save(self) -> None:
         self.state.updated_at = datetime.now(UTC).isoformat()
         temp_file = self.filepath.with_suffix(".tmp")
@@ -135,10 +141,12 @@ class ProgressTracker:
             "ai_batches_total": self.state.ai_batches_total,
             "ai_batches_completed": self.state.ai_batches_completed,
             "ai_batches_failed": self.state.ai_batches_failed,
+            "backtest_scorecards": self.state.backtest_scorecards,
             "phases": {k: asdict(v) for k, v in self.state.phases.items()}
         }
         temp_file.write_text(json.dumps(payload, indent=2))
         temp_file.replace(self.filepath)
+
 
     def set_phase(self, phase_key: str, status: str, total_tasks: int = 0, current_item: str = "") -> None:
         if phase_key in self.state.phases:
