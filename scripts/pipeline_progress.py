@@ -83,7 +83,7 @@ class ProgressTracker:
                 "2_cross_tf_cycle": PhaseStatus("Cross-Timeframe Cycle Correlation"),
                 "3_volume_event": PhaseStatus("Volume-Event Correlation & Discovery"),
                 "4_backtest_runs": PhaseStatus("Multi-Year Strategy Backtest Runs"),
-                "5_ai_reasoning": PhaseStatus("Hugging Face Serverless Batch Reasoning"),
+                "5_ai_reasoning": PhaseStatus("AI Reasoning on Phase 4 Simulated Trades"),
             }
         )
         self._load()
@@ -118,7 +118,7 @@ class ProgressTracker:
                 "2_cross_tf_cycle": PhaseStatus("Cross-Timeframe Cycle Correlation"),
                 "3_volume_event": PhaseStatus("Volume-Event Correlation & Discovery"),
                 "4_backtest_runs": PhaseStatus("Multi-Year Strategy Backtest Runs"),
-                "5_ai_reasoning": PhaseStatus("Hugging Face Serverless Batch Reasoning"),
+                "5_ai_reasoning": PhaseStatus("AI Reasoning on Phase 4 Simulated Trades"),
             }
         )
         self.save()

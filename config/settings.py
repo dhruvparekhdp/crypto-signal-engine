@@ -139,25 +139,25 @@ class Settings(BaseSettings):
     # retired the chain just logs one more failure and tries the next link,
     # same as any other model going away.
     llm_chain_post_trade: str = (
-        "groq:openai/gpt-oss-120b+search, hf:meta-llama/Llama-3.3-70B-Instruct+search, "
+        "groq:openai/gpt-oss-120b+search, groq:openai/gpt-oss-20b+search, "
         "groq:openai/gpt-oss-120b, openrouter:nvidia/nemotron-3-ultra-550b-a55b:free")
     # The world-events briefing. 70B / 120B reasoning models with DuckDuckGo search.
     llm_chain_briefing: str = (
-        "hf:meta-llama/Llama-3.3-70B-Instruct+search, groq:openai/gpt-oss-120b+search, "
-        "hf:Qwen/Qwen2.5-72B-Instruct+search, hf:meta-llama/Llama-3.1-8B-Instruct+search")
+        "groq:openai/gpt-oss-120b+search, groq:openai/gpt-oss-20b+search, "
+        "openrouter:qwen/qwen3-32b:online")
     market_briefing_enabled: bool = True
     market_briefing_minutes: int = 30
     # Hourly: why each watchlist coin moved, and how our signals fared.
     llm_chain_attribution: str = (
-        "hf:meta-llama/Llama-3.3-70B-Instruct+search, groq:openai/gpt-oss-120b+search, "
-        "hf:Qwen/Qwen2.5-72B-Instruct+search")
+        "groq:openai/gpt-oss-120b+search, groq:openai/gpt-oss-20b+search, "
+        "openrouter:qwen/qwen3-32b:online")
     move_attribution_enabled: bool = True
     # The event monitor: adaptive, jittered web checks with a daily cap.
     event_monitor_enabled: bool = True
     event_monitor_daily_cap: int = 120
     llm_chain_briefing_calm: str = (
-        "hf:meta-llama/Llama-3.3-70B-Instruct+search, groq:openai/gpt-oss-120b+search, "
-        "hf:Qwen/Qwen2.5-72B-Instruct+search")
+        "groq:openai/gpt-oss-120b+search, groq:openai/gpt-oss-20b+search, "
+        "openrouter:qwen/qwen3-32b:online")
     # Labelling past moves from the Binance lake (scripts/review_history.py).
     # Local first: it is bulk work and the free Groq requests are shared with
     # live trading. The biggest moves use web search to find that day's news.
