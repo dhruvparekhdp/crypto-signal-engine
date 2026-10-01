@@ -101,25 +101,25 @@ FIELDS: tuple[Field, ...] = (
           "For every fired signal, also review the opposite direction. A candidate that "
           "isn't strong enough to open right away is tracked and re-reviewed as the market "
           "moves, instead of being decided once. Off keeps today's behaviour exactly.",
-          live=False),
+          live=True),
     Field("mirror_review_can_trade", "signals", "Mirror review: allow trading",
           "A candidate that wins its round queues a real paper trade. Off keeps mirror review "
           "watch-only: it still runs and its review trail still shows who would have won, but "
           "nothing opens. Has no effect unless Mirror review is also on.",
-          live=False),
+          live=True),
     Field("mirror_review_confidence_delta_threshold", "signals",
           "Mirror re-review: confidence move",
           "Re-review a tracked candidate only once its local confidence has moved this much.",
-          kind="float", lo=0.01, hi=0.30, live=False),
+          kind="float", lo=0.01, hi=0.30, live=True),
     Field("mirror_review_min_elapsed_pct", "signals", "Mirror re-review: elapsed timeframe",
           "Re-review only once this fraction of the signal's own timeframe has passed.",
-          kind="float", lo=0.05, hi=0.95, live=False),
+          kind="float", lo=0.05, hi=0.95, live=True),
     Field("mirror_review_max_rounds", "signals", "Mirror re-review: max rounds",
           "Hard cap on AI re-reviews per candidate after round 0.",
-          kind="int", lo=0, hi=5, live=False),
+          kind="int", lo=0, hi=5, live=True),
     Field("mirror_target_jitter_pct", "signals", "Mirror target/stop jitter",
           "+/- range used to jitter the mirror candidate's target and stop away from an "
-          "exact reflection of the original.", kind="float", lo=0.0, hi=0.50, live=False),
+          "exact reflection of the original.", kind="float", lo=0.0, hi=0.50, live=True),
     Field("bank_size", "signals", "Bank size (for stake display)",
           "Notional wallet size used only to turn a signal's stake % into a rupee amount "
           "on its Telegram alert. Does not affect what actually opens or how much it risks "

@@ -111,11 +111,13 @@ async def _api_crypto_signals(runner, request: web.Request) -> web.Response:
             "skip_reason_text": (REASON_WORDS.get(r.skip_reason, r.skip_reason.replace("_", " "))
                                  if r.skip_reason else None),
             # Mirror review: the primary + mirror candidates' full review
-            # trail, only present when the feature produced one for this
-            # signal. Absent (not just empty) otherwise, so the page can
-            # tell "no trail" from "feature off".
-            **({"review_trail": [_review_trail_row(t, REASON_WORDS) for t in trails[r.id]]}
-               if r.id in trails else {}),
+            # trail. Present (even as an empty list) whenever the feature is
+            # on, absent when it's off — the two used to look identical
+            # (both "no key"), so the page had no way to tell "on, nothing
+            # to show yet" from "off, nothing to show ever". Now it can.
+            **({"review_trail": [_review_trail_row(t, REASON_WORDS)
+                                 for t in trails.get(r.id, [])]}
+               if settings.mirror_review_enabled else {}),
         }
         for r in rows
     ]
@@ -3008,7 +3010,14 @@ function renderCryptoSignalCard(s){
 // dense card.
 function renderReviewTrail(s){
   const trail = s.review_trail;
-  if(!trail || !trail.length) return '';
+  // undefined: mirror review is off entirely, say nothing (same as before).
+  // Defined but empty: it's on, this signal just has nothing worth a trail
+  // yet (e.g. it wasn't reviewed twice) — say so instead of showing
+  // nothing, which used to look identical to "off" and was the whole
+  // reason this feature seemed to not exist.
+  if(trail === undefined) return '';
+  if(!trail.length) return '<div class="sig-trail-toggle" style="cursor:default">'
+    + 'Mirror review is on — nothing to compare for this signal yet</div>';
   const domId = 'trail-' + s.id;
   const rows = trail.map(t => `<div class="trail-row">
       <span class="trail-role">${esc(t.label)}</span>

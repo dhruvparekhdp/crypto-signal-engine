@@ -921,7 +921,24 @@ class AppRunner:
         be worth a second opinion — capped at mirror_review_max_rounds
         re-reviews per candidate (3 AI calls total, including round 0).
         """
-        if not settings.mirror_review_enabled or not self._tracked_signal_pairs:
+        if not settings.mirror_review_enabled:
+            # Turned off mid-tracking: candidates sitting in "tracking" would
+            # otherwise stay there forever — the tick that would resolve them
+            # is exactly the one this early return skips, and only a restart
+            # (which drops the in-memory dict) ever clears them. Resolve
+            # every "tracking" candidate as rejected before dropping the
+            # pairs, so the Signals page's review trail shows a real reason
+            # instead of quietly freezing mid-review.
+            if self._tracked_signal_pairs:
+                for pair in self._tracked_signal_pairs.values():
+                    for cand in pair.candidates():
+                        if cand.state == "tracking":
+                            cand.state = "rejected"
+                            cand.rejection_reason = "mirror_review_disabled"
+                            await self._mark_rejected(cand.log_id, "mirror_review_disabled")
+                self._tracked_signal_pairs.clear()
+            return
+        if not self._tracked_signal_pairs:
             return
         try:
             async with AsyncSessionFactory() as session:

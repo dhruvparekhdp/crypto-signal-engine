@@ -560,5 +560,45 @@ async def test_live_loop_win_queues_the_paper_trade_and_stops_the_opposite_side(
     await engine.dispose()
 
 
+@pytest.mark.asyncio
+async def test_disabling_mirror_review_mid_tracking_resolves_orphans_instead_of_leaking():
+    """29 Sep: _mirror_review_job used to bail out on its very first line the
+    moment mirror_review_enabled went False, which is also the only tick
+    that would ever have resolved a candidate still sitting in "tracking" —
+    so a candidate mid-review when the switch flips off was stuck there
+    forever, invisible, until a restart happened to drop the in-memory
+    dict. It must instead resolve every orphan as rejected, with a reason a
+    human can actually read on the Signals page, and drop the tracker."""
+    engine, sm = await _fresh_db()
+    runner, st = _runner_with_state()
+
+    with patch("scheduler.runner.AsyncSessionFactory", sm), \
+         patch("scheduler.runner.settings.mirror_review_enabled", False):
+        from storage.repository import Repository
+        async with sm() as s:
+            log_id = await Repository(s).log_crypto_signal(
+                symbol="btcusdt", signal_type="confluence", direction="long",
+                trigger_description="t", confidence=0.55, current_price=60000.0,
+                target_price=61200.0, stop_loss=59400.0, edge_pct=2.0,
+                stake_pct=0.015, timeframe="1h")
+
+        sig = _signal(confidence=0.55, timeframe="1h")
+        cand = TrackedCandidate(signal=sig, log_id=log_id, root_log_id=log_id,
+                                last_ai_review_at=datetime.now(UTC),
+                                last_reviewed_confidence=0.55)
+        runner._tracked_signal_pairs[log_id] = TrackedPair(primary=cand)
+
+        await runner._mirror_review_job()
+
+        assert cand.state == "rejected"
+        assert cand.rejection_reason == "mirror_review_disabled"
+        assert runner._tracked_signal_pairs == {}
+
+        async with sm() as s:
+            rows = await Repository(s).get_recent_crypto_signals(hours=24)
+        assert rows[0].rejection_reason == "mirror_review_disabled"
+    await engine.dispose()
+
+
 if __name__ == "__main__":
     unittest.main()
