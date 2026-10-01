@@ -121,43 +121,28 @@ class Settings(BaseSettings):
     # The reviews it writes are stored with their news context so the local
     # model can study them later.
     llm_chain_pre_trade: str = (
-        "groq:qwen/qwen3.8-27b, groq:openai/gpt-oss-120b, groq:openai/gpt-oss-20b, openrouter:qwen/qwen3.8-27b:free, openrouter:qwen/qwen3-32b")
-    # A quota is per-organization on Groq's free tier, so when it is hit
-    # every Groq model in a chain fails together — the 21-25 Sep pattern
-    # where the whole "why did it move" job went silent for hours because
-    # both its entries were Groq. Every chain below now ends in OpenRouter,
-    # so an org-wide Groq outage degrades a chain instead of emptying it.
-    # Where the task needs real web search (briefing, attribution, history
-    # search) that fallback is "model:online" — OpenRouter's own search
-    # plugin, a small per-search charge on its account — never a bare
-    # model: one asked "what happened in the last 30 minutes" with no way
-    # to check invents an answer, which is worse than none at all.
-    # No deadline (the trade is already closed), so the last link is the
-    # deepest free model OpenRouter has, not the fast one used elsewhere —
-    # a genuine reasoning model, not a chat model with a "+search" flag.
-    # Free-tier rosters on OpenRouter rotate; if this exact model is ever
-    # retired the chain just logs one more failure and tries the next link,
-    # same as any other model going away.
+        "groq:qwen/qwen3.8-27b, groq:openai/gpt-oss-20b, groq:openai/gpt-oss-120b, "
+        "hf:meta-llama/Llama-3.1-8B-Instruct, openrouter:qwen/qwen3.8-27b:free")
     llm_chain_post_trade: str = (
-        "groq:openai/gpt-oss-120b+search, groq:openai/gpt-oss-20b+search, "
-        "groq:openai/gpt-oss-120b, openrouter:nvidia/nemotron-3-ultra-550b-a55b:free")
+        "groq:qwen/qwen3.8-27b, groq:openai/gpt-oss-20b, groq:openai/gpt-oss-120b, "
+        "hf:meta-llama/Llama-3.1-8B-Instruct, openrouter:nvidia/nemotron-3-ultra-550b-a55b:free")
     # The world-events briefing. 70B / 120B reasoning models with DuckDuckGo search.
     llm_chain_briefing: str = (
-        "groq:openai/gpt-oss-120b+search, groq:openai/gpt-oss-20b+search, "
-        "openrouter:qwen/qwen3-32b:online")
+        "groq:qwen/qwen3.8-27b, groq:openai/gpt-oss-20b, groq:openai/gpt-oss-120b, "
+        "hf:meta-llama/Llama-3.1-8B-Instruct")
     market_briefing_enabled: bool = True
     market_briefing_minutes: int = 30
     # Hourly: why each watchlist coin moved, and how our signals fared.
     llm_chain_attribution: str = (
-        "groq:openai/gpt-oss-120b+search, groq:openai/gpt-oss-20b+search, "
-        "openrouter:qwen/qwen3-32b:online")
+        "groq:qwen/qwen3.8-27b, groq:openai/gpt-oss-20b, groq:openai/gpt-oss-120b, "
+        "hf:meta-llama/Llama-3.1-8B-Instruct")
     move_attribution_enabled: bool = True
     # The event monitor: adaptive, jittered web checks with a daily cap.
     event_monitor_enabled: bool = True
     event_monitor_daily_cap: int = 120
     llm_chain_briefing_calm: str = (
-        "groq:openai/gpt-oss-120b+search, groq:openai/gpt-oss-20b+search, "
-        "openrouter:qwen/qwen3-32b:online")
+        "groq:qwen/qwen3.8-27b, groq:openai/gpt-oss-20b, groq:openai/gpt-oss-120b, "
+        "hf:meta-llama/Llama-3.1-8B-Instruct")
     # Labelling past moves from the Binance lake (scripts/review_history.py).
     # Local first: it is bulk work and the free Groq requests are shared with
     # live trading. The biggest moves use web search to find that day's news.
@@ -213,7 +198,7 @@ class Settings(BaseSettings):
     v2_lake_dir: str = "data/lake"
     v2_reports_dir: str = "data/reports"
     v2_backtest_timeout_minutes: int = 90   # 7 coins x 2 years x 12 variants at nice 19
-    v2_backtest_download: bool = True     # fetch missing data before each run
+    v2_backtest_download: bool = False     # Use existing lake data without stalling on remote download
     # The database keeps this many days; older rows go to gzipped JSON files
     # under cold_storage_dir (storage/cold_storage.py), never deleted outright.
     db_retention_days: int = 365
@@ -291,13 +276,13 @@ class Settings(BaseSettings):
     # a few hundred headlines a day it is also the one that would cost the
     # most through a metered API. Local first, and the free tiers behind it.
     llm_chain_news_scoring: str = (
-        "groq:qwen/qwen3.8-27b, groq:openai/gpt-oss-20b")
+        "groq:qwen/qwen3.8-27b, groq:openai/gpt-oss-20b, hf:meta-llama/Llama-3.1-8B-Instruct")
 
     # Groq leads, not the laptop: this call sits inside the 30-second paper
     # tick with a 12-second budget, and an 8B model on the i5 needs 10-25 s
     # just to read the prompt. gemini-2.5-* is being shut down in October.
     llm_chain_position_review: str = (
-        "groq:qwen/qwen3.8-27b, groq:openai/gpt-oss-20b, groq:openai/gpt-oss-120b")
+        "groq:qwen/qwen3.8-27b, groq:openai/gpt-oss-20b, groq:openai/gpt-oss-120b, hf:meta-llama/Llama-3.1-8B-Instruct")
 
     llm_chain_research: str = (
         "anthropic:claude-opus-5-5, anthropic:claude-opus-5, gemini:gemini-3.1-pro-preview")

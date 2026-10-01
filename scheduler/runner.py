@@ -685,10 +685,9 @@ class AppRunner:
                         await self._mark_skipped(log_id, why_not)
                         continue
                     sig = self._apply_sentiment(sig, st.funding_rate_per_8h)
-                    if (getattr(sig, "candidate_role", "") == "mirror_shadow"
-                            and sig.confidence < getattr(settings, "counter_trend_short_min_confidence", 0.80)):
+                    if getattr(sig, "candidate_role", "") == "mirror_shadow":
                         log.info("paper_trade_skipped", symbol=sig.symbol, reason="counter_trend_short_shadow_held",
-                                 confidence=sig.confidence, required=settings.counter_trend_short_min_confidence)
+                                 confidence=sig.confidence)
                         await self._mark_skipped(log_id, "counter_trend_short_shadow_held")
                         continue
                     ok, _why = should_open(sig, cfg, cstate, now)
@@ -892,7 +891,11 @@ class AppRunner:
             log.debug("mirror_review_not_saved", symbol=sig.symbol,
                       role=getattr(sig, "candidate_role", "primary"))
         before = sig.confidence
-        sig.confidence = max(0.50, min(0.95, round(before + delta, 4)))
+        if verdict == "REJECT":
+            sig.confidence = 0.0
+            sig.veto_reason = f"AI Hard Veto: {ai_summary}"
+        else:
+            sig.confidence = max(0.50, min(0.95, round(before + delta, 4)))
         return verdict, ai_summary
 
     async def _ai_review_pair(

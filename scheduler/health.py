@@ -1,6 +1,7 @@
 """Aiohttp web server: dashboard UI + JSON API endpoints."""
 from __future__ import annotations
 
+import asyncio
 import json
 import math
 from datetime import UTC, datetime, timedelta
@@ -64,21 +65,19 @@ async def _api_crypto_coins(runner, request: web.Request) -> web.Response:
 
 
 async def _api_crypto_signals(runner, request: web.Request) -> web.Response:
-    """Return recent crypto trade signals."""
+    """Return recent crypto trade signals with live performance tracking and Hugging Face AI dual reasoning."""
     from config.settings import settings
     from scheduler.pipeline import REASON_WORDS
     from storage.database import AsyncSessionFactory
     from storage.repository import Repository
+    from analysis.trade_evaluator import evaluate_signal_trade_path, get_mirror_ai_dual_reasoning
+
+    mirror_mode = request.query.get('mirror', '') == '1'
+    hours = int(request.query.get('hours', '48' if mirror_mode else '24'))
     async with AsyncSessionFactory() as session:
         repo = Repository(session)
-        rows = await repo.get_recent_crypto_signals(hours=24)
-        mirror_mode = request.query.get('mirror', '') == '1'
+        rows = await repo.get_recent_crypto_signals(hours=hours)
         rows = [r for r in rows if getattr(r, 'candidate_role', 'primary') == ('mirror' if mirror_mode else 'primary')]
-        # Mirror review's per-signal "review trail" — every round for the
-        # primary and its mirror. Only fetched for round-0 primary rows
-        # (mirror_of_log_id 0, review_round 0): a mirror's own round-0 row
-        # and every re-review row are reached through that same trail, not
-        # shown as a second top-level card.
         trails: dict[int, list] = {}
         if settings.mirror_review_enabled:
             for r in rows:
@@ -87,6 +86,41 @@ async def _api_crypto_signals(runner, request: web.Request) -> web.Response:
                     trail_rows = await repo.get_review_trail(r.id)
                     if len(trail_rows) > 1:
                         trails[r.id] = trail_rows
+
+    states = {}
+    if runner and hasattr(runner, "crypto_store"):
+        try:
+            states = {st.symbol.lower(): st for st in await runner.crypto_store.get_all()}
+        except Exception:
+            pass
+
+    tc_dict = {}
+    ai_dict = {}
+
+    for r in rows:
+        st = states.get(r.symbol.lower())
+        candles = st.candles_1m if st else []
+        current_p = st.current_price if st else None
+        tc = evaluate_signal_trade_path(r, candles, current_price=current_p)
+        tc_dict[r.id] = tc
+
+    if mirror_mode and rows:
+        async def _fetch_ai(sig_row):
+            tc = tc_dict.get(sig_row.id, {})
+            try:
+                return await get_mirror_ai_dual_reasoning(sig_row, tc)
+            except Exception:
+                return {
+                    "why_it_worked": "Initial technical momentum aligned with setup criteria.",
+                    "why_it_failed": "Counter-trend orderflow or resistance capped further progression.",
+                    "key_takeaway": "Enforce strict risk management and trailing profit stops.",
+                    "source_model": "fallback",
+                }
+
+        ai_res_list = await asyncio.gather(*[_fetch_ai(r) for r in rows])
+        for r, ai_res in zip(rows, ai_res_list):
+            ai_dict[r.id] = ai_res
+
     signals = [
         {
             "id": r.id,
@@ -104,26 +138,314 @@ async def _api_crypto_signals(runner, request: web.Request) -> web.Response:
             "sentiment_score": r.sentiment_score,
             "indicators": r.indicators_summary,
             "outcome": r.outcome,
+            "pnl_pct": getattr(r, "pnl_pct", 0.0),
             "timestamp": _iso(r.timestamp),
-            # Why this fired signal never became a paper trade — empty
-            # means it was opened, or paper trading has not reached a
-            # decision on it yet (both look the same from here; check
-            # /api/paper for the trade itself).
             "skip_reason": r.skip_reason or None,
             "skip_reason_text": (REASON_WORDS.get(r.skip_reason, r.skip_reason.replace("_", " "))
                                  if r.skip_reason else None),
             "trade_mode": getattr(r, "trade_mode", "intraday"),
             "veto_reason": getattr(r, "veto_reason", "") or r.suppressed_by or None,
-            # Mirror review: the primary + mirror candidates' full review
-            # trail, only present when the feature produced one for this
-            # signal. Absent (not just empty) otherwise, so the page can
-            # tell "no trail" from "feature off".
+            "trade_check": tc_dict.get(r.id),
+            "ai_reasoning": ai_dict.get(r.id),
             **({"review_trail": [_review_trail_row(t, REASON_WORDS) for t in trails[r.id]]}
                if r.id in trails else {}),
         }
         for r in rows
     ]
+
+    if mirror_mode:
+        total = len(rows)
+        worked_cnt = sum(1 for r in rows if tc_dict.get(r.id, {}).get("worked"))
+        full_cnt = sum(1 for r in rows if tc_dict.get(r.id, {}).get("status") == "won")
+        part_cnt = sum(1 for r in rows if tc_dict.get(r.id, {}).get("status") == "partial")
+        stop_cnt = sum(1 for r in rows if tc_dict.get(r.id, {}).get("status") == "stopped")
+        run_cnt = sum(1 for r in rows if tc_dict.get(r.id, {}).get("status") == "running")
+        avg_peak = round(sum(tc_dict.get(r.id, {}).get("peak_gain_pct", 0.0) for r in rows) / max(1, total), 2)
+        avg_tgt = round(sum(tc_dict.get(r.id, {}).get("target_pct_reached", 0.0) for r in rows) / max(1, total), 1)
+
+        summary = {
+            "total_tested": total,
+            "worked_count": worked_cnt,
+            "worked_rate_pct": round(worked_cnt / max(1, total) * 100.0, 1),
+            "full_win_count": full_cnt,
+            "partial_win_count": part_cnt,
+            "stopped_count": stop_cnt,
+            "running_count": run_cnt,
+            "avg_peak_gain_pct": avg_peak,
+            "avg_target_reached_pct": avg_tgt,
+        }
+        return web.Response(text=json.dumps({"signals": signals, "summary": summary}), content_type="application/json")
+
     return web.Response(text=json.dumps(signals), content_type="application/json")
+
+
+_sim_process: asyncio.subprocess.Process | None = None
+
+
+async def _api_crypto_signals_live_check(runner, request: web.Request) -> web.Response:
+    """Force re-run of live checks and Hugging Face AI review on mirror signals."""
+    from analysis.trade_evaluator import _TRADE_EVAL_CACHE, _AI_REASONING_CACHE
+    _TRADE_EVAL_CACHE.clear()
+    _AI_REASONING_CACHE.clear()
+    if runner and hasattr(runner, "_resolve_signal_outcomes_job"):
+        try:
+            await runner._resolve_signal_outcomes_job()
+        except Exception:
+            pass
+    return await _api_crypto_signals(runner, request)
+
+
+async def _api_simulator_status(runner, request: web.Request) -> web.Response:
+    """Return live status, progress, test counts, and recent trades from the simulator."""
+    from pathlib import Path
+    status_file = Path("data/simulator/status.json")
+    if status_file.exists():
+        try:
+            d = json.loads(status_file.read_text())
+            # Ensure cycle transactions are stripped for mobile performance
+            if "cycle_challenge" in d and isinstance(d["cycle_challenge"], dict):
+                cc = d["cycle_challenge"]
+                if "cycles" in cc and isinstance(cc["cycles"], list):
+                    light_cycles = []
+                    for c in cc["cycles"]:
+                        if isinstance(c, dict):
+                            sc = {k: v for k, v in c.items() if k != "transactions"}
+                            sc["transaction_count"] = len(c.get("transactions", [])) if "transactions" in c else c.get("transaction_count", 0)
+                            light_cycles.append(sc)
+                    cc["cycles"] = light_cycles
+            return web.Response(text=json.dumps(d), content_type="application/json")
+        except Exception:
+            pass
+    return web.Response(text=json.dumps({
+        "is_running": False,
+        "progress_pct": 0.0,
+        "status": "idle",
+        "ticks_processed": 0,
+        "trades_simulated": 0,
+        "won_count": 0,
+        "partial_count": 0,
+        "stopped_count": 0,
+        "stagnated_count": 0,
+        "win_rate_pct": 0.0,
+        "profit_factor": 1.0,
+        "recent_trades": [],
+    }), content_type="application/json")
+
+
+async def _api_simulator_start(runner, request: web.Request) -> web.Response:
+    """Launch the 3-Year Live Market Simulator as an asynchronous background worker."""
+    global _sim_process
+    import sys
+    try:
+        data = await request.json() if request.can_read_body else {}
+    except Exception:
+        data = {}
+
+    symbols = data.get("symbols", "BTCUSDT,ETHUSDT,SOLUSDT,XRPUSDT,AVAXUSDT,LINKUSDT")
+    if isinstance(symbols, list):
+        symbols = ",".join(symbols)
+    years = str(data.get("years", "3.0"))
+    tp_r = str(data.get("tp_r", "2.0"))
+    sl_r = str(data.get("sl_r", "1.2"))
+    anti_flip = str(data.get("anti_flip", "90"))
+    stagnation = str(data.get("stagnation", "60"))
+    max_ai = str(data.get("max_ai_reviews", "100"))
+    cycle_start = str(data.get("cycle_start", "25.0"))
+    cycle_target = str(data.get("cycle_target", "100.0"))
+    cycle_margin = str(float(data.get("cycle_margin_pct", "25.0")) / 100.0)
+    cycle_lev = str(data.get("cycle_leverage", "10.0"))
+    stepped_mode = data.get("stepped_mode", True)
+    step_market_hours = str(data.get("step_market_hours", "1.0"))
+    step_seconds = str(data.get("step_seconds", "60.0"))
+    strategy = str(data.get("strategy", "all")).strip()
+    gemini_key = str(data.get("gemini_key", os.getenv("GEMINI_API_KEY", ""))).strip()
+    hf_tokens = str(data.get("hf_tokens", "")).strip()
+    openrouter_key = str(data.get("openrouter_key", "")).strip()
+    ai_provider = str(data.get("ai_provider", "none")).strip()
+
+    # Save configuration to data/simulator/config.json for persistence
+    try:
+        from pathlib import Path
+        cfg_path = Path("data/simulator/config.json")
+        cfg_path.parent.mkdir(parents=True, exist_ok=True)
+        cfg_path.write_text(json.dumps(data, indent=2))
+    except Exception:
+        pass
+
+    cmd = [
+        sys.executable, "-m", "scripts.run_market_simulator",
+        "--symbols", symbols,
+        "--years", years,
+        "--tp-r", tp_r,
+        "--sl-r", sl_r,
+        "--anti-flip", anti_flip,
+        "--stagnation", stagnation,
+        "--max-ai-reviews", max_ai,
+        "--cycle-start", cycle_start,
+        "--cycle-target", cycle_target,
+        "--cycle-margin-pct", cycle_margin,
+        "--cycle-leverage", cycle_lev,
+        "--strategy", strategy,
+    ]
+    if stepped_mode:
+        cmd.append("--stepped-mode")
+    cmd.extend(["--step-market-hours", step_market_hours, "--step-seconds", step_seconds])
+    if gemini_key:
+        cmd.extend(["--gemini-key", gemini_key])
+    if hf_tokens:
+        cmd.extend(["--hf-tokens", hf_tokens])
+    if openrouter_key:
+        cmd.extend(["--openrouter-key", openrouter_key])
+    if ai_provider:
+        cmd.extend(["--ai-provider", ai_provider])
+
+    try:
+        _sim_process = await asyncio.create_subprocess_exec(*cmd)
+        return web.Response(text=json.dumps({"status": "started", "pid": _sim_process.pid}), content_type="application/json")
+    except Exception as exc:
+        return web.Response(text=json.dumps({"status": "error", "message": str(exc)}), status=500, content_type="application/json")
+
+
+async def _api_simulator_ai_events(runner, request: web.Request) -> web.Response:
+    """Return live stream of AI inference call events."""
+    from pathlib import Path
+    events_file = Path("data/simulator/ai_events.json")
+    if events_file.exists():
+        try:
+            return web.Response(text=events_file.read_text(), content_type="application/json")
+        except Exception:
+            pass
+    return web.Response(text="[]", content_type="application/json")
+
+
+async def _api_simulator_cycles(runner, request: web.Request) -> web.Response:
+    """Return the detailed account statements and metrics for all challenge cycles."""
+    import os
+    report_file = os.path.join(runner.config.project_root if hasattr(runner, "config") else ".", "data/simulator/reports/cycle_statements.json")
+    if os.path.exists(report_file):
+        try:
+            with open(report_file, "r") as f:
+                return web.Response(text=f.read(), content_type="application/json")
+        except Exception:
+            pass
+    status_file = "data/simulator/status.json"
+    if os.path.exists(status_file):
+        try:
+            with open(status_file, "r") as f:
+                d = json.load(f)
+                return web.Response(text=json.dumps(d.get("cycle_challenge", {})), content_type="application/json")
+        except Exception:
+            pass
+    return web.Response(text=json.dumps({"cycles": []}), content_type="application/json")
+
+
+async def _api_simulator_cycle_ledger(runner, request: web.Request) -> web.Response:
+    """Return paginated ledger transactions for a single cycle."""
+    from pathlib import Path
+    cycle_id_str = request.query.get("cycle_id", "")
+    page = max(1, int(request.query.get("page", 1)))
+    limit = max(5, min(100, int(request.query.get("limit", 15))))
+    report_file = Path("data/simulator/reports/cycle_statements.json")
+    if not report_file.exists():
+        return web.Response(text=json.dumps({"error": "No cycle statements report found", "transactions": []}), content_type="application/json")
+    try:
+        report_data = json.loads(report_file.read_text())
+        cycles = report_data.get("cycles", [])
+        matched = None
+        if cycle_id_str:
+            for c in cycles:
+                if str(c.get("cycle_id")) == cycle_id_str:
+                    matched = c
+                    break
+        elif cycles:
+            matched = cycles[0]
+        if not matched:
+            return web.Response(text=json.dumps({"error": "Cycle not found", "transactions": []}), content_type="application/json")
+        
+        all_tx = matched.get("transactions", [])
+        total_tx = len(all_tx)
+        start_idx = (page - 1) * limit
+        end_idx = start_idx + limit
+        paginated_tx = all_tx[start_idx:end_idx]
+        
+        summary = {k: v for k, v in matched.items() if k != "transactions"}
+        return web.Response(text=json.dumps({
+            "cycle": summary,
+            "transactions": paginated_tx,
+            "page": page,
+            "limit": limit,
+            "total_transactions": total_tx,
+            "total_pages": max(1, (total_tx + limit - 1) // limit),
+        }), content_type="application/json")
+    except Exception as e:
+        return web.Response(text=json.dumps({"error": str(e), "transactions": []}), status=500, content_type="application/json")
+
+
+async def _api_simulator_pause(runner, request: web.Request) -> web.Response:
+    """Pause or stop the simulator background worker."""
+    global _sim_process
+    if _sim_process and _sim_process.returncode is None:
+        try:
+            _sim_process.terminate()
+            return web.Response(text=json.dumps({"status": "terminated"}), content_type="application/json")
+        except Exception as exc:
+            return web.Response(text=json.dumps({"status": "error", "message": str(exc)}), status=500, content_type="application/json")
+    return web.Response(text=json.dumps({"status": "not_running"}), content_type="application/json")
+
+
+async def _api_simulator_get_config(runner, request: web.Request) -> web.Response:
+    """Return saved simulator configuration, or fallback defaults."""
+    from pathlib import Path
+    cfg_file = Path("data/simulator/config.json")
+    defaults = {
+        "years": "0.0082",
+        "step_market_hours": 1.0,
+        "step_seconds": 60.0,
+        "stepped_mode": True,
+        "tp_r": 2.2,
+        "sl_r": 1.5,
+        "anti_flip": 90,
+        "stagnation": 60,
+        "max_ai_reviews": 150,
+        "cycle_start": 25.0,
+        "cycle_target": 100.0,
+        "cycle_margin_pct": 25.0,
+        "cycle_leverage": 10.0,
+        "strategy": "all",
+        "ai_provider": "none",
+        "gemini_key": os.getenv("GEMINI_API_KEY", ""),
+        "openrouter_key": "",
+        "hf_tokens": "",
+    }
+    if cfg_file.exists():
+        try:
+            saved = json.loads(cfg_file.read_text())
+            defaults.update(saved)
+        except Exception:
+            pass
+    return web.Response(text=json.dumps(defaults), content_type="application/json")
+
+
+async def _api_simulator_save_config(runner, request: web.Request) -> web.Response:
+    """Persist simulator configuration to data/simulator/config.json."""
+    from pathlib import Path
+    try:
+        data = await request.json() if request.can_read_body else {}
+        cfg_file = Path("data/simulator/config.json")
+        cfg_file.parent.mkdir(parents=True, exist_ok=True)
+        # Load existing, update with incoming
+        existing = {}
+        if cfg_file.exists():
+            try:
+                existing = json.loads(cfg_file.read_text())
+            except Exception:
+                pass
+        existing.update(data)
+        cfg_file.write_text(json.dumps(existing, indent=2))
+        return web.Response(text=json.dumps({"status": "saved", "config": existing}), content_type="application/json")
+    except Exception as exc:
+        return web.Response(text=json.dumps({"status": "error", "message": str(exc)}), status=500, content_type="application/json")
+
 
 
 def _review_trail_row(t, reason_words: dict) -> dict:
@@ -1857,6 +2179,7 @@ section h2{color:var(--accent-soft)}
   <a class="side-item side-secondary" data-tab="predict" href="/predict"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12h4l3-8 4 16 3-8h4"/></svg><span>Price Outlook</span></a>
   <div class="side-item" data-tab="crypto" onclick="switchTab('crypto')"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 17l6-6 4 4 8-8"/><path d="M17 7h4v4"/></svg><span>Signals</span></div>
   <div class="side-item" data-tab="mirror" onclick="switchTab('mirror')"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 14c.2-1 .7-1.7 1.5-2.5 1-.9 1.5-2.2 1.5-3.5A6 6 0 0 0 6 8c0 1 .2 2.2 1.5 3.5.7.9 1.2 1.5 1.5 2.5"/><path d="M9 18h6"/><path d="M10 22h4"/></svg><span>Mirror Signals</span></div>
+  <div class="side-item" data-tab="simulator" onclick="switchTab('simulator')"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg><span>Market Simulator</span></div>
   <div class="side-item" data-tab="paper" onclick="switchTab('paper')"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18M3 12h18M3 18h12"/></svg><span>Paper Trading</span></div>
   <div class="side-item" data-tab="guard" onclick="switchTab('guard')"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l8 4v5c0 5-3.4 8.5-8 10-4.6-1.5-8-5-8-10V7z"/></svg><span>Session Guard</span></div>
   <div class="side-group">Analysis</div>
@@ -2085,10 +2408,383 @@ section h2{color:var(--accent-soft)}
 
 <div id="tab-mirror" class="tab-content">
   <section>
-    <h2>Mirror Signals (last 24h)</h2>
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;flex-wrap:wrap;gap:10px">
+      <div>
+        <h2 style="font-size:20px;font-weight:700;color:#f1f5f9;margin:0">Mirror Signals & Live Trade Check</h2>
+        <div style="font-size:12px;color:#94a3b8;margin-top:2px">Live trade trajectory, excursion metrics (MFE/MAE), and Hugging Face AI dual reasoning</div>
+      </div>
+      <button id="btn-mirror-live-check" onclick="forceMirrorLiveCheck(this)" class="cr-page-btn" style="background:linear-gradient(135deg,#0284c7,#0ea5e9);color:#fff;border:none;padding:8px 16px;border-radius:8px;cursor:pointer;font-weight:600;display:flex;align-items:center;gap:6px;box-shadow:0 2px 8px rgba(14,165,233,0.3)">
+        <span>⚡ Force Live Check & AI Review</span>
+      </button>
+    </div>
+
+    <!-- Live Performance Scorecard -->
+    <div id="cr-mirror-scorecard" class="grid" style="padding:0;margin-bottom:16px;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:10px">
+      <div class="card"><div class="card-title">Total Tested</div><div class="card-value" id="ms-total">—</div><div class="card-sub">Last 48 hours</div></div>
+      <div class="card"><div class="card-title">Worked Rate</div><div class="card-value" id="ms-rate" style="color:#10b981">—</div><div class="card-sub">Full + Partial</div></div>
+      <div class="card"><div class="card-title">Full Target (Won)</div><div class="card-value" id="ms-full" style="color:#10b981">—</div><div class="card-sub">100% Target Hit</div></div>
+      <div class="card"><div class="card-title">Partially Worked</div><div class="card-value" id="ms-partial" style="color:#f59e0b">—</div><div class="card-sub">>=40% to Target</div></div>
+      <div class="card"><div class="card-title">Stopped Out</div><div class="card-value" id="ms-stopped" style="color:#ef4444">—</div><div class="card-sub">Direct Stop Loss</div></div>
+      <div class="card"><div class="card-title">Active Now</div><div class="card-value" id="ms-running" style="color:#38bdf8">—</div><div class="card-sub">Live in Market</div></div>
+      <div class="card"><div class="card-title">Avg Peak Gain</div><div class="card-value" id="ms-peak" style="color:#a78bfa">—</div><div class="card-sub">Max Excursion</div></div>
+    </div>
+
+    <!-- Status filter tabs -->
+    <div class="cr-sig-tabs" id="cr-mirror-status-filter" style="margin-bottom:10px"></div>
+    <!-- Symbol filter tabs -->
     <div class="cr-sig-tabs" id="cr-mirror-sig-tabs"></div>
-    <div id="cr-mirror-signals"><div class="empty">No mirror signals fired yet</div></div>
+    <!-- Signal cards -->
+    <div id="cr-mirror-signals"><div class="empty">Loading mirror signals & running live trade checks...</div></div>
     <div class="cr-pagination" id="cr-mirror-sig-pagination"></div>
+  </section>
+</div>
+
+<div id="tab-simulator" class="tab-content">
+  <section>
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px;flex-wrap:wrap;gap:12px">
+      <div>
+        <h2 style="font-size:20px;font-weight:700;color:#38bdf8;margin:0">⚡ Live Market Simulator & Strategy Testing</h2>
+        <div style="font-size:12px;color:#94a3b8;margin-top:2px">Test quantitative strategies, compounding cycles ($25 ➔ $100), and institutional order flow with zero lag</div>
+      </div>
+      <div style="display:flex;gap:8px">
+        <button id="sim-btn-start" onclick="startSimulator()" style="background:#10b981;color:#fff;border:none;padding:9px 18px;border-radius:8px;cursor:pointer;font-weight:700;font-size:13px;display:flex;align-items:center;gap:6px">▶️ Run Simulator</button>
+        <button id="sim-btn-pause" onclick="pauseSimulator()" style="background:#e11d48;color:#fff;border:none;padding:9px 18px;border-radius:8px;cursor:pointer;font-weight:700;font-size:13px;display:none;align-items:center;gap:6px">⏸️ Stop / Pause</button>
+      </div>
+    </div>
+
+    <!-- Stepped Clock & Market Time Header -->
+    <div id="sim-clock-bar" style="background:#0f172a;border:1px solid #334155;border-radius:10px;padding:12px 16px;margin-bottom:14px;display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:12px">
+      <div style="display:flex;align-items:center;gap:12px">
+        <span style="font-size:12px;color:#94a3b8;font-weight:600">📅 MARKET CLOCK:</span>
+        <span id="sim-clock-market" style="font-size:14px;font-weight:700;color:#38bdf8;font-family:monospace">Ready to start</span>
+      </div>
+      <div style="display:flex;align-items:center;gap:10px">
+        <span style="font-size:12px;color:#94a3b8;font-weight:600">⏱️ PACING:</span>
+        <span id="sim-clock-countdown" style="font-size:13px;font-weight:700;color:#10b981;background:rgba(16,185,129,0.1);padding:4px 10px;border-radius:6px;border:1px solid rgba(16,185,129,0.3)">Fast Mode</span>
+      </div>
+    </div>
+
+    <!-- Progress Bar -->
+    <div style="background:#1e293b;border:1px solid #334155;border-radius:10px;padding:14px;margin-bottom:16px">
+      <div style="display:flex;justify-content:space-between;font-size:12px;color:#94a3b8;margin-bottom:6px">
+        <span id="sim-progress-label">Simulation Progress: 0%</span>
+        <span id="sim-progress-eta">ETA: Ready</span>
+      </div>
+      <div style="background:#0f172a;height:12px;border-radius:6px;overflow:hidden;border:1px solid #334155">
+        <div id="sim-progress-bar" style="background:linear-gradient(90deg,#0ea5e9,#10b981);height:100%;width:0%;transition:width 0.4s ease"></div>
+      </div>
+    </div>
+
+    <!-- Modular View Selector (Mobile Fast Loading) -->
+    <div style="display:flex;gap:8px;margin-bottom:16px;flex-wrap:wrap;border-bottom:1px solid #334155;padding-bottom:10px">
+      <button class="sub-tab-btn active" id="sim-view-btn-summary" onclick="switchSimView('summary')">📊 Executive Metrics</button>
+      <button class="sub-tab-btn" id="sim-view-btn-cycles" onclick="switchSimView('cycles')">🏆 Compounding Cycles</button>
+      <button class="sub-tab-btn" id="sim-view-btn-trades" onclick="switchSimView('trades')">📜 Trade Stream</button>
+      <button class="sub-tab-btn" id="sim-view-btn-events" onclick="switchSimView('events')">📡 AI Events Log</button>
+      <button class="sub-tab-btn" id="sim-view-btn-config" onclick="switchSimView('config')">⚙️ Strategy & Settings</button>
+    </div>
+
+    <!-- VIEW 1: EXECUTIVE METRICS & SUMMARY -->
+    <div id="sim-view-summary">
+      <!-- Live Telemetry Monitor -->
+      <div class="grid" style="padding:0;margin-bottom:16px;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:10px">
+        <div class="card"><div class="card-title">Simulator Status</div><div class="card-value" id="sim-val-status" style="font-size:18px">Idle</div><div class="card-sub" id="sim-sub-status">Ready to run</div></div>
+        <div class="card"><div class="card-title">Ticks Replayed</div><div class="card-value" id="sim-val-ticks">0</div><div class="card-sub">WebSocket steps</div></div>
+        <div class="card"><div class="card-title">Trades Simulated</div><div class="card-value" id="sim-val-trades">0</div><div class="card-sub" id="sim-sub-trades">0 won &middot; 0 lost</div></div>
+        <div class="card"><div class="card-title">Win Rate</div><div class="card-value" id="sim-val-wr" style="color:#10b981">—</div><div class="card-sub" id="sim-sub-pf">PF: —</div></div>
+        <div class="card"><div class="card-title">AI Inferences</div><div class="card-value" id="sim-val-hf" style="color:#38bdf8">0</div><div class="card-sub" id="sim-sub-hf">AI reviews done</div></div>
+        <div class="card"><div class="card-title">Elapsed Time</div><div class="card-value" id="sim-val-time">0s</div><div class="card-sub" id="sim-sub-sym">Symbol: —</div></div>
+      </div>
+
+      <!-- Cycle Challenge Scorecard -->
+      <div class="card" style="margin-bottom:16px;background:linear-gradient(135deg,rgba(16,185,129,0.08),rgba(56,189,248,0.08));border:1px solid rgba(56,189,248,0.3)">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;flex-wrap:wrap;gap:8px">
+          <div>
+            <div style="font-size:15px;font-weight:700;color:#38bdf8;display:flex;align-items:center;gap:6px">
+              <span>🏆 25 USDT ➔ 100 USDT Compounding Challenge</span>
+            </div>
+            <div style="font-size:11px;color:#94a3b8">Simulated paper trading account cycles. Resets to $25 upon reaching $100 OR upon busting ($0).</div>
+          </div>
+          <div style="font-size:11px;color:#cbd5e1;background:#0f172a;padding:4px 10px;border-radius:6px;border:1px solid #334155">
+            Rule: <b>Margin 25% · 10x Lev · Full Fee Deduction</b>
+          </div>
+        </div>
+        <div class="grid" style="padding:0;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:8px">
+          <div style="background:#0f172a;padding:10px;border-radius:6px;border:1px solid #334155">
+            <div style="font-size:10px;color:#94a3b8">TOTAL CYCLES</div>
+            <div id="sim-cycle-total" style="font-size:18px;font-weight:700;color:#f1f5f9">—</div>
+            <div id="sim-cycle-total-sub" style="font-size:10px;color:#64748b">completed</div>
+          </div>
+          <div style="background:#0f172a;padding:10px;border-radius:6px;border:1px solid #334155">
+            <div style="font-size:10px;color:#94a3b8">TARGET REACHED ($100)</div>
+            <div id="sim-cycle-won" style="font-size:18px;font-weight:700;color:#10b981">—</div>
+            <div id="sim-cycle-won-sub" style="font-size:10px;color:#10b981">100% goals hit</div>
+          </div>
+          <div style="background:#0f172a;padding:10px;border-radius:6px;border:1px solid #334155">
+            <div style="font-size:10px;color:#94a3b8">BUSTED ($0)</div>
+            <div id="sim-cycle-busted" style="font-size:18px;font-weight:700;color:#ef4444">—</div>
+            <div id="sim-cycle-busted-sub" style="font-size:10px;color:#ef4444">liquidated/ruined</div>
+          </div>
+          <div style="background:#0f172a;padding:10px;border-radius:6px;border:1px solid #334155">
+            <div style="font-size:10px;color:#94a3b8">CYCLE WIN RATE</div>
+            <div id="sim-cycle-wr" style="font-size:18px;font-weight:700;color:#38bdf8">—</div>
+            <div id="sim-cycle-wr-sub" style="font-size:10px;color:#64748b">target vs bust</div>
+          </div>
+          <div style="background:#0f172a;padding:10px;border-radius:6px;border:1px solid #334155">
+            <div style="font-size:10px;color:#94a3b8">TOTAL NET PROFIT</div>
+            <div id="sim-cycle-profit" style="font-size:18px;font-weight:700;color:#10b981">—</div>
+            <div id="sim-cycle-profit-sub" style="font-size:10px;color:#64748b">across all cycles</div>
+          </div>
+          <div style="background:#0f172a;padding:10px;border-radius:6px;border:1px solid #334155">
+            <div style="font-size:10px;color:#94a3b8">AVG TRADES / CYCLE</div>
+            <div id="sim-cycle-trades" style="font-size:18px;font-weight:700;color:#e2e8f0">—</div>
+            <div id="sim-cycle-trades-sub" style="font-size:10px;color:#64748b">to reach target</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- VIEW 2: COMPOUNDING CYCLES (PAGINATED ON-DEMAND) -->
+    <div id="sim-view-cycles" style="display:none">
+      <div class="card" style="margin-bottom:16px">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;flex-wrap:wrap;gap:8px">
+          <div>
+            <div class="card-title" style="margin:0">📜 Cycle-by-Cycle Account Statements</div>
+            <div style="font-size:11px;color:#94a3b8">Select an individual cycle to inspect its audit statement without lagging your device.</div>
+          </div>
+          <div style="display:flex;gap:6px">
+            <button onclick="filterCycleStatements('ALL')" class="sub-tab-btn active" id="cs-tab-all">All</button>
+            <button onclick="filterCycleStatements('TARGET_REACHED')" class="sub-tab-btn" id="cs-tab-won">Targets Hit (100$)</button>
+            <button onclick="filterCycleStatements('BUSTED')" class="sub-tab-btn" id="cs-tab-busted">Busted (0$)</button>
+          </div>
+        </div>
+
+        <!-- Cycle Selector Dropdown for Mobile -->
+        <div style="background:#090d16;padding:12px;border-radius:8px;border:1px solid #1e293b;margin-bottom:12px;display:flex;align-items:center;gap:12px;flex-wrap:wrap">
+          <label style="font-size:12px;color:#38bdf8;font-weight:700">Choose Cycle:</label>
+          <select id="sim-cycle-picker" onchange="onCyclePickerChange(this.value)" style="flex-grow:1;max-width:360px;background:#0f172a;color:#f1f5f9;border:1px solid #334155;padding:8px 10px;border-radius:6px;font-size:12px">
+            <option value="">-- No cycle simulated yet --</option>
+          </select>
+          <span id="sim-cycle-picker-badge" style="font-size:11px;color:#94a3b8"></span>
+        </div>
+
+        <div id="sim-cycle-statements-container">
+          <div class="empty">No cycle simulation recorded yet. Run the simulator to generate cycle statements.</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- VIEW 3: LIVE TRADE STREAM (PAGINATED) -->
+    <div id="sim-view-trades" style="display:none">
+      <div class="card" style="margin-bottom:16px">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px">
+          <div class="card-title" style="margin:0">Recent Simulated Trades & Strategy Post-Mortem</div>
+          <div style="font-size:11px;color:#94a3b8">Paginated 10 per page for smooth mobile browsing</div>
+        </div>
+        <div id="sim-trade-stream"><div class="empty">No simulator run active yet. Click "Run Simulator" to begin.</div></div>
+      </div>
+    </div>
+
+    <!-- VIEW 4: AI EVENTS LOG -->
+    <div id="sim-view-events" style="display:none">
+      <div class="card">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;flex-wrap:wrap;gap:8px">
+          <div>
+            <div class="card-title" style="margin:0;color:#38bdf8">📡 AI API Events & Telemetry</div>
+            <div style="font-size:11px;color:#94a3b8">External AI API calls log (When AI is disabled, 0 calls are made).</div>
+          </div>
+          <div style="display:flex;align-items:center;gap:8px">
+            <span id="ai-events-count-badge" style="font-size:11px;background:#0f172a;color:#38bdf8;padding:4px 8px;border-radius:4px;border:1px solid #334155">0 Calls Logged</span>
+            <button onclick="fetchAIEvents(true)" style="background:#1e293b;color:#f1f5f9;border:1px solid #334155;padding:5px 10px;border-radius:6px;cursor:pointer;font-size:11px">🔄 Refresh</button>
+          </div>
+        </div>
+        <div style="overflow-x:auto">
+          <table style="width:100%;border-collapse:collapse;font-size:11px;text-align:left">
+            <thead>
+              <tr style="background:#1e293b;color:#94a3b8">
+                <th style="padding:6px 8px">Time (UTC)</th>
+                <th style="padding:6px 8px">Provider & Model</th>
+                <th style="padding:6px 8px">Call Type</th>
+                <th style="padding:6px 8px">Symbol / Setup</th>
+                <th style="padding:6px 8px">Latency</th>
+                <th style="padding:6px 8px">Status</th>
+                <th style="padding:6px 8px">Summary & Reasoning</th>
+              </tr>
+            </thead>
+            <tbody id="sim-ai-events-table">
+              <tr><td colspan="7" style="padding:12px;text-align:center;color:#64748b">No AI events logged yet. (AI calls are stopped).</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
+    <!-- VIEW 5: STRATEGY & PARAMETERS SETTINGS -->
+    <div id="sim-view-config" style="display:none">
+      <!-- Simulator Configuration Card (Strategy, Risk & Compounding) -->
+      <div class="card" style="margin-bottom:16px">
+        <div class="card-title" style="margin-bottom:10px">Strategy, Protections & Compounding Parameters</div>
+        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:12px">
+          <div>
+            <label style="font-size:11px;color:#38bdf8;display:block;margin-bottom:4px;font-weight:700">🎯 Strategy Selection</label>
+            <select id="sim-input-strategy" onchange="saveSimulatorSettings()" style="width:100%;background:#0f172a;color:#38bdf8;border:1px solid #0284c7;padding:8px 10px;border-radius:6px;font-weight:600">
+              <option value="all" selected>⚡ All Strategies (Ensemble / Multi-Strategy)</option>
+              <option value="confluence">🎯 5-Family Confluence Gate</option>
+              <option value="bollinger_squeeze">📊 Bollinger Bands Squeeze Breakout</option>
+              <option value="volume_spike">📈 Volume Anomaly Spike & Surge</option>
+              <option value="rsi_divergence">🔀 RSI Divergence (Trend Reversals)</option>
+              <option value="trend_pullback">🌊 Trend Pullback & Continuation (15m/5m)</option>
+              <option value="range_breakout">💥 Momentum Range Breakout</option>
+              <option value="sweep_reclaim">🧹 Liquidity Sweep & Reclaim</option>
+              <option value="breakout_retest">🔁 Breakout & Retest Confirmation</option>
+            </select>
+          </div>
+          <div>
+            <label style="font-size:11px;color:#94a3b8;display:block;margin-bottom:4px">AI Provider (AI API Calls)</label>
+            <select id="sim-input-ai-provider" onchange="saveSimulatorSettings()" style="width:100%;background:#0f172a;color:#f1f5f9;border:1px solid #334155;padding:8px 10px;border-radius:6px">
+              <option value="none" selected>⛔ Disabled / Offline (0 AI API Calls, Instant, Free)</option>
+              <option value="auto">Auto Hybrid (Gemini + Groq + OpenRouter + HF)</option>
+              <option value="gemini">Gemini Only (gemini-3-flash)</option>
+              <option value="groq">Groq Turbo (qwen3.8-27b)</option>
+              <option value="openrouter">OpenRouter Free (DeepSeek-R1)</option>
+              <option value="hf">Hugging Face Free (Governed)</option>
+            </select>
+          </div>
+          <div>
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px">
+              <label style="font-size:11px;color:#94a3b8;font-weight:600">🎯 Target Multiple (R)</label>
+              <span id="sim-tp-calc-badge" style="font-size:10px;color:#10b981;font-weight:700">+55.0% ROE · +$55 on $100</span>
+            </div>
+            <input type="number" step="0.1" id="sim-input-tp" value="2.2" oninput="updateRMathCard()" style="width:100%;background:#0f172a;color:#10b981;border:1px solid #059669;padding:8px 10px;border-radius:6px;font-weight:700">
+          </div>
+          <div>
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px">
+              <label style="font-size:11px;color:#94a3b8;font-weight:600">🛑 Stop-Loss Multiple (R)</label>
+              <span id="sim-sl-calc-badge" style="font-size:10px;color:#ef4444;font-weight:700">-30.0% ROE · -$30 on $100</span>
+            </div>
+            <input type="number" step="0.1" id="sim-input-sl" value="1.5" oninput="updateRMathCard()" style="width:100%;background:#0f172a;color:#ef4444;border:1px solid #e11d48;padding:8px 10px;border-radius:6px;font-weight:700">
+          </div>
+          <div>
+            <label style="font-size:11px;color:#94a3b8;display:block;margin-bottom:4px">Anti-Flip Cooldown (min)</label>
+            <input type="number" id="sim-input-antiflip" value="90" style="width:100%;background:#0f172a;color:#f1f5f9;border:1px solid #334155;padding:8px 10px;border-radius:6px">
+          </div>
+          <div>
+            <label style="font-size:11px;color:#94a3b8;display:block;margin-bottom:4px">Smart Stagnation Exit (min)</label>
+            <input type="number" id="sim-input-stagnation" value="60" style="width:100%;background:#0f172a;color:#f1f5f9;border:1px solid #334155;padding:8px 10px;border-radius:6px">
+          </div>
+          <div>
+            <label style="font-size:11px;color:#10b981;display:block;margin-bottom:4px;font-weight:700">💰 Cycle Start Capital ($)</label>
+            <input type="number" step="1" id="sim-input-cycle-start" value="25" style="width:100%;background:#0f172a;color:#10b981;border:1px solid #059669;padding:8px 10px;border-radius:6px;font-weight:700">
+          </div>
+          <div>
+            <label style="font-size:11px;color:#38bdf8;display:block;margin-bottom:4px;font-weight:700">🎯 Target Goal Reset ($)</label>
+            <input type="number" step="5" id="sim-input-cycle-target" value="100" style="width:100%;background:#0f172a;color:#38bdf8;border:1px solid #0284c7;padding:8px 10px;border-radius:6px;font-weight:700">
+          </div>
+          <div>
+            <label style="font-size:11px;color:#cbd5e1;display:block;margin-bottom:4px">Margin / Trade (%)</label>
+            <input type="number" step="5" id="sim-input-cycle-margin" value="25" oninput="updateRMathCard()" style="width:100%;background:#0f172a;color:#f1f5f9;border:1px solid #334155;padding:8px 10px;border-radius:6px">
+          </div>
+          <div>
+            <label style="font-size:11px;color:#cbd5e1;display:block;margin-bottom:4px">Leverage (x)</label>
+            <input type="number" step="1" id="sim-input-cycle-lev" value="10" oninput="updateRMathCard()" style="width:100%;background:#0f172a;color:#f1f5f9;border:1px solid #334155;padding:8px 10px;border-radius:6px">
+          </div>
+          <div>
+            <label style="font-size:11px;color:#94a3b8;display:block;margin-bottom:4px">Historical Time Horizon</label>
+            <select id="sim-input-years" onchange="updateSimulatorEstimates()" style="width:100%;background:#0f172a;color:#f1f5f9;border:1px solid #334155;padding:8px 10px;border-radius:6px">
+              <option value="0.00274">1 Day (24 Hours) - Ultra Fast</option>
+              <option value="0.0082" selected>3 Days (72 Hours) - Fast Verification</option>
+              <option value="0.0192">1 Week (168 Hours) - Recommended</option>
+              <option value="0.0384">2 Weeks (336 Hours) - Comprehensive</option>
+              <option value="0.083">1 Month (720 Hours)</option>
+              <option value="0.25">3 Months (2,160 Hours)</option>
+              <option value="1.0">1 Year (8,760 Hours)</option>
+              <option value="3.0">3 Years (26,280 Hours)</option>
+            </select>
+          </div>
+          <div>
+            <label style="font-size:11px;color:#94a3b8;display:block;margin-bottom:4px">Market Hours per Step (hrs)</label>
+            <input type="number" step="0.5" id="sim-input-step-hours" value="1.0" min="0.1" max="24" oninput="updateSimulatorEstimates()" style="width:100%;background:#0f172a;color:#f1f5f9;border:1px solid #334155;padding:8px 10px;border-radius:6px">
+          </div>
+          <div>
+            <label style="font-size:11px;color:#94a3b8;display:block;margin-bottom:4px">Analysis Budget per Step (sec)</label>
+            <input type="number" step="5" id="sim-input-step-seconds" value="10" min="2" max="300" oninput="updateSimulatorEstimates()" style="width:100%;background:#0f172a;color:#f1f5f9;border:1px solid #334155;padding:8px 10px;border-radius:6px">
+          </div>
+          <div style="display:flex;align-items:flex-end">
+            <label style="font-size:12px;color:#10b981;font-weight:700;display:flex;align-items:center;gap:6px;cursor:pointer;padding-bottom:10px">
+              <input type="checkbox" id="sim-input-stepped" checked style="accent-color:#10b981;cursor:pointer">
+              Stepped Clock Mode
+            </label>
+          </div>
+        </div>
+      </div>
+
+      <!-- Live Profit & Loss R Math Breakdown Card ($100 Base Margin) -->
+      <div class="card" style="margin-bottom:16px;background:linear-gradient(135deg,#090d16,#0f172a);border:1px solid rgba(16,185,129,0.35);border-radius:10px;padding:14px">
+        <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;margin-bottom:12px">
+          <div style="font-size:13px;font-weight:700;color:#38bdf8;display:flex;align-items:center;gap:6px">
+            <span>💡 R-Multiple Live Math Breakdown (Using $100 Margin Base)</span>
+          </div>
+          <div style="font-size:10.5px;color:#94a3b8;background:#1e293b;padding:3px 8px;border-radius:4px;border:1px solid #334155">
+            Auto-calculates dynamically based on your Target R, Stop R &amp; Leverage
+          </div>
+        </div>
+
+        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:10px;margin-bottom:12px">
+          <!-- Take Profit Box -->
+          <div style="background:rgba(16,185,129,0.06);border:1px solid rgba(16,185,129,0.25);border-radius:8px;padding:10px">
+            <div style="font-size:11px;font-weight:700;color:#10b981;margin-bottom:4px">🎯 TAKE PROFIT TARGET</div>
+            <div id="sim-math-tp-roe" style="font-size:18px;font-weight:800;color:#10b981">+55.0% ROE</div>
+            <div id="sim-math-tp-cash" style="font-size:12px;font-weight:700;color:#f1f5f9;margin-top:2px">+$55.00 USDT profit on $100</div>
+            <div id="sim-math-tp-price" style="font-size:10.5px;color:#94a3b8;margin-top:3px">Requires +2.20% price move</div>
+          </div>
+
+          <!-- Stop Loss Box -->
+          <div style="background:rgba(239,68,68,0.06);border:1px solid rgba(239,68,68,0.25);border-radius:8px;padding:10px">
+            <div style="font-size:11px;font-weight:700;color:#ef4444;margin-bottom:4px">🛑 STOP-LOSS RISK</div>
+            <div id="sim-math-sl-roe" style="font-size:18px;font-weight:800;color:#ef4444">-30.0% ROE</div>
+            <div id="sim-math-sl-cash" style="font-size:12px;font-weight:700;color:#f1f5f9;margin-top:2px">-$30.00 USDT loss on $100</div>
+            <div id="sim-math-sl-price" style="font-size:10.5px;color:#94a3b8;margin-top:3px">Hits at -1.20% price move</div>
+          </div>
+
+          <!-- Risk / Reward Box -->
+          <div style="background:#090d16;border:1px solid #334155;border-radius:8px;padding:10px">
+            <div style="font-size:11px;font-weight:700;color:#38bdf8;margin-bottom:4px">⚖️ RISK-TO-REWARD (R:R)</div>
+            <div id="sim-math-rr" style="font-size:18px;font-weight:800;color:#38bdf8">1.83 : 1</div>
+            <div id="sim-math-rr-desc" style="font-size:12px;color:#cbd5e1;margin-top:2px">Gain $1.83 for every $1.00 risked</div>
+            <div id="sim-math-position" style="font-size:10.5px;color:#94a3b8;margin-top:3px">Position size: $1,000 at 10x</div>
+          </div>
+        </div>
+
+        <div style="font-size:11px;color:#94a3b8;line-height:1.45;background:#030712;padding:8px 12px;border-radius:6px;border:1px solid #1e293b">
+          ℹ️ <b>What does 'R' mean?</b> <code>1R</code> is your baseline risk unit (defined as <b>1.2% price move</b> / 1.8x ATR). 
+          With <b>10x leverage</b>: <code>1R = 12% ROE ($12 per $100 margin)</code>. At <b>25x leverage</b>: <code>1R = 30% ROE ($30 per $100 margin)</code>.<br>
+          • <b>Target Multiple:</b> Multiplier of 1R. E.g. at 2.2R and 10x, you make <code>+26.4% ROE (+$26.40 on $100)</code>.<br>
+          • <b>Stop-Loss Multiple:</b> Multiplier of 1R. E.g. at 1.5R and 10x, you risk <code>-18.0% ROE (-$18.00 on $100)</code>.
+        </div>
+      </div>
+
+      <!-- Live Dynamic Estimator Box -->
+      <div class="card" style="margin-bottom:16px;background:linear-gradient(180deg,#1e293b,#0f172a);border:1px solid #38bdf8">
+        <div style="font-size:14px;font-weight:700;color:#38bdf8;margin-bottom:10px">⏱️ Run Duration Estimator</div>
+        <div style="background:#090d16;border:1px solid #1e293b;border-radius:8px;padding:12px 14px;display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:10px">
+          <div>
+            <div style="font-size:10px;color:#94a3b8">TOTAL MARKET STEPS</div>
+            <div id="sim-est-steps" style="font-size:17px;font-weight:700;color:#38bdf8">72 Steps</div>
+            <div style="font-size:10px;color:#64748b" id="sim-est-hours">72 market hours</div>
+          </div>
+          <div>
+            <div style="font-size:10px;color:#94a3b8">ESTIMATED RUN TIME</div>
+            <div id="sim-est-time" style="font-size:17px;font-weight:700;color:#10b981">12 mins</div>
+            <div style="font-size:10px;color:#64748b">at 10s / step</div>
+          </div>
+          <div>
+            <div style="font-size:10px;color:#94a3b8">EXPECTED COMPLETION</div>
+            <div id="sim-est-finish" style="font-size:17px;font-weight:700;color:#f59e0b">Calculating...</div>
+            <div style="font-size:10px;color:#64748b">based on local clock</div>
+          </div>
+        </div>
+      </div>
+    </div>
   </section>
 </div>
 
@@ -2768,6 +3464,7 @@ const TAB_META = {
   dashboard:{title:'Dashboard',       sub:'Last 7 days'},
   crypto:   {title:'Signals',         sub:'Live market and recent predictions'},
   mirror:   {title:'Mirror Signals',  sub:'Opposite direction setup review candidates'},
+  simulator:{title:'Market Simulator',sub:'3-Year historical tick replay with Maximum Hugging Face AI reasoning'},
   paper:    {title:'Paper Trading',   sub:'Simulated only — never places a real order'},
   guard:    {title:'Session Guard',   sub:'Behavioural flags from your own trades'},
   accuracy: {title:'Accuracy',        sub:'Calibration, move size and setup performance'},
@@ -2795,7 +3492,8 @@ function switchTab(tab){
   if(tab==='dashboard') loadDashboard();
   // Panels are no longer rebuilt while hidden, so arriving at one means its
   // data may be a refresh cycle old. Fetch what this tab actually needs.
-  if(tab==='crypto') refresh();
+  if(tab==='crypto' || tab==='mirror' || tab==='simulator') refresh();
+  if(tab==='simulator') { pollSimulatorStatus(); loadSimulatorSettings(); }
 }
 
 function toggleMore(){
@@ -2990,68 +3688,925 @@ function renderCryptoSignalsPage(){
   }
 }
 
-let _crMirrorSignalsAll=[];
-let _crMirrorSignalFilter='ALL';
-let _crMirrorSignalPage=0;
+let _crMirrorSignalsAll = [];
+let _crMirrorSummary = null;
+let _crMirrorSignalFilter = 'ALL';
+let _crMirrorStatusFilter = 'ALL';
+let _crMirrorSignalPage = 0;
 
-function renderMirrorSignals(signals){
-  _crMirrorSignalsAll=signals||[];
-  if(_crMirrorSignalFilter!=='ALL' && !_crMirrorSignalsAll.some(s=>s.symbol===_crMirrorSignalFilter)){
-    _crMirrorSignalFilter='ALL';
+function renderMirrorSignals(data){
+  if(data && Array.isArray(data.signals)){
+    _crMirrorSignalsAll = data.signals;
+    _crMirrorSummary = data.summary;
+  } else {
+    _crMirrorSignalsAll = Array.isArray(data) ? data : [];
+    _crMirrorSummary = null;
   }
+
+  // Update scorecard
+  const total = _crMirrorSignalsAll.length;
+  const worked = _crMirrorSignalsAll.filter(s => s.trade_check && s.trade_check.worked).length;
+  const full = _crMirrorSignalsAll.filter(s => s.trade_check && s.trade_check.status === 'won').length;
+  const partial = _crMirrorSignalsAll.filter(s => s.trade_check && s.trade_check.status === 'partial').length;
+  const stopped = _crMirrorSignalsAll.filter(s => s.trade_check && s.trade_check.status === 'stopped').length;
+  const running = _crMirrorSignalsAll.filter(s => s.trade_check && s.trade_check.status === 'running').length;
+  const sumPeak = _crMirrorSignalsAll.reduce((acc, s) => acc + (s.trade_check ? (s.trade_check.peak_gain_pct || 0) : 0), 0);
+  const avgPeak = total > 0 ? (sumPeak / total).toFixed(2) : '0.00';
+  const rate = total > 0 ? ((worked / total) * 100).toFixed(1) : '0.0';
+
+  setText('ms-total', total);
+  setText('ms-rate', rate + '%');
+  setText('ms-full', full);
+  setText('ms-partial', partial);
+  setText('ms-stopped', stopped);
+  setText('ms-running', running);
+  setText('ms-peak', '+' + avgPeak + '%');
+
+  renderMirrorSignalStatusTabs();
   renderMirrorSignalTabs();
   renderMirrorSignalsPage();
 }
 
-function renderMirrorSignalTabs(){
-  const el=document.getElementById('cr-mirror-sig-tabs');
+function renderMirrorSignalStatusTabs(){
+  const el = document.getElementById('cr-mirror-status-filter');
   if(!el) return;
-  const withSignals = new Set(_crMirrorSignalsAll.map(s=>s.symbol));
-  const symbols=[...new Set([..._crWatchlistSymbols, ...withSignals])].sort();
-  if(!symbols.length){el.innerHTML='';return;}
-  const counts={};
-  _crMirrorSignalsAll.forEach(s=>{counts[s.symbol]=(counts[s.symbol]||0)+1;});
-  const tab=(t,label,n)=>
-    `<button class="cr-sig-tab ${t===_crMirrorSignalFilter?'active':''}${n===0?' quiet':''}"
+  const workedCount = _crMirrorSignalsAll.filter(s => s.trade_check && s.trade_check.worked).length;
+  const fullCount = _crMirrorSignalsAll.filter(s => s.trade_check && s.trade_check.status === 'won').length;
+  const partCount = _crMirrorSignalsAll.filter(s => s.trade_check && s.trade_check.status === 'partial').length;
+  const runCount = _crMirrorSignalsAll.filter(s => s.trade_check && s.trade_check.status === 'running').length;
+  const stopCount = _crMirrorSignalsAll.filter(s => s.trade_check && s.trade_check.status === 'stopped').length;
+
+  const btn = (st, label, n, color) => `
+    <button class="cr-sig-tab ${st === _crMirrorStatusFilter ? 'active' : ''}"
+      onclick="setMirrorStatusFilter('${st}')" style="${st === _crMirrorStatusFilter ? 'border-color:' + color + ';color:' + color : ''}">
+      ${label} <span class="cr-tab-n">${n}</span>
+    </button>`;
+
+  el.innerHTML =
+    btn('ALL', 'All Signals', _crMirrorSignalsAll.length, '#0ea5e9') +
+    btn('WORKED', '🟢 Worked (Full+Part)', workedCount, '#10b981') +
+    btn('WON', '🏆 Full Target', fullCount, '#10b981') +
+    btn('PARTIAL', '⚡ Partial Win', partCount, '#f59e0b') +
+    btn('RUNNING', '🔵 Active / Running', runCount, '#38bdf8') +
+    btn('STOPPED', '🛑 Direct Stop', stopCount, '#ef4444');
+}
+
+function setMirrorStatusFilter(st){
+  _crMirrorStatusFilter = st;
+  _crMirrorSignalPage = 0;
+  renderMirrorSignalStatusTabs();
+  renderMirrorSignalsPage();
+}
+
+function renderMirrorSignalTabs(){
+  const el = document.getElementById('cr-mirror-sig-tabs');
+  if(!el) return;
+  const withSignals = new Set(_crMirrorSignalsAll.map(s => s.symbol));
+  const symbols = [...new Set([..._crWatchlistSymbols, ...withSignals])].sort();
+  if(!symbols.length){ el.innerHTML = ''; return; }
+  const counts = {};
+  _crMirrorSignalsAll.forEach(s => { counts[s.symbol] = (counts[s.symbol] || 0) + 1; });
+  const tab = (t, label, n) =>
+    `<button class="cr-sig-tab ${t === _crMirrorSignalFilter ? 'active' : ''}${n === 0 ? ' quiet' : ''}"
       onclick="setMirrorSignalFilter('${esc(t)}')">${esc(label)}${
-      n===undefined?'':`<span class="cr-tab-n">${n}</span>`}</button>`;
-  el.innerHTML = tab('ALL','All',_crMirrorSignalsAll.length)
-    + symbols.map(sym=>tab(sym,sym,counts[sym]||0)).join('');
+      n === undefined ? '' : `<span class="cr-tab-n">${n}</span>`}</button>`;
+  el.innerHTML = tab('ALL', 'All Coins', _crMirrorSignalsAll.length)
+    + symbols.map(sym => tab(sym, sym, counts[sym] || 0)).join('');
 }
 
 function setMirrorSignalFilter(sym){
-  _crMirrorSignalFilter=sym;
-  _crMirrorSignalPage=0;
+  _crMirrorSignalFilter = sym;
+  _crMirrorSignalPage = 0;
   renderMirrorSignalTabs();
   renderMirrorSignalsPage();
 }
 
 function changeMirrorSignalPage(delta){
-  _crMirrorSignalPage+=delta;
+  _crMirrorSignalPage += delta;
   renderMirrorSignalsPage();
 }
 
 function renderMirrorSignalsPage(){
-  const el=document.getElementById('cr-mirror-signals');
-  const pageEl=document.getElementById('cr-mirror-sig-pagination');
-  const filtered=_crMirrorSignalFilter==='ALL'?_crMirrorSignalsAll:_crMirrorSignalsAll.filter(s=>s.symbol===_crMirrorSignalFilter);
+  const el = document.getElementById('cr-mirror-signals');
+  const pageEl = document.getElementById('cr-mirror-sig-pagination');
+
+  let filtered = _crMirrorSignalsAll;
+  if(_crMirrorSignalFilter !== 'ALL'){
+    filtered = filtered.filter(s => s.symbol === _crMirrorSignalFilter);
+  }
+  if(_crMirrorStatusFilter === 'WORKED'){
+    filtered = filtered.filter(s => s.trade_check && s.trade_check.worked);
+  } else if(_crMirrorStatusFilter === 'WON'){
+    filtered = filtered.filter(s => s.trade_check && s.trade_check.status === 'won');
+  } else if(_crMirrorStatusFilter === 'PARTIAL'){
+    filtered = filtered.filter(s => s.trade_check && s.trade_check.status === 'partial');
+  } else if(_crMirrorStatusFilter === 'RUNNING'){
+    filtered = filtered.filter(s => s.trade_check && s.trade_check.status === 'running');
+  } else if(_crMirrorStatusFilter === 'STOPPED'){
+    filtered = filtered.filter(s => s.trade_check && s.trade_check.status === 'stopped');
+  }
 
   if(!filtered.length){
-    el.innerHTML='<div class="empty">No mirror signals in the last 24 hours</div>';
-    if(pageEl) pageEl.innerHTML='';
+    el.innerHTML = '<div class="empty">No mirror signals matching filter in the last 48 hours</div>';
+    if(pageEl) pageEl.innerHTML = '';
     return;
   }
 
-  const totalPages=Math.max(1,Math.ceil(filtered.length/CR_SIG_PAGE_SIZE));
-  _crMirrorSignalPage=Math.min(Math.max(0,_crMirrorSignalPage),totalPages-1);
-  const start=_crMirrorSignalPage*CR_SIG_PAGE_SIZE;
-  el.innerHTML=filtered.slice(start,start+CR_SIG_PAGE_SIZE).map(renderCryptoSignalCard).join('');
+  const totalPages = Math.max(1, Math.ceil(filtered.length / CR_SIG_PAGE_SIZE));
+  _crMirrorSignalPage = Math.min(Math.max(0, _crMirrorSignalPage), totalPages - 1);
+  const start = _crMirrorSignalPage * CR_SIG_PAGE_SIZE;
+  el.innerHTML = filtered.slice(start, start + CR_SIG_PAGE_SIZE).map(renderMirrorSignalCard).join('');
 
   if(pageEl){
-    pageEl.innerHTML = totalPages<=1 ? '' : `
-      <button class="cr-page-btn" ${_crMirrorSignalPage===0?'disabled':''} onclick="changeMirrorSignalPage(-1)">‹ Prev</button>
-      <span class="cr-page-label">Page ${_crMirrorSignalPage+1} of ${totalPages}</span>
-      <button class="cr-page-btn" ${_crMirrorSignalPage>=totalPages-1?'disabled':''} onclick="changeMirrorSignalPage(1)">Next ›</button>`;
+    pageEl.innerHTML = totalPages <= 1 ? '' : `
+      <button class="cr-page-btn" ${_crMirrorSignalPage === 0 ? 'disabled' : ''} onclick="changeMirrorSignalPage(-1)">‹ Prev</button>
+      <span class="cr-page-label">Page ${_crMirrorSignalPage + 1} of ${totalPages}</span>
+      <button class="cr-page-btn" ${_crMirrorSignalPage >= totalPages - 1 ? 'disabled' : ''} onclick="changeMirrorSignalPage(1)">Next ›</button>`;
+  }
+}
+
+async function forceMirrorLiveCheck(btn){
+  if(btn){
+    btn.disabled = true;
+    btn.innerHTML = '<span>⏳ Evaluating Live Trades & Hugging Face AI...</span>';
+  }
+  try {
+    const res = await fetch('/api/crypto/signals/live-check?mirror=1', { method: 'POST' });
+    if(res.ok){
+      const data = await res.json();
+      renderMirrorSignals(data);
+    }
+  } catch(e){
+    console.error('live check error:', e);
+  } finally {
+    if(btn){
+      btn.disabled = false;
+      btn.innerHTML = '<span>⚡ Force Live Check & AI Review</span>';
+    }
+  }
+}
+
+function renderMirrorSignalCard(s){
+  const name = CR_SIG_NAME[s.signal_type] || s.signal_type.replace(/_/g, ' ');
+  const long = s.direction === 'long';
+  const entry = s.current_price, tp = s.target_price, sl = s.stop_loss;
+  const move = (tp && entry) ? Math.abs(tp - entry) / entry * 100 : 0;
+  const risk = (sl && entry) ? Math.abs(entry - sl) / entry * 100 : 0;
+
+  const tc = s.trade_check || {
+    status: s.outcome || 'running',
+    worked: s.outcome === 'won',
+    worked_desc: 'Evaluating live trajectory...',
+    target_pct_reached: s.outcome === 'won' ? 100 : 0,
+    peak_gain_pct: s.pnl_pct || 0,
+    peak_r: 0,
+    peak_price: entry,
+    max_drawdown_pct: 0,
+    realized_pnl_pct: s.pnl_pct || 0,
+    current_pnl_pct: s.pnl_pct || 0,
+  };
+  const ai = s.ai_reasoning || {};
+
+  let badgeColor = '#64748b';
+  let badgeText = 'PENDING';
+  if(tc.status === 'won'){
+    badgeColor = '#10b981';
+    badgeText = '🏆 WORKED (FULL TARGET +' + (tc.target_dist_pct || move).toFixed(2) + '%)';
+  } else if(tc.status === 'partial'){
+    badgeColor = '#f59e0b';
+    badgeText = '⚡ PARTIALLY WORKED (' + tc.target_pct_reached + '% OF TARGET)';
+  } else if(tc.status === 'running'){
+    badgeColor = '#0ea5e9';
+    badgeText = '🔵 ACTIVE TRADE (' + (tc.current_pnl_pct >= 0 ? '+' : '') + tc.current_pnl_pct.toFixed(2) + '%)';
+  } else if(tc.status === 'stopped'){
+    badgeColor = '#ef4444';
+    badgeText = '🛑 STOPPED OUT (-' + (tc.risk_dist_pct || risk).toFixed(2) + '%)';
+  }
+
+  const gaugePercent = Math.min(100, Math.max(0, tc.target_pct_reached || 0));
+
+  return `<div class="sig ${long ? 'long' : 'short'}" style="border-top:3px solid ${badgeColor};padding:16px;margin-bottom:14px">
+    <div class="sig-head" style="margin-bottom:8px">
+      <span class="sig-sym">${esc(s.symbol)}</span>
+      <span class="sig-dir ${long ? 'long' : 'short'}">${long ? 'Long' : 'Short'}</span>
+      <span class="pt-mode" style="background:${badgeColor};color:#fff;font-weight:700">${badgeText}</span>
+      <div style="flex-grow:1"></div>
+      <div style="text-align:right">
+        <span style="font-size:11px;color:#94a3b8">Peak Gain: </span>
+        <b style="font-size:15px;color:#10b981">+${tc.peak_gain_pct.toFixed(2)}%</b>
+        <span style="font-size:11px;color:#64748b"> (+${tc.peak_r}R)</span>
+      </div>
+    </div>
+
+    <div class="sig-meta" style="margin-bottom:12px">
+      <span class="sig-setup">${esc(name)}</span>
+      <span>&middot;</span><span>${s.confidence}% confidence</span>
+      <span>&middot;</span><span>Target: ~${esc(s.timeframe)}</span>
+      <div style="flex-grow:1"></div>
+      <span class="sig-when">${fmtSignalTime(s.timestamp)}</span>
+    </div>
+
+    <!-- Levels Row -->
+    <div class="sig-levels" style="margin-bottom:10px">
+      <div><label>Stop Loss</label><b class="neg">${fmtPrice(sl)}</b><span>−${risk.toFixed(2)}%</span></div>
+      <div class="mid"><label>Entry Price</label><b>${fmtPrice(entry)}</b><span>LTP</span></div>
+      <div class="right"><label>Take Profit</label><b class="pos">${fmtPrice(tp)}</b><span>+${move.toFixed(2)}%</span></div>
+    </div>
+
+    <!-- How Much It Worked Visual Track Gauge -->
+    <div style="margin:12px 0 10px;background:#0f172a;border-radius:8px;padding:10px 12px;border:1px solid #334155">
+      <div style="display:flex;justify-content:space-between;font-size:11px;color:#94a3b8;margin-bottom:4px">
+        <span>Stop Loss: ${fmtPrice(sl)}</span>
+        <span style="color:#f1f5f9;font-weight:600">Peak Reached: ${fmtPrice(tc.peak_price)} [★ ${tc.target_pct_reached}% to Target]</span>
+        <span>Target: ${fmtPrice(tp)}</span>
+      </div>
+      <div style="background:#1e293b;height:10px;border-radius:5px;position:relative;overflow:hidden">
+        <div style="position:absolute;left:0;top:0;height:100%;width:${gaugePercent}%;background:linear-gradient(90deg,#0ea5e9,${tc.status === 'won' ? '#10b981' : '#f59e0b'})"></div>
+      </div>
+      <div style="display:flex;justify-content:space-between;font-size:10px;color:#64748b;margin-top:4px">
+        <span>0% (Entry)</span>
+        <span>50% (TP1 Milestone)</span>
+        <span>100% (Full Target)</span>
+      </div>
+    </div>
+
+    <!-- Narrative / How much it worked -->
+    <div class="sig-warn" style="background:rgba(14,165,233,0.06);border-left-color:#0ea5e9;color:#e2e8f0;margin-bottom:12px">
+      <b>Performance Summary:</b> ${esc(tc.worked_desc || 'Signal executed in live market.')}
+    </div>
+
+    <!-- Hugging Face Dual AI Reasoning -->
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:10px;margin-bottom:10px">
+      <div style="background:rgba(16,185,129,0.07);border:1px solid rgba(16,185,129,0.25);border-radius:8px;padding:10px">
+        <div style="font-size:11px;font-weight:700;color:#10b981;margin-bottom:4px;display:flex;align-items:center;gap:4px">
+          <span>🟢 AI: Why It Worked</span>
+        </div>
+        <div style="font-size:11.5px;color:#cbd5e1;line-height:1.45">${esc(ai.why_it_worked || 'Technical momentum and volume expansion supported the move toward peak levels.')}</div>
+      </div>
+      <div style="background:rgba(239,68,68,0.07);border:1px solid rgba(239,68,68,0.25);border-radius:8px;padding:10px">
+        <div style="font-size:11px;font-weight:700;color:#f87171;margin-bottom:4px;display:flex;align-items:center;gap:4px">
+          <span>🔴 AI: Why It Failed / Retraced</span>
+        </div>
+        <div style="font-size:11.5px;color:#cbd5e1;line-height:1.45">${esc(ai.why_it_failed || 'Opposing liquidity or counter-trend resistance capped further continuation.')}</div>
+      </div>
+    </div>
+
+    <!-- Key Heuristic Footer -->
+    <div style="display:flex;align-items:center;justify-content:space-between;padding-top:6px;border-top:1px solid rgba(255,255,255,0.06);font-size:11px;color:#94a3b8">
+      <div>💡 <b>Key Takeaway:</b> ${esc(ai.key_takeaway || 'Manage risk proactively with dynamic trailing stops.')}</div>
+      <div style="font-size:10px;color:#64748b">Provider: ${esc(ai.source_model || 'Hugging Face')}</div>
+    </div>
+
+    ${renderReviewTrail(s)}
+  </div>`;
+}
+
+// ── SIMULATOR CLIENT JS ────────────────────────────────────────────────────────
+let _simPollTimer = null;
+async function fetchSimulatorStatus(){
+  try {
+    const res = await fetch('/api/simulator/status');
+    if(!res.ok) return;
+    const data = await res.json();
+    renderSimulator(data);
+    if(data.is_running){
+      if(!_simPollTimer) _simPollTimer = setTimeout(fetchSimulatorStatus, 2500);
+    } else {
+      if(_simPollTimer) { clearTimeout(_simPollTimer); _simPollTimer = null; }
+    }
+  } catch(e){
+    console.error('fetchSimulatorStatus error:', e);
+  }
+}
+
+function pollSimulatorStatus(){
+  if(_simPollTimer) clearTimeout(_simPollTimer);
+  _simPollTimer = setTimeout(fetchSimulatorStatus, 500);
+}
+
+function updateRMathCard(){
+  const tpR = parseFloat(document.getElementById('sim-input-tp')?.value || '2.2');
+  const slR = parseFloat(document.getElementById('sim-input-sl')?.value || '1.5');
+  const lev = parseFloat(document.getElementById('sim-input-cycle-lev')?.value || '10');
+  const baseMargin = 100.0; // Base $100 margin example requested by user
+  
+  // In the simulator engine, 1R benchmark volatility distance is 1.2% price move (min 1.2%, or 1.8x ATR)
+  const oneRPricePct = 1.2;
+  const tpPricePct = tpR * oneRPricePct;
+  const slPricePct = slR * oneRPricePct;
+  
+  // ROE = Price move % * Leverage
+  const tpRoePct = tpPricePct * lev;
+  const slRoePct = slPricePct * lev;
+  
+  // Dollar profit / loss on $100 margin
+  const tpCash = (tpRoePct / 100.0) * baseMargin;
+  const slCash = (slRoePct / 100.0) * baseMargin;
+  
+  const rr = (slR > 0) ? (tpR / slR).toFixed(2) : '—';
+  const posSize = baseMargin * lev;
+
+  // Update input header badges
+  setText('sim-tp-calc-badge', `+${tpRoePct.toFixed(1)}% ROE · +$${tpCash.toFixed(2)} on $100`);
+  setText('sim-sl-calc-badge', `-${slRoePct.toFixed(1)}% ROE · -$${slCash.toFixed(2)} on $100`);
+
+  // Update live breakdown card
+  setText('sim-math-tp-roe', `+${tpRoePct.toFixed(1)}% ROE`);
+  setText('sim-math-tp-cash', `+$${tpCash.toFixed(2)} USDT profit on $100`);
+  setText('sim-math-tp-price', `Requires +${tpPricePct.toFixed(2)}% price move (${tpR.toFixed(1)}R)`);
+
+  setText('sim-math-sl-roe', `-${slRoePct.toFixed(1)}% ROE`);
+  setText('sim-math-sl-cash', `-$${slCash.toFixed(2)} USDT loss on $100`);
+  setText('sim-math-sl-price', `Hits at -${slPricePct.toFixed(2)}% price move (${slR.toFixed(1)}R)`);
+
+  setText('sim-math-rr', `${rr} : 1`);
+  setText('sim-math-rr-desc', `Gain $${rr} for every $1.00 risked`);
+  setText('sim-math-position', `Position size: $${posSize.toLocaleString()} at ${lev}x`);
+}
+
+function updateSimulatorEstimates(){
+  const yearsVal = parseFloat(document.getElementById('sim-input-years')?.value || '0.083');
+  const stepHours = parseFloat(document.getElementById('sim-input-step-hours')?.value || '1.0');
+  const stepBudgetSec = parseFloat(document.getElementById('sim-input-step-seconds')?.value || '60.0');
+
+  const totalMarketHours = Math.round(yearsVal * 8760);
+  const totalSteps = Math.max(1, Math.round(totalMarketHours / Math.max(0.1, stepHours)));
+  const totalDurationSec = totalSteps * stepBudgetSec;
+
+  const hours = Math.floor(totalDurationSec / 3600);
+  const mins = Math.floor((totalDurationSec % 3600) / 60);
+  const timeStr = (hours > 0 ? (hours + ' hrs ') : '') + mins + ' mins';
+
+  const finishDate = new Date(Date.now() + totalDurationSec * 1000);
+  const finishStr = finishDate.toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'}) + ' (' + finishDate.toLocaleDateString([], {month: 'short', day: 'numeric'}) + ')';
+
+  setText('sim-est-steps', totalSteps.toLocaleString() + ' Steps');
+  setText('sim-est-hours', totalMarketHours.toLocaleString() + ' market hours');
+  setText('sim-est-time', timeStr);
+  setText('sim-est-finish', finishStr);
+}
+
+// ── Persistent Simulator Settings Storage (localStorage + Server) ──
+const SIM_SETTINGS_KEY = 'sim_settings_v3';
+
+let _currentSimView = 'summary';
+function switchSimView(viewName) {
+  _currentSimView = viewName;
+  const views = ['summary', 'cycles', 'trades', 'events', 'config'];
+  views.forEach(v => {
+    const el = document.getElementById('sim-view-' + v);
+    const btn = document.getElementById('sim-view-btn-' + v);
+    if (el) el.style.display = (v === viewName) ? 'block' : 'none';
+    if (btn) {
+      if (v === viewName) btn.classList.add('active');
+      else btn.classList.remove('active');
+    }
+  });
+  if (viewName === 'events') fetchAIEvents();
+  if (viewName === 'cycles' && _cachedCycleData) {
+    renderCycleStatements(_cachedCycleData);
+  }
+}
+
+function getSimulatorFormValues() {
+  return {
+    strategy: document.getElementById('sim-input-strategy')?.value || 'all',
+    years: document.getElementById('sim-input-years')?.value || '0.0082',
+    tp_r: parseFloat(document.getElementById('sim-input-tp')?.value || '2.2'),
+    sl_r: parseFloat(document.getElementById('sim-input-sl')?.value || '1.5'),
+    anti_flip: parseInt(document.getElementById('sim-input-antiflip')?.value || '90'),
+    stagnation: parseInt(document.getElementById('sim-input-stagnation')?.value || '60'),
+    max_ai_reviews: parseInt(document.getElementById('sim-input-maxai')?.value || '150'),
+    cycle_start: parseFloat(document.getElementById('sim-input-cycle-start')?.value || '25'),
+    cycle_target: parseFloat(document.getElementById('sim-input-cycle-target')?.value || '100'),
+    cycle_margin_pct: parseFloat(document.getElementById('sim-input-cycle-margin')?.value || '25'),
+    cycle_leverage: parseFloat(document.getElementById('sim-input-cycle-lev')?.value || '10'),
+    stepped_mode: document.getElementById('sim-input-stepped')?.checked ?? true,
+    step_market_hours: parseFloat(document.getElementById('sim-input-step-hours')?.value || '1.0'),
+    step_seconds: parseFloat(document.getElementById('sim-input-step-seconds')?.value || '60.0'),
+    gemini_key: document.getElementById('sim-input-gemini-key')?.value || '',
+    openrouter_key: document.getElementById('sim-input-openrouter-key')?.value || '',
+    hf_tokens: document.getElementById('sim-input-hf-tokens')?.value || '',
+    ai_provider: document.getElementById('sim-input-ai-provider')?.value || 'none',
+  };
+}
+
+let _saveSimDebounce = null;
+function saveSimulatorSettings() {
+  const vals = getSimulatorFormValues();
+  try {
+    localStorage.setItem(SIM_SETTINGS_KEY, JSON.stringify(vals));
+  } catch(e){}
+  if (_saveSimDebounce) clearTimeout(_saveSimDebounce);
+  _saveSimDebounce = setTimeout(() => {
+    fetch('/api/simulator/config', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(vals)
+    }).catch(e => console.debug('save sim config error:', e));
+  }, 300);
+}
+
+async function loadSimulatorSettings() {
+  let cfg = null;
+  try {
+    const raw = localStorage.getItem(SIM_SETTINGS_KEY);
+    if (raw) cfg = JSON.parse(raw);
+  } catch(e){}
+
+  if (!cfg) {
+    try {
+      const res = await fetch('/api/simulator/config');
+      if (res.ok) cfg = await res.json();
+    } catch(e){}
+  }
+
+  if (cfg) {
+    applySimulatorConfig(cfg);
+  }
+  updateSimulatorEstimates();
+  updateRMathCard();
+  attachSimulatorInputListeners();
+}
+
+function applySimulatorConfig(c) {
+  if (c.strategy !== undefined && document.getElementById('sim-input-strategy')) document.getElementById('sim-input-strategy').value = c.strategy;
+  if (c.years !== undefined && document.getElementById('sim-input-years')) document.getElementById('sim-input-years').value = c.years;
+  if (c.tp_r !== undefined && document.getElementById('sim-input-tp')) document.getElementById('sim-input-tp').value = c.tp_r;
+  if (c.sl_r !== undefined && document.getElementById('sim-input-sl')) document.getElementById('sim-input-sl').value = c.sl_r;
+  if (c.anti_flip !== undefined && document.getElementById('sim-input-antiflip')) document.getElementById('sim-input-antiflip').value = c.anti_flip;
+  if (c.stagnation !== undefined && document.getElementById('sim-input-stagnation')) document.getElementById('sim-input-stagnation').value = c.stagnation;
+  if (c.max_ai_reviews !== undefined && document.getElementById('sim-input-maxai')) document.getElementById('sim-input-maxai').value = c.max_ai_reviews;
+  if (c.cycle_start !== undefined && document.getElementById('sim-input-cycle-start')) document.getElementById('sim-input-cycle-start').value = c.cycle_start;
+  if (c.cycle_target !== undefined && document.getElementById('sim-input-cycle-target')) document.getElementById('sim-input-cycle-target').value = c.cycle_target;
+  if (c.cycle_margin_pct !== undefined && document.getElementById('sim-input-cycle-margin')) document.getElementById('sim-input-cycle-margin').value = c.cycle_margin_pct;
+  if (c.cycle_leverage !== undefined && document.getElementById('sim-input-cycle-lev')) document.getElementById('sim-input-cycle-lev').value = c.cycle_leverage;
+  if (c.stepped_mode !== undefined && document.getElementById('sim-input-stepped')) document.getElementById('sim-input-stepped').checked = !!c.stepped_mode;
+  if (c.step_market_hours !== undefined && document.getElementById('sim-input-step-hours')) document.getElementById('sim-input-step-hours').value = c.step_market_hours;
+  if (c.step_seconds !== undefined && document.getElementById('sim-input-step-seconds')) document.getElementById('sim-input-step-seconds').value = c.step_seconds;
+  if (c.gemini_key && document.getElementById('sim-input-gemini-key')) document.getElementById('sim-input-gemini-key').value = c.gemini_key;
+  if (c.openrouter_key !== undefined && document.getElementById('sim-input-openrouter-key')) document.getElementById('sim-input-openrouter-key').value = c.openrouter_key;
+  if (c.hf_tokens !== undefined && document.getElementById('sim-input-hf-tokens')) document.getElementById('sim-input-hf-tokens').value = c.hf_tokens;
+  if (c.ai_provider && document.getElementById('sim-input-ai-provider')) document.getElementById('sim-input-ai-provider').value = c.ai_provider;
+}
+
+let _simListenersAttached = false;
+function attachSimulatorInputListeners() {
+  if (_simListenersAttached) return;
+  const ids = [
+    'sim-input-strategy', 'sim-input-years', 'sim-input-tp', 'sim-input-sl', 'sim-input-antiflip',
+    'sim-input-stagnation', 'sim-input-maxai', 'sim-input-cycle-start',
+    'sim-input-cycle-target', 'sim-input-cycle-margin', 'sim-input-cycle-lev',
+    'sim-input-stepped', 'sim-input-step-hours', 'sim-input-step-seconds',
+    'sim-input-gemini-key', 'sim-input-openrouter-key', 'sim-input-hf-tokens',
+    'sim-input-ai-provider'
+  ];
+  ids.forEach(id => {
+    const el = document.getElementById(id);
+    if (el) {
+      el.addEventListener('input', () => { saveSimulatorSettings(); updateSimulatorEstimates(); updateRMathCard(); });
+      el.addEventListener('change', () => { saveSimulatorSettings(); updateSimulatorEstimates(); updateRMathCard(); });
+    }
+  });
+  _simListenersAttached = true;
+}
+
+let _aiEventsPollTimer = null;
+async function fetchAIEvents(force = false){
+  try {
+    const res = await fetch('/api/simulator/ai-events');
+    if(!res.ok) return;
+    const events = await res.json();
+    renderAIEvents(events);
+  } catch(e){
+    console.error('fetchAIEvents error:', e);
+  }
+}
+
+function renderAIEvents(events){
+  const tbody = document.getElementById('sim-ai-events-table');
+  const countBadge = document.getElementById('ai-events-count-badge');
+  if(!tbody || !Array.isArray(events)) return;
+  if(countBadge) countBadge.innerText = events.length + ' Calls Logged';
+  if(!events.length){
+    tbody.innerHTML = '<tr><td colspan="7" style="padding:12px;text-align:center;color:#64748b">No AI events logged yet (AI calls are stopped).</td></tr>';
+    return;
+  }
+  tbody.innerHTML = events.slice(-30).reverse().map((e, idx) => `
+    <tr style="border-bottom:1px solid #1e293b;background:${idx % 2 === 0 ? 'rgba(15,23,42,0.4)' : 'rgba(30,41,59,0.2)'}">
+      <td style="padding:6px 8px;color:#94a3b8;font-family:monospace">${esc(e.timestamp ? e.timestamp.slice(11, 19) : '')}</td>
+      <td style="padding:6px 8px">
+        <span style="padding:2px 6px;border-radius:4px;font-size:10px;font-weight:700;color:#fff;background:${e.provider === 'gemini' ? '#059669' : (e.provider === 'groq' ? '#0284c7' : (e.provider === 'openrouter' ? '#7c3aed' : '#d97706'))}">
+          ${esc((e.provider || 'AI').toUpperCase())}
+        </span>
+        <span style="font-size:10px;color:#cbd5e1;margin-left:4px">${esc(e.model || '')}</span>
+      </td>
+      <td style="padding:6px 8px;color:#38bdf8">${esc(e.call_type || '')}</td>
+      <td style="padding:6px 8px;font-weight:600;color:#f1f5f9">${esc(e.symbol || '')} <span style="color:${e.direction === 'LONG' ? '#10b981' : '#f43f5e'}">${esc(e.direction || '')}</span></td>
+      <td style="padding:6px 8px;color:#cbd5e1">${e.latency_ms || 0} ms</td>
+      <td style="padding:6px 8px"><span style="padding:2px 5px;border-radius:3px;font-size:10px;color:#fff;background:${e.status === 'SUCCESS' ? '#10b981' : '#f59e0b'}">${esc(e.status || 'OK')}</span></td>
+      <td style="padding:6px 8px">
+        <div style="font-size:11px;color:#cbd5e1">${esc(e.summary || '')}</div>
+        ${e.why_it_worked ? `<div style="font-size:10px;color:#10b981;margin-top:2px">🟢 Worked: ${esc(e.why_it_worked.slice(0, 90))}...</div>` : ''}
+        ${e.why_it_failed ? `<div style="font-size:10px;color:#f87171;margin-top:1px">🔴 Retraced: ${esc(e.why_it_failed.slice(0, 90))}...</div>` : ''}
+      </td>
+    </tr>
+  `).join('');
+}
+
+async function startSimulator(){
+  const btn = document.getElementById('sim-btn-start');
+  const pauseBtn = document.getElementById('sim-btn-pause');
+  const strategy = document.getElementById('sim-input-strategy')?.value || 'all';
+  const years = parseFloat(document.getElementById('sim-input-years')?.value || '0.0082');
+  const tp = parseFloat(document.getElementById('sim-input-tp')?.value || '2.2');
+  const sl = parseFloat(document.getElementById('sim-input-sl')?.value || '1.5');
+  const antiflip = parseInt(document.getElementById('sim-input-antiflip')?.value || '90');
+  const stagnation = parseInt(document.getElementById('sim-input-stagnation')?.value || '60');
+  const maxai = parseInt(document.getElementById('sim-input-maxai')?.value || '150');
+  const cycleStart = parseFloat(document.getElementById('sim-input-cycle-start')?.value || '25');
+  const cycleTarget = parseFloat(document.getElementById('sim-input-cycle-target')?.value || '100');
+  const cycleMargin = parseFloat(document.getElementById('sim-input-cycle-margin')?.value || '25');
+  const cycleLev = parseFloat(document.getElementById('sim-input-cycle-lev')?.value || '10');
+  const stepped = document.getElementById('sim-input-stepped')?.checked ?? true;
+  const stepHours = parseFloat(document.getElementById('sim-input-step-hours')?.value || '1.0');
+  const stepSeconds = parseFloat(document.getElementById('sim-input-step-seconds')?.value || '60.0');
+  const geminiKey = document.getElementById('sim-input-gemini-key')?.value || '';
+  const openrouterKey = document.getElementById('sim-input-openrouter-key')?.value || '';
+  const hfTokens = document.getElementById('sim-input-hf-tokens')?.value || '';
+  const aiProvider = document.getElementById('sim-input-ai-provider')?.value || 'none';
+
+  saveSimulatorSettings();
+  if(btn) btn.disabled = true;
+  setText('sim-val-status', 'Starting...');
+
+  try {
+    const res = await fetch('/api/simulator/start', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        strategy: strategy,
+        years: years,
+        tp_r: tp,
+        sl_r: sl,
+        anti_flip: antiflip,
+        stagnation: stagnation,
+        max_ai_reviews: maxai,
+        cycle_start: cycleStart,
+        cycle_target: cycleTarget,
+        cycle_margin_pct: cycleMargin,
+        cycle_leverage: cycleLev,
+        stepped_mode: stepped,
+        step_market_hours: stepHours,
+        step_seconds: stepSeconds,
+        gemini_key: geminiKey,
+        openrouter_key: openrouterKey,
+        hf_tokens: hfTokens,
+        ai_provider: aiProvider
+      })
+    });
+    if(res.ok){
+      if(pauseBtn) pauseBtn.style.display = 'inline-flex';
+      if(btn) btn.style.display = 'none';
+      pollSimulatorStatus();
+      if(aiProvider !== 'none') fetchAIEvents();
+    } else {
+      alert('Error starting simulator');
+    }
+  } catch(e){
+    console.error('start simulator error:', e);
+  } finally {
+    if(btn) btn.disabled = false;
+  }
+}
+
+async function pauseSimulator(){
+  try {
+    await fetch('/api/simulator/pause', { method: 'POST' });
+    const btn = document.getElementById('sim-btn-start');
+    const pauseBtn = document.getElementById('sim-btn-pause');
+    if(btn) btn.style.display = 'inline-flex';
+    if(pauseBtn) pauseBtn.style.display = 'none';
+    setText('sim-val-status', 'Paused');
+  } catch(e){
+    console.error('pause simulator error:', e);
+  }
+}
+
+let _currentCycleFilter = 'ALL';
+let _cachedCycleData = null;
+let _selectedCycleId = null;
+let _currentCycleLedgerPage = 1;
+
+function filterCycleStatements(filter){
+  _currentCycleFilter = filter;
+  ['all', 'won', 'busted'].forEach(id => {
+    const el = document.getElementById('cs-tab-' + id);
+    if(el) el.classList.remove('active');
+  });
+  if(filter === 'ALL') document.getElementById('cs-tab-all')?.classList.add('active');
+  if(filter === 'TARGET_REACHED') document.getElementById('cs-tab-won')?.classList.add('active');
+  if(filter === 'BUSTED') document.getElementById('cs-tab-busted')?.classList.add('active');
+  if(_cachedCycleData) renderCycleStatements(_cachedCycleData);
+}
+
+function onCyclePickerChange(cycleId){
+  _selectedCycleId = cycleId;
+  _currentCycleLedgerPage = 1;
+  if(_cachedCycleData) renderSelectedCycleCard(_cachedCycleData, cycleId);
+  if(cycleId) loadCycleLedger(cycleId, 1);
+}
+
+function renderCycleStatements(cc){
+  if(!cc || !cc.cycles) return;
+  _cachedCycleData = cc;
+  const picker = document.getElementById('sim-cycle-picker');
+  const badge = document.getElementById('sim-cycle-picker-badge');
+  if(!picker) return;
+
+  let cycles = cc.cycles;
+  if(_currentCycleFilter !== 'ALL'){
+    cycles = cycles.filter(c => c.status === _currentCycleFilter);
+  }
+
+  if(badge) badge.innerText = `${cycles.length} of ${cc.cycles.length} cycles`;
+
+  if(!cycles.length){
+    picker.innerHTML = '<option value="">-- No matching cycles --</option>';
+    const container = document.getElementById('sim-cycle-statements-container');
+    if(container) container.innerHTML = '<div class="empty">No cycles match the selected filter.</div>';
+    return;
+  }
+
+  const prevVal = _selectedCycleId || picker.value;
+  const exists = cycles.some(c => String(c.cycle_id) === String(prevVal));
+  if(!exists) {
+    _selectedCycleId = String(cycles[cycles.length - 1].cycle_id);
+  }
+
+  picker.innerHTML = cycles.slice().reverse().map(c => {
+    const isWon = c.status === 'TARGET_REACHED';
+    const isBust = c.status === 'BUSTED';
+    const icon = isWon ? '🎯 WON' : (isBust ? '🛑 BUST' : '⏳ RUNNING');
+    const pnlStr = (c.net_profit_usdt >= 0 ? '+' : '') + '$' + (c.net_profit_usdt != null ? c.net_profit_usdt : 0) + ' USDT';
+    return `<option value="${c.cycle_id}" ${String(c.cycle_id) === String(_selectedCycleId) ? 'selected' : ''}>Cycle #${c.cycle_id} [${icon}] ${pnlStr} (${c.total_trades || c.transaction_count || 0} trades)</option>`;
+  }).join('');
+
+  renderSelectedCycleCard(cc, _selectedCycleId);
+  loadCycleLedger(_selectedCycleId, _currentCycleLedgerPage || 1);
+}
+
+function renderSelectedCycleCard(cc, cycleId){
+  const container = document.getElementById('sim-cycle-statements-container');
+  if(!container || !cc || !cc.cycles) return;
+  const c = cc.cycles.find(item => String(item.cycle_id) === String(cycleId));
+  if(!c) return;
+
+  const isWon = c.status === 'TARGET_REACHED';
+  const isBust = c.status === 'BUSTED';
+  const statusColor = isWon ? '#10b981' : (isBust ? '#ef4444' : '#38bdf8');
+  const statusBadge = isWon ? '🎯 TARGET HIT ($100)' : (isBust ? '🛑 BUSTED ($0)' : '⏳ IN PROGRESS');
+
+  container.innerHTML = `
+    <div style="background:#0f172a;border:1px solid #334155;border-radius:8px;padding:14px;margin-bottom:12px">
+      <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;margin-bottom:10px">
+        <div style="display:flex;align-items:center;gap:10px">
+          <span style="font-size:15px;font-weight:700;color:#f1f5f9">Cycle #${c.cycle_id}</span>
+          <span style="font-size:11px;padding:3px 8px;border-radius:4px;font-weight:700;background:${isWon ? 'rgba(16,185,129,0.15)' : 'rgba(239,68,68,0.15)'};color:${statusColor};border:1px solid ${statusColor}">
+            ${statusBadge}
+          </span>
+          <span style="font-size:12px;color:#94a3b8">${esc(c.start_time || '')} ➔ ${esc(c.end_time || 'ongoing')} (${esc(c.duration_str || '')})</span>
+        </div>
+        <div style="font-size:14px;font-weight:700;color:${c.net_profit_usdt >= 0 ? '#10b981' : '#ef4444'}">
+          Net PnL: ${c.net_profit_usdt >= 0 ? '+' : ''}$${c.net_profit_usdt} USDT
+        </div>
+      </div>
+
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:8px;font-size:11px;color:#cbd5e1;background:#030712;padding:10px;border-radius:6px;border:1px solid #1e293b;margin-bottom:12px">
+        <div>Starting Balance: <b style="color:#f1f5f9">$${c.starting_balance}</b></div>
+        <div>Ending Balance: <b style="color:${isWon ? '#10b981' : '#ef4444'}">$${c.ending_balance}</b></div>
+        <div>Peak Balance: <b style="color:#10b981">$${c.peak_balance}</b></div>
+        <div>Max Drawdown: <b style="color:#ef4444">${c.max_drawdown_pct}%</b></div>
+        <div>Win Rate: <b style="color:#38bdf8">${c.win_rate_pct}%</b> (${c.wins || 0}W / ${c.losses || 0}L)</div>
+        <div>Total Fees Paid: <b style="color:#94a3b8">$${c.total_fees_usdt || 0}</b></div>
+      </div>
+
+      <div id="cycle-ledger-container">
+        <div style="text-align:center;padding:16px;color:#64748b;font-size:12px">Loading cycle ledger...</div>
+      </div>
+    </div>
+  `;
+}
+
+async function loadCycleLedger(cycleId, page = 1){
+  _currentCycleLedgerPage = page;
+  const ledgerEl = document.getElementById('cycle-ledger-container');
+  if(!ledgerEl || !cycleId) return;
+
+  try {
+    const res = await fetch(\`/api/simulator/cycle-ledger?cycle_id=\${encodeURIComponent(cycleId)}&page=\${page}&limit=15\`);
+    if(!res.ok) {
+      ledgerEl.innerHTML = '<div style="color:#ef4444;font-size:11px;padding:8px">Error loading transactions.</div>';
+      return;
+    }
+    const data = await res.json();
+    renderCycleLedgerTable(cycleId, data);
+  } catch(e){
+    console.error('loadCycleLedger error:', e);
+    ledgerEl.innerHTML = '<div style="color:#ef4444;font-size:11px;padding:8px">Network error loading ledger.</div>';
+  }
+}
+
+function renderCycleLedgerTable(cycleId, data){
+  const ledgerEl = document.getElementById('cycle-ledger-container');
+  if(!ledgerEl) return;
+  const txs = data.transactions || [];
+  const page = data.page || 1;
+  const totalPages = data.total_pages || 1;
+  const totalTx = data.total_transactions || txs.length;
+
+  if(!txs.length){
+    ledgerEl.innerHTML = '<div style="color:#64748b;font-size:11px;padding:8px">No transaction records in this cycle.</div>';
+    return;
+  }
+
+  ledgerEl.innerHTML = \`
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;flex-wrap:wrap;gap:6px">
+      <div style="font-size:12px;font-weight:700;color:#38bdf8">Ledger Transactions (\${totalTx} total):</div>
+      <div style="display:flex;align-items:center;gap:6px;font-size:11px">
+        <button \${page <= 1 ? 'disabled style="opacity:0.4;cursor:default"' : ''} onclick="loadCycleLedger('\${cycleId}', \${page - 1})" style="background:#1e293b;color:#cbd5e1;border:1px solid #334155;padding:3px 8px;border-radius:4px;cursor:pointer">◀ Prev</button>
+        <span style="color:#94a3b8">Page <b>\${page}</b> of <b>\${totalPages}</b></span>
+        <button \${page >= totalPages ? 'disabled style="opacity:0.4;cursor:default"' : ''} onclick="loadCycleLedger('\${cycleId}', \${page + 1})" style="background:#1e293b;color:#cbd5e1;border:1px solid #334155;padding:3px 8px;border-radius:4px;cursor:pointer">Next ▶</button>
+      </div>
+    </div>
+    <div style="overflow-x:auto">
+      <table style="width:100%;border-collapse:collapse;font-size:11px;text-align:left">
+        <thead>
+          <tr style="background:#1e293b;color:#94a3b8">
+            <th style="padding:6px 8px">#</th>
+            <th style="padding:6px 8px">Timestamp</th>
+            <th style="padding:6px 8px">Symbol</th>
+            <th style="padding:6px 8px">Side</th>
+            <th style="padding:6px 8px">Entry / Exit</th>
+            <th style="padding:6px 8px">Exit Reason</th>
+            <th style="padding:6px 8px">Margin</th>
+            <th style="padding:6px 8px">Lev</th>
+            <th style="padding:6px 8px">Fee</th>
+            <th style="padding:6px 8px">Net PnL ($)</th>
+            <th style="padding:6px 8px">Return %</th>
+            <th style="padding:6px 8px">Balance After</th>
+          </tr>
+        </thead>
+        <tbody>
+          \${txs.map((tx, idx) => \`
+            <tr style="border-bottom:1px solid #1e293b;background:\${idx % 2 === 0 ? 'rgba(15,23,42,0.4)' : 'rgba(30,41,59,0.2)'}">
+              <td style="padding:6px 8px;color:#64748b">\${tx.tx_id}</td>
+              <td style="padding:6px 8px;color:#94a3b8">\${esc(tx.timestamp || '')}</td>
+              <td style="padding:6px 8px;font-weight:700;color:#f1f5f9">\${esc(tx.symbol || '')}</td>
+              <td style="padding:6px 8px"><span style="padding:2px 5px;border-radius:3px;font-size:10px;color:#fff;background:\${tx.direction === 'LONG' ? '#10b981' : '#f43f5e'}">\${esc(tx.direction || '')}</span></td>
+              <td style="padding:6px 8px;color:#cbd5e1">\${tx.entry_price} ➔ \${tx.exit_price}</td>
+              <td style="padding:6px 8px;color:#94a3b8">\${esc(tx.exit_reason || '')}</td>
+              <td style="padding:6px 8px;color:#cbd5e1">$\${tx.margin_usdt}</td>
+              <td style="padding:6px 8px;color:#94a3b8">\${tx.leverage}x</td>
+              <td style="padding:6px 8px;color:#94a3b8">$\${tx.fee_usdt}</td>
+              <td style="padding:6px 8px;font-weight:700;color:\${tx.net_pnl_usdt >= 0 ? '#10b981' : '#ef4444'}">\${tx.net_pnl_usdt >= 0 ? '+' : ''}$\${tx.net_pnl_usdt}</td>
+              <td style="padding:6px 8px;font-weight:700;color:\${tx.pnl_pct_on_margin >= 0 ? '#10b981' : '#ef4444'}">\${tx.pnl_pct_on_margin >= 0 ? '+' : ''}\${tx.pnl_pct_on_margin}%</td>
+              <td style="padding:6px 8px;font-weight:700;color:#38bdf8">$\${tx.balance_after}</td>
+            </tr>
+          \`).join('')}
+        </tbody>
+      </table>
+    </div>
+  \`;
+}
+
+let _cachedRecentTrades = [];
+let _recentTradesPage = 1;
+
+function renderRecentTrades(trades, page = 1){
+  if(trades) _cachedRecentTrades = trades;
+  _recentTradesPage = page;
+  const streamEl = document.getElementById('sim-trade-stream');
+  if(!streamEl) return;
+
+  const allTrades = _cachedRecentTrades || [];
+  if(!allTrades.length){
+    streamEl.innerHTML = '<div class="empty">No simulator run active yet. Click "Run Simulator" to begin.</div>';
+    return;
+  }
+
+  const limit = 10;
+  const totalPages = Math.max(1, Math.ceil(allTrades.length / limit));
+  const curPage = Math.min(Math.max(1, _recentTradesPage), totalPages);
+  const start = (curPage - 1) * limit;
+  const pageTrades = allTrades.slice(start, start + limit);
+
+  const controls = \`
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;padding:6px 10px;background:#090d16;border-radius:6px;border:1px solid #1e293b;font-size:11px">
+      <span style="color:#94a3b8">Showing \${start + 1}-\${Math.min(start + limit, allTrades.length)} of <b>\${allTrades.length}</b> trades</span>
+      <div style="display:flex;align-items:center;gap:6px">
+        <button \${curPage <= 1 ? 'disabled style="opacity:0.4;cursor:default"' : ''} onclick="renderRecentTrades(null, \${curPage - 1})" style="background:#1e293b;color:#cbd5e1;border:1px solid #334155;padding:3px 8px;border-radius:4px;cursor:pointer">◀ Prev</button>
+        <span style="color:#38bdf8">Page <b>\${curPage}</b> / <b>\${totalPages}</b></span>
+        <button \${curPage >= totalPages ? 'disabled style="opacity:0.4;cursor:default"' : ''} onclick="renderRecentTrades(null, \${curPage + 1})" style="background:#1e293b;color:#cbd5e1;border:1px solid #334155;padding:3px 8px;border-radius:4px;cursor:pointer">Next ▶</button>
+      </div>
+    </div>
+  \`;
+
+  const tradeCards = pageTrades.map(t => \`
+    <div style="background:#0f172a;border:1px solid #334155;border-radius:8px;padding:12px;margin-bottom:8px">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
+        <div>
+          <b style="color:#f1f5f9">\${esc(t.symbol)}</b>
+          <span style="margin-left:6px;font-size:11px;padding:2px 6px;border-radius:4px;background:\${t.direction === 'LONG' ? '#10b981' : '#f43f5e'};color:#fff">\${esc(t.direction)}</span>
+          \${t.source_model ? \`<span style="margin-left:6px;font-size:10px;padding:1px 5px;border-radius:3px;background:#1e293b;color:#38bdf8;border:1px solid #334155">\${esc(t.source_model)}</span>\` : ''}
+          <span style="margin-left:8px;font-size:11px;color:#94a3b8">\${esc(t.entry_time)} ➔ \${esc(t.exit_time || 'running')}</span>
+        </div>
+        <div>
+          <b style="color:\${t.pnl_r >= 0 ? '#10b981' : '#ef4444'}">\${t.pnl_pct >= 0 ? '+' : ''}\${t.pnl_pct}% (\${t.pnl_r >= 0 ? '+' : ''}\${t.pnl_r}R)</b>
+          <span style="font-size:11px;color:#64748b;margin-left:6px">\${esc(t.exit_reason)}</span>
+        </div>
+      </div>
+      <div style="font-size:11px;color:#cbd5e1;margin-bottom:6px">
+        Peak Gain: <b style="color:#10b981">+\${t.peak_gain_pct}%</b> &middot; Target Covered: <b>\${t.target_pct_reached}%</b> &middot; Max Drawdown: <b style="color:#ef4444">\${t.max_drawdown_pct}%</b>
+      </div>
+      \${t.why_it_worked ? \`
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;margin:6px 0;font-size:11px">
+        <div style="background:rgba(16,185,129,0.06);padding:6px;border-radius:4px;color:#a7f3d0"><b>Why Worked:</b> \${esc(t.why_it_worked)}</div>
+        <div style="background:rgba(239,68,68,0.06);padding:6px;border-radius:4px;color:#fca5a5"><b>Why Failed:</b> \${esc(t.why_it_failed)}</div>
+      </div>\` : ''}
+      \${t.thinking_trace ? \`
+      <details style="margin-top:6px;font-size:10.5px;color:#94a3b8">
+        <summary style="cursor:pointer;color:#38bdf8">🧠 Heuristic / AI Trace</summary>
+        <pre style="margin-top:4px;background:#030712;padding:8px;border-radius:4px;overflow-x:auto;color:#e2e8f0;white-space:pre-wrap">\${esc(t.thinking_trace)}</pre>
+      </details>\` : ''}
+    </div>
+  \`).join('');
+
+  streamEl.innerHTML = controls + tradeCards + controls;
+}
+
+function renderSimulator(data){
+  if(!data) return;
+  const isRunning = data.is_running;
+  const btn = document.getElementById('sim-btn-start');
+  const pauseBtn = document.getElementById('sim-btn-pause');
+  if(btn && pauseBtn){
+    btn.style.display = isRunning ? 'none' : 'inline-flex';
+    pauseBtn.style.display = isRunning ? 'inline-flex' : 'none';
+  }
+
+  setText('sim-val-status', isRunning ? 'Running' : (data.progress_pct >= 100 ? 'Completed' : 'Idle'));
+  setText('sim-sub-status', data.current_symbol ? ('Active: ' + data.current_symbol) : (isRunning ? 'Simulating...' : 'Ready'));
+  setText('sim-val-ticks', (data.ticks_processed || 0).toLocaleString());
+  setText('sim-val-trades', (data.trades_simulated || 0).toLocaleString());
+  setText('sim-sub-trades', `${data.won_count || 0} won · ${data.stopped_count || 0} lost · ${data.partial_count || 0} partial`);
+  setText('sim-val-wr', (data.win_rate_pct || 0).toFixed(1) + '%');
+  setText('sim-sub-pf', 'Profit Factor: ' + (data.profit_factor || 1.0).toFixed(2));
+  setText('sim-val-hf', (data.hf_calls_succeeded || 0) + ' / ' + (data.hf_calls_dispatched || 0));
+  setText('sim-val-time', fmtUptime(data.elapsed_seconds || 0));
+
+  const pct = Math.min(100, Math.max(0, data.progress_pct || 0));
+  const pBar = document.getElementById('sim-progress-bar');
+  if(pBar) pBar.style.width = pct + '%';
+  setText('sim-progress-label', `Simulation Progress: ${pct.toFixed(1)}%`);
+
+  // Update Stepped Clock & Pacing Monitor
+  if(data.current_market_time){
+    setText('sim-clock-market', data.current_market_time + (data.total_steps ? (' (Step #' + (data.current_step || 1) + ' / ' + data.total_steps + ')') : ''));
+  }
+  if(data.is_overtime){
+    setText('sim-clock-countdown', '⚠️ Overtime: ' + (data.step_seconds_elapsed || 0) + 's (Processing...)');
+  } else if(data.step_budget_seconds){
+    setText('sim-clock-countdown', '⏱️ ' + (data.step_seconds_elapsed || 0) + 's / ' + data.step_budget_seconds + 's (' + (data.step_countdown_remaining || 0) + 's remaining)');
+  }
+
+  // Update Multi-Provider AI Telemetry
+  if(data.ai_telemetry && data.ai_telemetry.providers){
+    const p = data.ai_telemetry.providers;
+    if(p.groq) setText('sim-quota-groq', p.groq.rpm_used + ' / ' + p.groq.rpm_limit + ' RPM');
+    if(p.gemini) setText('sim-quota-gemini', p.gemini.rpm_used + ' / ' + p.gemini.rpm_limit + ' RPM');
+    if(p.openrouter) setText('sim-quota-or', p.openrouter.rpm_used + ' / ' + p.openrouter.rpm_limit + ' RPM');
+    if(p.hf) setText('sim-quota-hf', p.hf.rpm_used + ' / ' + p.hf.rpm_limit + ' RPM');
+  }
+  if(isRunning && _currentSimView === 'events') fetchAIEvents();
+
+  // Render Cycle Challenge Scorecard & Statements
+  if(data.cycle_challenge && data.cycle_challenge.total_cycles != null){
+    const cc = data.cycle_challenge;
+    setText('sim-cycle-total', cc.total_cycles);
+    setText('sim-cycle-won', cc.targets_hit);
+    setText('sim-cycle-won-sub', (cc.targets_hit || 0) + ' cycles reached $' + (cc.target_capital || 100));
+    setText('sim-cycle-busted', cc.busted);
+    setText('sim-cycle-busted-sub', (cc.busted || 0) + ' cycles ruined to $0');
+    setText('sim-cycle-wr', (cc.cycle_win_rate_pct || 0).toFixed(1) + '%');
+    setText('sim-cycle-profit', (cc.total_net_profit_usdt >= 0 ? '+' : '') + '$' + (cc.total_net_profit_usdt || 0).toFixed(2));
+    setText('sim-cycle-trades', (cc.avg_trades_per_cycle || 0).toFixed(1) + ' trades');
+    renderCycleStatements(cc);
+  }
+
+  // Render recent trade cards with client pagination
+  if(data.recent_trades && data.recent_trades.length){
+    renderRecentTrades(data.recent_trades, _recentTradesPage || 1);
   }
 }
 
@@ -3263,6 +4818,7 @@ const TAB_NEEDS = {
   dashboard: ['coins','signals'],
   crypto:    ['coins','signals','commodities'],
   mirror:    ['mirror_signals'],
+  simulator: ['simulator'],
   watchlist: ['coins'],
   paper:     ['paper'],
 };
@@ -3292,7 +4848,12 @@ async function refresh(){
       if(crCoins){ setText('stat-crypto-coins', crCoins.length); renderCryptoCoins(crCoins); }
       if(crSignals){ setText('stat-crypto-signals', crSignals.length); renderCryptoSignals(crSignals); }
       if(crCommodities) renderCommodities(crCommodities);
-      if(crMirrorSignals){ setText('stat-mirror-signals', crMirrorSignals.length); renderMirrorSignals(crMirrorSignals); }
+      if(crMirrorSignals){ setText('stat-mirror-signals', crMirrorSignals.length || (crMirrorSignals.signals && crMirrorSignals.signals.length)); renderMirrorSignals(crMirrorSignals); }
+    }
+
+    if(need.includes('simulator')){
+      const simStatus = await jget('/api/simulator/status', {});
+      renderSimulator(simStatus);
     }
 
     if(need.includes('paper')) await loadPaper();
@@ -4415,7 +5976,10 @@ function showToast(msg, isErr=false) {
   setTimeout(() => t.className = 'toast', 2800);
 }
 
-window.addEventListener('DOMContentLoaded', checkAuth);
+window.addEventListener('DOMContentLoaded', () => {
+  checkAuth();
+  loadSimulatorSettings();
+});
 </script>
 </body>
 </html>"""
@@ -5504,6 +7068,10 @@ html[data-theme="light"] .src,html[data-theme="light"] .source-tag{background:#d
   document.addEventListener('DOMContentLoaded',function(){
     document.querySelectorAll('.side-themes .dot').forEach(function(d){
       d.classList.toggle('on',d.dataset.t===t);});
+    setTimeout(function(){
+      if(typeof updateSimulatorEstimates === 'function') updateSimulatorEstimates();
+      if(typeof fetchAIEvents === 'function') fetchAIEvents();
+    }, 400);
   });
 })();
 function setSiteTheme(t){
@@ -5903,6 +7471,15 @@ async def make_app(runner) -> web.Application:
     # Crypto & Commodities Routes
     app.router.add_get("/api/crypto/coins", _bind(_api_crypto_coins))
     app.router.add_get("/api/crypto/signals", _bind(_api_crypto_signals))
+    app.router.add_post("/api/crypto/signals/live-check", _bind(_api_crypto_signals_live_check))
+    app.router.add_get("/api/simulator/status", _bind(_api_simulator_status))
+    app.router.add_get("/api/simulator/config", _bind(_api_simulator_get_config))
+    app.router.add_post("/api/simulator/config", _bind(_api_simulator_save_config))
+    app.router.add_get("/api/simulator/cycles", _bind(_api_simulator_cycles))
+    app.router.add_get("/api/simulator/cycle-ledger", _bind(_api_simulator_cycle_ledger))
+    app.router.add_get("/api/simulator/ai-events", _bind(_api_simulator_ai_events))
+    app.router.add_post("/api/simulator/start", _bind(_api_simulator_start))
+    app.router.add_post("/api/simulator/pause", _bind(_api_simulator_pause))
     app.router.add_get("/api/crypto/forecasts", _bind(_api_crypto_forecasts))
     app.router.add_get("/api/paper", _bind(_api_paper))
     app.router.add_get("/api/paper/events", _bind(_api_paper_events))

@@ -118,27 +118,32 @@ def calls_today() -> dict[str, int]:
     return dict(_calls_today)
 
 
-_circuit_breakers: dict[str, datetime] = {}  # provider_name -> active_until_utc
+_circuit_breakers: dict[str, datetime] = {}  # target -> active_until_utc
 
 
-def trip_circuit_breaker(provider_name: str, seconds: int = 45, reason: str = "") -> None:
-    """Pause a provider for 45 seconds when hitting rate limits or repeated errors."""
+def trip_circuit_breaker(target: str, seconds: int = 45, reason: str = "") -> None:
+    """Pause a provider or specific model for some seconds when hitting rate limits or repeated errors."""
     until = datetime.now(UTC) + timedelta(seconds=seconds)
-    _circuit_breakers[provider_name] = until
-    log.warning("llm_circuit_breaker_tripped", provider=provider_name, pause_seconds=seconds,
+    _circuit_breakers[target] = until
+    log.warning("llm_circuit_breaker_tripped", target=target, pause_seconds=seconds,
                 until=until.isoformat(), reason=reason[:120])
 
 
-def is_circuit_open(provider_name: str) -> bool:
-    """Return True if this provider is currently paused in a circuit breaker cooldown."""
-    until = _circuit_breakers.get(provider_name)
-    if not until:
-        return False
-    if datetime.now(UTC) >= until:
-        del _circuit_breakers[provider_name]
-        log.info("llm_circuit_breaker_reset", provider=provider_name)
-        return False
-    return True
+def is_circuit_open(provider_name: str, model: str = "") -> bool:
+    """Return True if this provider or specific model is currently paused in a circuit breaker cooldown."""
+    keys = [provider_name]
+    if model:
+        keys.insert(0, f"{provider_name}/{model}")
+    for key in keys:
+        until = _circuit_breakers.get(key)
+        if not until:
+            continue
+        if datetime.now(UTC) >= until:
+            del _circuit_breakers[key]
+            log.info("llm_circuit_breaker_reset", target=key)
+        else:
+            return True
+    return False
 
 
 @dataclass(frozen=True)
@@ -498,8 +503,8 @@ async def ask_json(role: str, system: str, user: str, *, max_tokens: int = 512,
 
     for provider_name, model in chain_for(role):
         attempts.append(f"{provider_name}/{model}")
-        if is_circuit_open(provider_name):
-            failures.append(f"{provider_name}/{model}: circuit breaker open (paused 45s)")
+        if is_circuit_open(provider_name, model):
+            failures.append(f"{provider_name}/{model}: circuit breaker open (paused)")
             continue
 
         if len(attempts) > 1:
@@ -534,7 +539,9 @@ async def ask_json(role: str, system: str, user: str, *, max_tokens: int = 512,
         except Exception as exc:
             err_str = str(exc).lower()
             if any(k in err_str for k in ("429", "rate limit", "quota", "too many requests", "resource_exhausted")):
-                trip_circuit_breaker(provider_name, seconds=45, reason=str(exc))
+                trip_circuit_breaker(f"{provider_name}/{model}", seconds=60, reason=str(exc))
+            elif any(k in err_str for k in ("503", "service unavailable", "bad gateway")):
+                trip_circuit_breaker(provider_name, seconds=30, reason=str(exc))
             log.warning("llm_provider_failed", role=role, provider=provider_name,
                         model=model, error=str(exc)[:200])
             failures.append(f"{provider_name}/{model}: {str(exc)[:160] or type(exc).__name__}")

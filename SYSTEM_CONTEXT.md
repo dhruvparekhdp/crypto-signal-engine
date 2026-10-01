@@ -320,3 +320,71 @@ Verified against the actual route registrations in `scheduler/health.py`, `sched
 
 ### Health
 `/health` — polled by the GitHub Actions deploy step; returns 200 once the app is actually serving, per §2.
+
+---
+
+## 11. Live Market Simulator & Strategy Testing Architecture
+
+Added 2026-10-01 to enable high-fidelity historical replay and compounding cycle verification before deploying live Binance capital.
+
+### A. Core Engine Architecture
+- **Stepped & Fast Replay (`analysis/simulator/replay_engine.py`, `analysis/simulator/stepped_replay.py`)**:
+  - Replays historical multi-coin 1-minute OHLCV klines with tick-by-tick simulation.
+  - Supports configurable time horizons (1 Day, 3 Days, 1 Week, 2 Weeks, 1 Month, 3 Months, 1 Year, 3 Years).
+  - Pacing budget clock: allows step-by-step market hour pacing (e.g. 1 market hour analyzed every 10-60s) or ultra-fast non-stepped execution.
+- **Offline / Zero AI API Calls Mode (`--ai-provider none`)**:
+  - The simulator defaults to `none` (`0` external API calls dispatched to Gemini, Groq, OpenRouter, or Hugging Face).
+  - Eliminates external API quota consumption, rate limits, and latency during backtests.
+  - Generates instant quantitative analytical justifications for trades locally via `offline_quant_engine`.
+  - Supports optional hybrid AI fallback (`auto`, `gemini`, `groq`, `openrouter`, `hf`) when qualitative reasoning is explicitly requested.
+
+### B. Modular Strategy Dispatcher (`analysis/simulator/strategy_dispatcher.py`)
+Provides an interactive dropdown on the UI to test individual quantitative strategies or the full ensemble:
+1. `all`: Multi-strategy ensemble (waterfall evaluation across confluence, squeeze, volume, patterns).
+2. `confluence`: 5-Family Confluence Gate (requires multi-family agreement across trend, mom, vol & structure).
+3. `bollinger_squeeze`: Volatility contraction followed by directional expansion breakout.
+4. `volume_spike`: Volume anomaly spike relative to recent moving baseline.
+5. `rsi_divergence`: Price vs momentum discrepancies at cycle extremes (regular & hidden).
+6. `trend_pullback`: 15m/5m dynamic EMA pullback in macro trend.
+7. `range_breakout`: Momentum range breakout beyond ATR buffer.
+8. `sweep_reclaim`: Key liquidity sweep of swing highs/lows with close reclaim.
+9. `breakout_retest`: Prior resistance/support breakout with confirmatory retest hold.
+
+### C. Compounding Cycle Challenge ($25 ➔ $100)
+- **Rules**:
+  - Starting Capital: $25.00 USDT.
+  - Target Goal: $100.00 USDT (4x capital growth).
+  - Margin per Trade: Configurable (default 25% of current equity, or 100% full-margin compounding).
+  - Leverage: 10x - 25x isolated futures.
+  - Realistic Friction: Standard maker/taker exchange fee deduction (0.05% taker) + dynamic slippage applied on every entry and exit.
+  - Ruin / Bust Threshold: If equity drops to $0.00, cycle ends as `BUSTED` and resets.
+  - Success Threshold: If equity reaches or exceeds $100.00 USDT, cycle ends as `TARGET_REACHED` and resets.
+
+### D. R-Multiple & ROE Mathematics (Base $100 Margin Model)
+- **What is 1R?** 
+  `1R` represents 1 base unit of structural market risk, defined as `max(1.8 * ATR, price * 0.012)` (minimum 1.2% price move).
+- **Leverage & ROE Scaling**:
+  $$\text{ROE (\%)} = \text{Price Move (\%)} \times \text{Leverage}$$
+  $$\text{1R ROE at 10x} = 1.2\% \times 10 = 12.0\% \quad (\text{\$12.00 on \$100 margin})$$
+  $$\text{1R ROE at 25x} = 1.2\% \times 25 = 30.0\% \quad (\text{\$30.00 on \$100 margin})$$
+- **Target Multiple ($T_R$):**
+  At $5.5R$ with $25x$ leverage:
+  $$\text{Price Target} = +5.5 \times 1.2\% = +6.6\% \quad \Longrightarrow \quad \text{ROE} = +6.6\% \times 25 = +165.0\% \quad (\text{+\$165.00 on \$100 margin})$$
+- **Stop-Loss Multiple ($S_R$):**
+  At $3.0R$ with $25x$ leverage:
+  $$\text{Price Stop} = -3.0 \times 1.2\% = -3.6\% \quad \Longrightarrow \quad \text{ROE} = -3.6\% \times 25 = -90.0\% \quad (\text{-\$90.00 on \$100 margin})$$
+- **Risk-to-Reward Ratio (R:R):**
+  $$R:R = \frac{T_R}{S_R} = \frac{5.5}{3.0} = 1.83 : 1$$
+
+### E. Mobile-Optimized Zero-Lag Architecture
+- **Problem**: Previous simulator iterations pushed 100,000+ lines of raw JSON (3MB - 10MB) containing thousands of trade transactions in `status.json`. Mobile browsers crashed or froze while parsing and rendering these massive objects every 2.5s.
+- **Solution**:
+  1. Full transaction statements are written to `data/simulator/reports/cycle_statements.json`.
+  2. `status.json` only retains lightweight aggregate metrics (< 25KB payload).
+  3. Client-side **View Tab Selector** separates metrics into distinct screens:
+     - 📊 Executive Metrics (High-level compounding scorecard)
+     - 🏆 Compounding Cycles (Interactive dropdown picker + on-demand paginated statement ledger via `/api/simulator/cycle-ledger`)
+     - 📜 Trade Stream (Client-side paginated 10 trades per page)
+     - 📡 AI Events Log (Filtered API call stream)
+     - ⚙️ Strategy & Settings (Interactive strategy selection, R math live breakdown card, and parameter inputs)
+
