@@ -4404,7 +4404,7 @@ async function loadCycleLedger(cycleId, page = 1){
   if(!ledgerEl || !cycleId) return;
 
   try {
-    const res = await fetch(\`/api/simulator/cycle-ledger?cycle_id=\${encodeURIComponent(cycleId)}&page=\${page}&limit=15\`);
+    const res = await fetch(`/api/simulator/cycle-ledger?cycle_id=${encodeURIComponent(cycleId)}&page=${page}&limit=15`);
     if(!res.ok) {
       ledgerEl.innerHTML = '<div style="color:#ef4444;font-size:11px;padding:8px">Error loading transactions.</div>';
       return;
@@ -4430,13 +4430,13 @@ function renderCycleLedgerTable(cycleId, data){
     return;
   }
 
-  ledgerEl.innerHTML = \`
+  ledgerEl.innerHTML = `
     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;flex-wrap:wrap;gap:6px">
-      <div style="font-size:12px;font-weight:700;color:#38bdf8">Ledger Transactions (\${totalTx} total):</div>
+      <div style="font-size:12px;font-weight:700;color:#38bdf8">Ledger Transactions (${totalTx} total):</div>
       <div style="display:flex;align-items:center;gap:6px;font-size:11px">
-        <button \${page <= 1 ? 'disabled style="opacity:0.4;cursor:default"' : ''} onclick="loadCycleLedger('\${cycleId}', \${page - 1})" style="background:#1e293b;color:#cbd5e1;border:1px solid #334155;padding:3px 8px;border-radius:4px;cursor:pointer">◀ Prev</button>
-        <span style="color:#94a3b8">Page <b>\${page}</b> of <b>\${totalPages}</b></span>
-        <button \${page >= totalPages ? 'disabled style="opacity:0.4;cursor:default"' : ''} onclick="loadCycleLedger('\${cycleId}', \${page + 1})" style="background:#1e293b;color:#cbd5e1;border:1px solid #334155;padding:3px 8px;border-radius:4px;cursor:pointer">Next ▶</button>
+        <button ${page <= 1 ? 'disabled style="opacity:0.4;cursor:default"' : ''} onclick="loadCycleLedger('${cycleId}', ${page - 1})" style="background:#1e293b;color:#cbd5e1;border:1px solid #334155;padding:3px 8px;border-radius:4px;cursor:pointer">◀ Prev</button>
+        <span style="color:#94a3b8">Page <b>${page}</b> of <b>${totalPages}</b></span>
+        <button ${page >= totalPages ? 'disabled style="opacity:0.4;cursor:default"' : ''} onclick="loadCycleLedger('${cycleId}', ${page + 1})" style="background:#1e293b;color:#cbd5e1;border:1px solid #334155;padding:3px 8px;border-radius:4px;cursor:pointer">Next ▶</button>
       </div>
     </div>
     <div style="overflow-x:auto">
@@ -4458,26 +4458,26 @@ function renderCycleLedgerTable(cycleId, data){
           </tr>
         </thead>
         <tbody>
-          \${txs.map((tx, idx) => \`
-            <tr style="border-bottom:1px solid #1e293b;background:\${idx % 2 === 0 ? 'rgba(15,23,42,0.4)' : 'rgba(30,41,59,0.2)'}">
-              <td style="padding:6px 8px;color:#64748b">\${tx.tx_id}</td>
-              <td style="padding:6px 8px;color:#94a3b8">\${esc(tx.timestamp || '')}</td>
-              <td style="padding:6px 8px;font-weight:700;color:#f1f5f9">\${esc(tx.symbol || '')}</td>
-              <td style="padding:6px 8px"><span style="padding:2px 5px;border-radius:3px;font-size:10px;color:#fff;background:\${tx.direction === 'LONG' ? '#10b981' : '#f43f5e'}">\${esc(tx.direction || '')}</span></td>
-              <td style="padding:6px 8px;color:#cbd5e1">\${tx.entry_price} ➔ \${tx.exit_price}</td>
-              <td style="padding:6px 8px;color:#94a3b8">\${esc(tx.exit_reason || '')}</td>
-              <td style="padding:6px 8px;color:#cbd5e1">$\${tx.margin_usdt}</td>
-              <td style="padding:6px 8px;color:#94a3b8">\${tx.leverage}x</td>
-              <td style="padding:6px 8px;color:#94a3b8">$\${tx.fee_usdt}</td>
-              <td style="padding:6px 8px;font-weight:700;color:\${tx.net_pnl_usdt >= 0 ? '#10b981' : '#ef4444'}">\${tx.net_pnl_usdt >= 0 ? '+' : ''}$\${tx.net_pnl_usdt}</td>
-              <td style="padding:6px 8px;font-weight:700;color:\${tx.pnl_pct_on_margin >= 0 ? '#10b981' : '#ef4444'}">\${tx.pnl_pct_on_margin >= 0 ? '+' : ''}\${tx.pnl_pct_on_margin}%</td>
-              <td style="padding:6px 8px;font-weight:700;color:#38bdf8">$\${tx.balance_after}</td>
+          ${txs.map((tx, idx) => `
+            <tr style="border-bottom:1px solid #1e293b;background:${idx % 2 === 0 ? 'rgba(15,23,42,0.4)' : 'rgba(30,41,59,0.2)'}">
+              <td style="padding:6px 8px;color:#64748b">${tx.tx_id}</td>
+              <td style="padding:6px 8px;color:#94a3b8">${esc(tx.timestamp || '')}</td>
+              <td style="padding:6px 8px;font-weight:700;color:#f1f5f9">${esc(tx.symbol || '')}</td>
+              <td style="padding:6px 8px"><span style="padding:2px 5px;border-radius:3px;font-size:10px;color:#fff;background:${tx.direction === 'LONG' ? '#10b981' : '#f43f5e'}">${esc(tx.direction || '')}</span></td>
+              <td style="padding:6px 8px;color:#cbd5e1">${tx.entry_price} ➔ ${tx.exit_price}</td>
+              <td style="padding:6px 8px;color:#94a3b8">${esc(tx.exit_reason || '')}</td>
+              <td style="padding:6px 8px;color:#cbd5e1">$${tx.margin_usdt}</td>
+              <td style="padding:6px 8px;color:#94a3b8">${tx.leverage}x</td>
+              <td style="padding:6px 8px;color:#94a3b8">$${tx.fee_usdt}</td>
+              <td style="padding:6px 8px;font-weight:700;color:${tx.net_pnl_usdt >= 0 ? '#10b981' : '#ef4444'}">${tx.net_pnl_usdt >= 0 ? '+' : ''}$${tx.net_pnl_usdt}</td>
+              <td style="padding:6px 8px;font-weight:700;color:${tx.pnl_pct_on_margin >= 0 ? '#10b981' : '#ef4444'}">${tx.pnl_pct_on_margin >= 0 ? '+' : ''}${tx.pnl_pct_on_margin}%</td>
+              <td style="padding:6px 8px;font-weight:700;color:#38bdf8">$${tx.balance_after}</td>
             </tr>
-          \`).join('')}
+          `).join('')}
         </tbody>
       </table>
     </div>
-  \`;
+  `;
 }
 
 let _cachedRecentTrades = [];
@@ -4501,46 +4501,46 @@ function renderRecentTrades(trades, page = 1){
   const start = (curPage - 1) * limit;
   const pageTrades = allTrades.slice(start, start + limit);
 
-  const controls = \`
+  const controls = `
     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;padding:6px 10px;background:#090d16;border-radius:6px;border:1px solid #1e293b;font-size:11px">
-      <span style="color:#94a3b8">Showing \${start + 1}-\${Math.min(start + limit, allTrades.length)} of <b>\${allTrades.length}</b> trades</span>
+      <span style="color:#94a3b8">Showing ${start + 1}-${Math.min(start + limit, allTrades.length)} of <b>${allTrades.length}</b> trades</span>
       <div style="display:flex;align-items:center;gap:6px">
-        <button \${curPage <= 1 ? 'disabled style="opacity:0.4;cursor:default"' : ''} onclick="renderRecentTrades(null, \${curPage - 1})" style="background:#1e293b;color:#cbd5e1;border:1px solid #334155;padding:3px 8px;border-radius:4px;cursor:pointer">◀ Prev</button>
-        <span style="color:#38bdf8">Page <b>\${curPage}</b> / <b>\${totalPages}</b></span>
-        <button \${curPage >= totalPages ? 'disabled style="opacity:0.4;cursor:default"' : ''} onclick="renderRecentTrades(null, \${curPage + 1})" style="background:#1e293b;color:#cbd5e1;border:1px solid #334155;padding:3px 8px;border-radius:4px;cursor:pointer">Next ▶</button>
+        <button ${curPage <= 1 ? 'disabled style="opacity:0.4;cursor:default"' : ''} onclick="renderRecentTrades(null, ${curPage - 1})" style="background:#1e293b;color:#cbd5e1;border:1px solid #334155;padding:3px 8px;border-radius:4px;cursor:pointer">◀ Prev</button>
+        <span style="color:#38bdf8">Page <b>${curPage}</b> / <b>${totalPages}</b></span>
+        <button ${curPage >= totalPages ? 'disabled style="opacity:0.4;cursor:default"' : ''} onclick="renderRecentTrades(null, ${curPage + 1})" style="background:#1e293b;color:#cbd5e1;border:1px solid #334155;padding:3px 8px;border-radius:4px;cursor:pointer">Next ▶</button>
       </div>
     </div>
-  \`;
+  `;
 
-  const tradeCards = pageTrades.map(t => \`
+  const tradeCards = pageTrades.map(t => `
     <div style="background:#0f172a;border:1px solid #334155;border-radius:8px;padding:12px;margin-bottom:8px">
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
         <div>
-          <b style="color:#f1f5f9">\${esc(t.symbol)}</b>
-          <span style="margin-left:6px;font-size:11px;padding:2px 6px;border-radius:4px;background:\${t.direction === 'LONG' ? '#10b981' : '#f43f5e'};color:#fff">\${esc(t.direction)}</span>
-          \${t.source_model ? \`<span style="margin-left:6px;font-size:10px;padding:1px 5px;border-radius:3px;background:#1e293b;color:#38bdf8;border:1px solid #334155">\${esc(t.source_model)}</span>\` : ''}
-          <span style="margin-left:8px;font-size:11px;color:#94a3b8">\${esc(t.entry_time)} ➔ \${esc(t.exit_time || 'running')}</span>
+          <b style="color:#f1f5f9">${esc(t.symbol)}</b>
+          <span style="margin-left:6px;font-size:11px;padding:2px 6px;border-radius:4px;background:${t.direction === 'LONG' ? '#10b981' : '#f43f5e'};color:#fff">${esc(t.direction)}</span>
+          ${t.source_model ? `<span style="margin-left:6px;font-size:10px;padding:1px 5px;border-radius:3px;background:#1e293b;color:#38bdf8;border:1px solid #334155">${esc(t.source_model)}</span>` : ''}
+          <span style="margin-left:8px;font-size:11px;color:#94a3b8">${esc(t.entry_time)} ➔ ${esc(t.exit_time || 'running')}</span>
         </div>
         <div>
-          <b style="color:\${t.pnl_r >= 0 ? '#10b981' : '#ef4444'}">\${t.pnl_pct >= 0 ? '+' : ''}\${t.pnl_pct}% (\${t.pnl_r >= 0 ? '+' : ''}\${t.pnl_r}R)</b>
-          <span style="font-size:11px;color:#64748b;margin-left:6px">\${esc(t.exit_reason)}</span>
+          <b style="color:${t.pnl_r >= 0 ? '#10b981' : '#ef4444'}">${t.pnl_pct >= 0 ? '+' : ''}${t.pnl_pct}% (${t.pnl_r >= 0 ? '+' : ''}${t.pnl_r}R)</b>
+          <span style="font-size:11px;color:#64748b;margin-left:6px">${esc(t.exit_reason)}</span>
         </div>
       </div>
       <div style="font-size:11px;color:#cbd5e1;margin-bottom:6px">
-        Peak Gain: <b style="color:#10b981">+\${t.peak_gain_pct}%</b> &middot; Target Covered: <b>\${t.target_pct_reached}%</b> &middot; Max Drawdown: <b style="color:#ef4444">\${t.max_drawdown_pct}%</b>
+        Peak Gain: <b style="color:#10b981">+${t.peak_gain_pct}%</b> &middot; Target Covered: <b>${t.target_pct_reached}%</b> &middot; Max Drawdown: <b style="color:#ef4444">${t.max_drawdown_pct}%</b>
       </div>
-      \${t.why_it_worked ? \`
+      ${t.why_it_worked ? `
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;margin:6px 0;font-size:11px">
-        <div style="background:rgba(16,185,129,0.06);padding:6px;border-radius:4px;color:#a7f3d0"><b>Why Worked:</b> \${esc(t.why_it_worked)}</div>
-        <div style="background:rgba(239,68,68,0.06);padding:6px;border-radius:4px;color:#fca5a5"><b>Why Failed:</b> \${esc(t.why_it_failed)}</div>
-      </div>\` : ''}
-      \${t.thinking_trace ? \`
+        <div style="background:rgba(16,185,129,0.06);padding:6px;border-radius:4px;color:#a7f3d0"><b>Why Worked:</b> ${esc(t.why_it_worked)}</div>
+        <div style="background:rgba(239,68,68,0.06);padding:6px;border-radius:4px;color:#fca5a5"><b>Why Failed:</b> ${esc(t.why_it_failed)}</div>
+      </div>` : ''}
+      ${t.thinking_trace ? `
       <details style="margin-top:6px;font-size:10.5px;color:#94a3b8">
         <summary style="cursor:pointer;color:#38bdf8">🧠 Heuristic / AI Trace</summary>
-        <pre style="margin-top:4px;background:#030712;padding:8px;border-radius:4px;overflow-x:auto;color:#e2e8f0;white-space:pre-wrap">\${esc(t.thinking_trace)}</pre>
-      </details>\` : ''}
+        <pre style="margin-top:4px;background:#030712;padding:8px;border-radius:4px;overflow-x:auto;color:#e2e8f0;white-space:pre-wrap">${esc(t.thinking_trace)}</pre>
+      </details>` : ''}
     </div>
-  \`).join('');
+  `).join('');
 
   streamEl.innerHTML = controls + tradeCards + controls;
 }
