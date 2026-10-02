@@ -41,6 +41,7 @@ class RunSpec:
     start: str | None = None
     end: str | None = None
     null_trials: int = 0
+    overrides: dict = field(default_factory=dict)   # {strategy_id: {param: value}}
     root: str = str(LAKE)
     seed: int = 1
 
@@ -82,7 +83,10 @@ def work_symbol(args) -> dict:
         sb = tf_cache[tf]
         if len(sb) < 500:
             continue
-        sets = st.param_sets(spec.grid_limit) if spec.grid else [dict(st.defaults)]
+        if sid in spec.overrides:
+            sets = [{**st.defaults, **spec.overrides[sid]}]
+        else:
+            sets = st.param_sets(spec.grid_limit) if spec.grid else [dict(st.defaults)]
         for params in sets:
             try:
                 sig = st.signals(sb, params)

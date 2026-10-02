@@ -222,3 +222,18 @@ class TestLoaderCoverage(unittest.TestCase):
             write("15m", "2024-08", 15, 96 * 10)             # 10 days of 15m starting 2024-08
             b = load_bars("ZZZUSDT", "15m", root=d)
             self.assertEqual(pd.to_datetime(b.t[0], unit="ms").year, 2021)
+
+
+class TestAIReviewIsSeparate(unittest.TestCase):
+    def test_lab_modules_do_not_import_the_ai_package(self):
+        code = ("import sys, analysis.lab.runner, analysis.lab.strategies, analysis.lab.simulate; "
+                "bad=[m for m in sys.modules if m.startswith('analysis.lab_ai')]; "
+                "print(bad); sys.exit(1 if bad else 0)")
+        r = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True)
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+
+    def test_cloud_models_are_refused(self):
+        r = subprocess.run([sys.executable, "-m", "scripts.run_lab_ai", "--models", "kimi-k2.6:cloud"],
+                           capture_output=True, text=True)
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn("refusing cloud models", r.stdout + r.stderr)

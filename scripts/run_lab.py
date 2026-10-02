@@ -31,6 +31,22 @@ EXITS = {
 }
 
 
+def _overrides(items):
+    out = {}
+    for it in items:
+        left, val = it.split("=", 1)
+        sid, name = left.split(".", 1)
+        try:
+            v = int(val)
+        except ValueError:
+            try:
+                v = float(val)
+            except ValueError:
+                v = val
+        out.setdefault(sid, {})[name] = v
+    return out
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--list", action="store_true", help="show every strategy and exit")
@@ -48,6 +64,7 @@ def main():
     ap.add_argument("--grid", action="store_true", help="sweep each strategy's parameter grid")
     ap.add_argument("--grid-limit", type=int, default=6)
     ap.add_argument("--null-trials", type=int, default=0)
+    ap.add_argument("--set", action="append", default=[], help="strategy.param=value, repeatable")
     ap.add_argument("--risk", default="0.02", help="wallet risk per trade, comma list")
     ap.add_argument("--leverage", default="5", help="wallet leverage, comma list")
     ap.add_argument("--concurrent", default="1")
@@ -71,7 +88,7 @@ def main():
         raise SystemExit(f"unknown or no strategies: {bad or 'none selected'} (use --list)")
     spec = RunSpec(strategies=ids, symbols=a.symbols.split(","), exits=[EXITS[e] for e in a.exits.split(",")],
                    cost=a.cost, grid=a.grid, grid_limit=a.grid_limit, sig_tf=a.tf, exec_tf=a.exec_tf,
-                   start=a.since, end=a.until, null_trials=a.null_trials)
+                   start=a.since, end=a.until, null_trials=a.null_trials, overrides=_overrides(a.set))
     wallets = [WalletConfig(start=a.start_balance, target=a.target, risk_pct=float(r), leverage=float(l),
                             max_concurrent=int(c))
                for r in a.risk.split(",") for l in a.leverage.split(",") for c in a.concurrent.split(",")]

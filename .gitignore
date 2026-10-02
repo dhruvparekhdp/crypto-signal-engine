@@ -32,3 +32,12 @@ design/themes/*.html
 # Database Backups (keep compressed .gz in git, ignore raw uncompressed >100MB json)
 backups/*.json
 !backups/*.json.gz
+
+# Private keys
+*.pem
+
+# lab runtime
+/status/
+/logs/
+/machine.json
+/bin/

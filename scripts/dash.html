@@ -1,0 +1,49 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Lab Monitor</title>
+<style>
+:root{--bg:#0f141a;--card:#18202a;--fg:#e8edf3;--mut:#8ea0b3;--line:#263241;--ok:#4cc38a;--warn:#e8b04b;--bad:#ef6f6c;--acc:#5bb6e8}
+@media (prefers-color-scheme:light){:root{--bg:#f3f5f8;--card:#fff;--fg:#17202b;--mut:#5b6776;--line:#dde1e7;--ok:#1f7a4d;--warn:#a86a00;--bad:#b4332d;--acc:#0b6fa8}}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--fg);font:15px/1.45 system-ui,-apple-system,Segoe UI,sans-serif;padding:14px 16px 40px}
+h1{font-size:18px;margin:0 0 2px}h2{font-size:12px;letter-spacing:.08em;text-transform:uppercase;color:var(--mut);margin:20px 0 8px}
+.sub{color:var(--mut);font-size:12px}.card{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:12px;margin-bottom:10px;min-width:0}
+.row{display:flex;gap:8px;align-items:center;justify-content:space-between;flex-wrap:wrap}.mono{font-family:ui-monospace,Menlo,monospace;font-size:12px}
+.pill{font-size:11px;font-weight:700;padding:2px 8px;border-radius:99px}.running{background:#1d3a52;color:var(--acc)}.done{background:#173a2b;color:var(--ok)}.failed,.stalled\?{background:#40201f;color:var(--bad)}
+.bar{height:7px;background:var(--line);border-radius:5px;overflow:hidden;margin:8px 0 4px}.bar i{display:block;height:100%;background:var(--acc)}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:8px}.k{color:var(--mut);font-size:11px}.v{font-size:20px;font-weight:700}
+pre{margin:6px 0 0;padding:8px;background:var(--bg);border-radius:6px;overflow-x:auto;font-size:11px;color:var(--mut);max-height:150px}
+table{width:100%;border-collapse:collapse;font-size:12px}td,th{padding:4px 6px;text-align:left;border-bottom:1px solid var(--line)}th{color:var(--mut);font-weight:600}td.n{text-align:right;font-variant-numeric:tabular-nums}
+.pos{color:var(--ok)}.neg{color:var(--bad)}.wrap{overflow-x:auto}
+</style></head><body>
+<h1>Lab Monitor</h1><div class="sub" id="upd">loading…</div>
+<h2>Machines</h2><div id="mach"></div>
+<h2>AI review queue (local models only)</h2><div id="ai"></div>
+<h2>Backtest jobs</h2><div id="jobs"></div>
+<h2>Best results so far</h2><div id="res"></div>
+<script>
+const fmt=s=>{s=Math.round(s);const h=Math.floor(s/3600),m=Math.floor(s%3600/60);return h?`${h}h ${m}m`:`${m}m ${s%60}s`};
+const esc=t=>String(t??'').replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
+function mach(m){const warn=(m.temp_c>85)||(m.ac===false&&m.battery_pct<25);
+return `<div class="card"><div class="row"><b>${esc(m.name)}</b><span class="sub">${m.age_s!=null?'updated '+m.age_s+'s ago':'this server'}</span></div>
+<div class="grid"><div><div class="k">CPU</div><div class="v">${m.cpu_pct??'–'}%</div></div><div><div class="k">RAM</div><div class="v">${m.ram_used_gb}/${m.ram_total_gb}G</div></div>
+<div><div class="k">Temp</div><div class="v ${m.temp_c>85?'neg':''}">${m.temp_c??'–'}°C</div></div>
+<div><div class="k">Power</div><div class="v ${warn?'neg':''}">${m.ac===undefined?'–':(m.ac?'plugged':'battery')} ${m.battery_pct!=null?m.battery_pct+'%':''}</div></div></div></div>`}
+function ai(a){const pct=a.total?Math.round(100*a.done/a.total):0;
+const rate=a.done&&a.elapsed_s?a.done/a.elapsed_s:0,eta=rate?(a.total-a.done)/rate:0;
+return `<div class="card"><div class="row"><b>${esc(a.title||a.name)}</b><span class="pill ${a.state}">${esc(a.state)}</span></div>
+<div class="sub">stage ${esc(a.stage)} · ${a.done}/${a.total} reviews · ${esc(a.model)}${a.think?' (thinking)':''}</div>
+<div class="bar"><i style="width:${pct}%"></i></div><div class="sub">${pct}% · elapsed ${fmt(a.elapsed_s||0)}${eta?' · about '+fmt(eta)+' left on this stage':''} · avg ${a.avg_s?a.avg_s.toFixed(0)+'s':'–'} per review</div>
+<div class="wrap"><table><tr><th>model</th><th>strategy</th><th>cause</th><th>q</th><th>s</th></tr>${(a.recent||[]).slice().reverse().map(r=>`<tr><td>${esc((r.model||'').split(':')[0])}</td><td>${esc(r.strategy)}</td><td class="${r.consistent===true?'pos':r.consistent===false?'neg':''}">${esc(r.cause)}</td><td class="n">${r.signal_quality??''}</td><td class="n">${r.wall_s?Math.round(r.wall_s):''}</td></tr>`).join('')}</table></div></div>`}
+function job(j){const n=j.symbols_done;return `<div class="card"><div class="row"><b>${esc(j.name)}</b><span class="pill ${j.state}">${esc(j.state)}</span></div>
+<div class="sub">${esc(j.host)} · elapsed ${fmt(j.elapsed_s)}${n?` · ${n}/12 symbols done`:''}</div>${n?`<div class="bar"><i style="width:${Math.min(100,n/12*100)}%"></i></div>`:''}
+<pre>${esc(j.tail.join('\n'))}</pre></div>`}
+function res(r){return `<div class="card"><div class="k">${esc(r.run)}</div><div class="wrap"><table><tr><th>strategy</th><th>n</th><th>win</th><th>R/trade</th><th>PF</th>${r.top[0]&&'null_p' in r.top[0]?'<th>null p</th>':''}</tr>
+${r.top.map(x=>`<tr><td>${esc(x.strategy)}<div class="k">${esc((x.params||'').slice(0,28))}</div></td><td class="n">${x.n}</td><td class="n">${Math.round(x.win_rate*100)}%</td><td class="n ${x.expectancy_r>0?'pos':'neg'}">${x.expectancy_r}</td><td class="n">${x.profit_factor}</td>${'null_p' in x?`<td class="n">${x.null_p??''}</td>`:''}</tr>`).join('')}</table></div></div>`}
+async function tick(){try{const s=await (await fetch('/api/state',{cache:'no-store'})).json();
+document.getElementById('upd').textContent='live · '+new Date().toLocaleTimeString()+' · refreshes every 6s';
+document.getElementById('mach').innerHTML=s.machines.map(mach).join('');
+document.getElementById('ai').innerHTML=s.ai.length?s.ai.map(ai).join(''):'<div class="card sub">no AI queue running</div>';
+document.getElementById('jobs').innerHTML=s.jobs.length?s.jobs.map(job).join(''):'<div class="card sub">no jobs</div>';
+document.getElementById('res').innerHTML=s.results.length?s.results.map(res).join(''):'<div class="card sub">no finished runs yet</div>';}
+catch(e){document.getElementById('upd').textContent='cannot reach the server · retrying'}}
+tick();setInterval(tick,6000);
+</script></body></html>
