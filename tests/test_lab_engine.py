@@ -282,3 +282,16 @@ class TestAIGate(unittest.TestCase):
         self.assertLess(c["take_minus_skip_ci"][0], 0.05)
         self.assertGreater(c["take_minus_skip_ci"][1], -0.05)
         self.assertTrue(0.4 < c["auc"] < 0.6)
+
+
+class TestReviewPrompt(unittest.TestCase):
+    def test_hypotheses_may_only_use_fields_known_before_entry(self):
+        from analysis.lab_ai.review import system_x
+        text = system_x("k")
+        self.assertIn("ONLY fields known", text)
+        self.assertIn("Never use anything under outcome", text)
+
+    def test_cause_order_is_shuffled_per_trade(self):
+        from analysis.lab_ai.review import system_x
+        firsts = {system_x(f"trade{i}").split("no particular order:\n")[1].split(":")[0].strip() for i in range(12)}
+        self.assertGreater(len(firsts), 2)

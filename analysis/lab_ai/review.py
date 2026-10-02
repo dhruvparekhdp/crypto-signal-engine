@@ -91,9 +91,10 @@ def system_x(key: str = "") -> str:
         "Then:\n"
         "- evidence: at most 40 words, quoting at least two numbers from the data.\n"
         "- signal_quality 1-5: was the ENTRY sensible given at_entry numbers, independent of luck?\n"
-        "- hypothesis: one filter a program could test over thousands of trades, built from this trade's "
-        "at_entry numbers (example: 'skip longs when pos_in_24h_range_pct > 90 and volume_1h_vs_avg < 1'). "
-        "Never advise a new stop, target or size.\n"
+        "- hypothesis: one filter a program could test over thousands of trades. It may use ONLY fields known "
+        "before the entry: at_entry, trend_4h, last_16_closes_15m_pct_vs_entry, stop_pct, side, strategy. "
+        "Never use anything under outcome (r_net, mae_r, mfe_r, move_after_*). Example: 'skip longs when "
+        "pos_in_24h_range_pct > 90 and volume_1h_vs_avg < 1'. Never advise a new stop, target or size.\n"
         "- confidence 0-1: lower it when two causes both fit.\n"
         "Never invent news. Reply with the JSON object only.")
 
