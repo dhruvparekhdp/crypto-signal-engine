@@ -150,3 +150,67 @@ class TestThinkingSampling(unittest.TestCase):
         from scripts import work_worker
         self.assertEqual(work_worker.THINK["temperature"], 0.6)
         self.assertGreater(work_worker.THINK["repeat_penalty"], 1.0)
+
+
+class TestR1Policy(unittest.TestCase):
+    def test_r1_gets_a_bigger_budget_and_a_plain_text_followup(self):
+        from unittest import mock
+        from scripts import work_worker as w
+        calls = []
+        def fake_chat(model, system, user, **kw):
+            calls.append(kw)
+            return {"text": "", "thinking": "reasoning " * 50, "out_tokens": 5} if len(calls) == 1 else \
+                   {"text": '{"decision": "skip", "score": 2, "reason": "x 1 2"}', "thinking": "", "out_tokens": 5}
+        meta = {"system": "s", "schema": {"type": "object"}, "think_tokens": 700}
+        with mock.patch.object(w, "chat", side_effect=fake_chat):
+            r = w.decide(meta, {"user": "u"}, "deepseek-r1:8b")
+        self.assertTrue(r["ok"])
+        self.assertEqual(calls[0]["num_predict"], 1400)              # twice the budget: r1 cannot stop thinking early
+        self.assertIsNone(calls[1].get("schema"))                    # and the follow-up is plain text, not schema-constrained
+        self.assertIsNone(calls[1].get("think"))
+
+    def test_qwen_keeps_the_schema_constrained_answer_with_thinking_off(self):
+        from unittest import mock
+        from scripts import work_worker as w
+        calls = []
+        def fake_chat(model, system, user, **kw):
+            calls.append(kw)
+            return {"text": "", "thinking": "t", "out_tokens": 5} if len(calls) == 1 else \
+                   {"text": '{"decision": "take", "score": 4, "reason": "a 1 b 2"}', "thinking": "", "out_tokens": 5}
+        meta = {"system": "s", "schema": {"type": "object"}, "think_tokens": 700}
+        with mock.patch.object(w, "chat", side_effect=fake_chat):
+            r = w.decide(meta, {"user": "u"}, "qwen3:8b")
+        self.assertTrue(r["ok"])
+        self.assertEqual(calls[0]["num_predict"], 700)
+        self.assertEqual(calls[1]["think"], False)
+        self.assertEqual(calls[1]["schema"], {"type": "object"})
+
+
+class TestRetries(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.old = ws.ROOT
+        ws.ROOT = Path(self.tmp.name)
+        make(self.tmp.name, n_items=1, models=("m1",))
+
+    def tearDown(self):
+        ws.ROOT = self.old
+        self.tmp.cleanup()
+
+    def test_a_failed_task_is_offered_again_once_then_recorded_as_failed(self):
+        c = ws.claim("job", "w", ["m1"])
+        ws.result("job", {"idx": c["idx"], "ok": False})
+        again = ws.claim("job", "w", ["m1"])
+        self.assertEqual(again["idx"], c["idx"])                      # first failure: retried
+        ws.result("job", {"idx": again["idx"], "ok": False})
+        end = ws.claim("job", "w", ["m1"])
+        self.assertIsNone(end["idx"])                                 # second failure: final
+        self.assertTrue(end["all_done"])
+        self.assertEqual(ws.status("job")["done"], 1)
+
+    def test_a_good_answer_after_a_failure_wins(self):
+        c = ws.claim("job", "w", ["m1"])
+        ws.result("job", {"idx": c["idx"], "ok": False})
+        c = ws.claim("job", "w", ["m1"])
+        ws.result("job", {"idx": c["idx"], "ok": True, "decision": "take", "score": 3})
+        self.assertTrue(ws.claim("job", "w", ["m1"])["all_done"])

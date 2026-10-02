@@ -116,7 +116,8 @@ def review_x(ctx: dict, model: str, think: bool | None, num_predict: int = 700, 
     tok = {"out": 0, "think_chars": 0}
     try:
         if think:
-            a = chat_think(model, system, user, schema=None, num_predict=num_predict, num_ctx=num_ctx, host=host)
+            r1 = model.startswith("deepseek-r1")
+            a = chat_think(model, system, user, schema=None, num_predict=num_predict * (2 if r1 else 1), num_ctx=num_ctx, host=host)
             tok["out"] += a["out_tokens"]
             tok["think_chars"] = len(a["thinking"])
             try:
@@ -128,13 +129,18 @@ def review_x(ctx: dict, model: str, think: bool | None, num_predict: int = 700, 
             last = a
             if data is None:
                 notes = (a["thinking"] or a["text"])[-1800:]
-                follow = user + "\n\nYour analysis so far (may be cut off):\n" + notes + "\n\nNow give the final JSON object only."
-                try:
-                    b = chat(model, system, follow, schema=SCHEMA_X, think=False, num_predict=260, temperature=0.1,
+                if r1:
+                    follow = user + "\n\nYour reasoning so far (may be cut off):\n" + notes + "\n\nStop reasoning. Output ONLY the final JSON object now."
+                    b = chat(model, system, follow, schema=None, think=None, num_predict=600, temperature=0.3,
                              num_ctx=num_ctx, host=host)
-                except OllamaError:
-                    b = chat(model, system, follow, schema=SCHEMA_X, think=None, num_predict=260, temperature=0.1,
-                             num_ctx=num_ctx, host=host)
+                else:
+                    follow = user + "\n\nYour analysis so far (may be cut off):\n" + notes + "\n\nNow give the final JSON object only."
+                    try:
+                        b = chat(model, system, follow, schema=SCHEMA_X, think=False, num_predict=260, temperature=0.1,
+                                 num_ctx=num_ctx, host=host)
+                    except OllamaError:
+                        b = chat(model, system, follow, schema=SCHEMA_X, think=None, num_predict=260, temperature=0.1,
+                                 num_ctx=num_ctx, host=host)
                 tok["out"] += b["out_tokens"]
                 last = b
                 data = _json_from(b["text"])

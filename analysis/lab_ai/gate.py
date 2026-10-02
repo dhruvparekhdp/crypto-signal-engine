@@ -77,7 +77,8 @@ def decide(ctx: dict, model: str, think: bool = True, think_tokens: int = 700, n
     out_tok, think_chars, data, last = 0, 0, None, {}
     try:
         if think:
-            a = chat_think(model, SYSTEM, user, schema=None, num_predict=think_tokens, num_ctx=num_ctx, host=host)
+            r1 = model.startswith("deepseek-r1")
+            a = chat_think(model, SYSTEM, user, schema=None, num_predict=think_tokens * (2 if r1 else 1), num_ctx=num_ctx, host=host)
             out_tok, think_chars, last = a["out_tokens"], len(a["thinking"]), a
             try:
                 data = _json_from(a["text"])
@@ -87,13 +88,18 @@ def decide(ctx: dict, model: str, think: bool = True, think_tokens: int = 700, n
                 data = None
             if data is None:
                 notes = (a["thinking"] or a["text"])[-1800:]
-                follow = user + "\n\nYour analysis so far (may be cut off):\n" + notes + "\n\nNow give the final JSON only."
-                try:
-                    b = chat(model, SYSTEM, follow, schema=SCHEMA, think=False, num_predict=200, temperature=0.1,
+                if r1:      # deepseek-r1 cannot stop thinking: give it room and ask for the JSON in plain text
+                    follow = user + "\n\nYour reasoning so far (may be cut off):\n" + notes + "\n\nStop reasoning. Output ONLY the final JSON object now."
+                    b = chat(model, SYSTEM, follow, schema=None, think=None, num_predict=500, temperature=0.3,
                              num_ctx=num_ctx, host=host)
-                except OllamaError:
-                    b = chat(model, SYSTEM, follow, schema=SCHEMA, think=None, num_predict=200, temperature=0.1,
-                             num_ctx=num_ctx, host=host)
+                else:
+                    follow = user + "\n\nYour analysis so far (may be cut off):\n" + notes + "\n\nNow give the final JSON only."
+                    try:
+                        b = chat(model, SYSTEM, follow, schema=SCHEMA, think=False, num_predict=200, temperature=0.1,
+                                 num_ctx=num_ctx, host=host)
+                    except OllamaError:
+                        b = chat(model, SYSTEM, follow, schema=SCHEMA, think=None, num_predict=200, temperature=0.1,
+                                 num_ctx=num_ctx, host=host)
                 out_tok += b["out_tokens"]
                 last = b
                 data = _json_from(b["text"])

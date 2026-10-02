@@ -90,12 +90,14 @@ def json_from(text):
 
 
 def decide(meta, item, model):
-    """Bounded think-then-answer: think for a limited number of tokens, then write a short constrained answer."""
+    """Bounded think-then-answer. qwen3 can switch thinking off for the answer step; deepseek-r1 cannot (it
+    always thinks first), so it gets a bigger single budget and a plain 'stop reasoning, JSON only' follow-up."""
     t0, system, user = time.time(), meta["system"], item["user"]
     valid = lambda d: d.get("decision") in ("take", "skip") and isinstance(d.get("score"), int)
+    r1 = model.startswith("deepseek-r1")
     tokens, data = 0, None
     try:
-        a = chat_think(model, system, user, schema=None, num_predict=meta["think_tokens"])
+        a = chat_think(model, system, user, schema=None, num_predict=meta["think_tokens"] * (2 if r1 else 1))
         tokens += a["out_tokens"]
         try:
             data = json_from(a["text"])
@@ -104,11 +106,15 @@ def decide(meta, item, model):
             data = None
         if data is None:
             notes = (a["thinking"] or a["text"])[-1800:]
-            follow = user + "\n\nYour analysis so far (may be cut off):\n" + notes + "\n\nNow give the final JSON only."
-            try:
-                b = chat(model, system, follow, schema=meta["schema"], think=False, num_predict=200, temperature=0.1)
-            except Exception:
-                b = chat(model, system, follow, schema=meta["schema"], think=None, num_predict=200, temperature=0.1)
+            if r1:
+                follow = user + "\n\nYour reasoning so far (may be cut off):\n" + notes + "\n\nStop reasoning. Output ONLY the final JSON object now."
+                b = chat(model, system, follow, schema=None, think=None, num_predict=500, temperature=0.3)
+            else:
+                follow = user + "\n\nYour analysis so far (may be cut off):\n" + notes + "\n\nNow give the final JSON only."
+                try:
+                    b = chat(model, system, follow, schema=meta["schema"], think=False, num_predict=200, temperature=0.1)
+                except Exception:
+                    b = chat(model, system, follow, schema=meta["schema"], think=None, num_predict=200, temperature=0.1)
             tokens += b["out_tokens"]
             data = json_from(b["text"])
         if not valid(data):

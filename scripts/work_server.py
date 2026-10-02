@@ -16,7 +16,8 @@ import time
 from pathlib import Path
 
 ROOT = Path(os.environ.get("LAB_ROOT", str(Path.home() / "lab")))
-STALE_S = 2400            # a claim with no result after 40 minutes goes back in the queue
+STALE_S = 2400
+MAX_ATTEMPTS = 2          # a task that fails twice is recorded as failed and not offered again            # a claim with no result after 40 minutes goes back in the queue
 
 
 def base(name: str) -> Path:
@@ -66,11 +67,22 @@ def claim(name: str, worker: str, models: list[str], now: float | None = None):
 
 
 def result(name: str, res: dict):
+    """A good answer is final. A failed one is retried (its claim is released) until MAX_ATTEMPTS."""
     p = base(name)
     (p / "results").mkdir(exist_ok=True)
-    tmp = p / "results" / f".{res['idx']}.tmp"
+    (p / "failed").mkdir(exist_ok=True)
+    idx = res["idx"]
+    if not res.get("ok"):
+        (p / "failed" / f"{idx}.{int(time.time() * 1000)}.json").write_text(json.dumps(res))
+        if len(list((p / "failed").glob(f"{idx}.*.json"))) < MAX_ATTEMPTS:
+            try:
+                (p / "claims" / str(idx)).unlink()
+            except OSError:
+                pass
+            return
+    tmp = p / "results" / f".{idx}.tmp"
     tmp.write_text(json.dumps(res))
-    tmp.replace(p / "results" / f"{res['idx']}.json")
+    tmp.replace(p / "results" / f"{idx}.json")
 
 
 def status(name: str) -> dict:
