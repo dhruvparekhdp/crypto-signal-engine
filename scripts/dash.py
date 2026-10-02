@@ -109,6 +109,77 @@ def ai_view():
     return out
 
 
+def work_view():
+    """Shared work sets (the spare-laptop queue): progress, per-worker rates and the with-AI comparison."""
+    out = []
+    for mp in sorted((ROOT / "work").glob("*/meta.json")):
+        d = mp.parent
+        try:
+            meta = json.loads(mp.read_text())
+            items = [json.loads(l) for l in (d / "items.jsonl").read_text().splitlines() if l.strip()]
+        except (OSError, json.JSONDecodeError):
+            continue
+        res = []
+        for f in (d / "results").glob("[0-9]*.json") if (d / "results").exists() else []:
+            try:
+                res.append(json.loads(f.read_text()))
+            except (OSError, json.JSONDecodeError):
+                pass
+        res.sort(key=lambda r: r.get("ts", 0))
+        rows = []
+        for r in res:
+            it = items[r["item"]] if r.get("item") is not None and r["item"] < len(items) else {}
+            rows.append({**r, "r_net": it.get("r_net"), "symbol": it.get("symbol"), "strategy": it.get("strategy")})
+        try:
+            from analysis.lab_ai import gate
+            compare = {m: gate.compare([x for x in rows if x.get("model") == m]) for m in meta["models"]}
+        except Exception:  # noqa: BLE001 - the dashboard must never die on a stats error
+            compare = {}
+        total = meta["n_items"] * len(meta["models"])
+        workers = {}
+        for r in res:
+            w = workers.setdefault(r.get("worker", "?"), {"done": 0, "sum": 0.0, "last": 0, "failed": 0})
+            w["done"] += 1
+            w["sum"] += r.get("wall_s", 0)
+            w["last"] = max(w["last"], r.get("ts", 0))
+            w["failed"] += 0 if r.get("ok") else 1
+        now = time.time()
+        recent_claims = [c.stat().st_mtime for c in (d / "claims").glob("*")] if (d / "claims").exists() else []
+        active = bool(recent_claims) and now - max(recent_claims) < 1800
+        first = min((r.get("ts", now) for r in res), default=now)
+        by_strat = {}
+        for m in meta["models"]:
+            for st in sorted({x.get("strategy") for x in rows if x.get("model") == m}):
+                c = gate_compare_safe([x for x in rows if x.get("model") == m and x.get("strategy") == st])
+                if c.get("n", 0) >= 4:
+                    by_strat.setdefault(m, {})[st] = {k: c.get(k) for k in ("n", "all_exp_r", "take_exp_r", "take_n")}
+        baseline = None
+        try:
+            baseline = json.loads((d / "baseline.json").read_text())
+        except (OSError, json.JSONDecodeError):
+            pass
+        out.append({"name": meta["name"], "title": meta["title"], "kind": "gate", "state": "done" if len(res) >= total else ("running" if active else "waiting for workers"),
+                    "stage": "work queue", "model": " + ".join(meta["models"]), "think": True, "done": len(res), "total": total,
+                    "elapsed_s": now - meta["created"], "avg_s": (sum(r.get("wall_s", 0) for r in res) / len(res)) if res else None,
+                    "rate_per_hour": (len(res) / max(now - first, 60) * 3600) if len(res) > 1 else None,
+                    "population_n": meta["population_n"], "population_exp_r": meta["population_exp_r"],
+                    "population_win": meta["population_win"], "sample_n": meta["n_items"], "compare": compare,
+                    "by_strategy": by_strat, "baseline": baseline, "failed": sum(1 for r in res if not r.get("ok")),
+                    "workers": [{"name": k, "done": v["done"], "avg_s": v["sum"] / v["done"], "ago_s": now - v["last"], "failed": v["failed"]}
+                                for k, v in sorted(workers.items())],
+                    "recent": [{k: r.get(k) for k in ("model", "symbol", "strategy", "decision", "score", "r_net", "wall_s", "reason", "worker", "ok")}
+                               for r in rows[-8:]]})
+    return out
+
+
+def gate_compare_safe(rows):
+    try:
+        from analysis.lab_ai import gate
+        return gate.compare(rows)
+    except Exception:  # noqa: BLE001
+        return {}
+
+
 def results_view():
     out = []
     for base in [ROOT] + list((ROOT / "remote").glob("*")):
@@ -135,7 +206,7 @@ def state():
             machines.append(m)
         except (OSError, json.JSONDecodeError):
             pass
-    return {"now": time.time(), "machines": machines, "jobs": load_jobs(), "ai": ai_view(), "results": results_view()}
+    return {"now": time.time(), "machines": machines, "jobs": load_jobs(), "ai": ai_view() + work_view(), "results": results_view()}
 
 
 PAGE = (Path(__file__).parent / "dash.html").read_text() if (Path(__file__).parent / "dash.html").exists() else "dash.html missing"
@@ -146,8 +217,13 @@ class H(BaseHTTPRequestHandler):
         pass
 
     def do_GET(self):
+        here = Path(__file__).parent
         if self.path.startswith("/api/state"):
             body, ct = json.dumps(state()).encode(), "application/json"
+        elif self.path.startswith("/setup.sh"):
+            body, ct = (here / "worker_setup.sh").read_bytes(), "text/x-shellscript"
+        elif self.path.startswith("/worker.py"):
+            body, ct = (here / "work_worker.py").read_bytes(), "text/x-python"
         else:
             body, ct = PAGE.encode(), "text/html; charset=utf-8"
         self.send_response(200)

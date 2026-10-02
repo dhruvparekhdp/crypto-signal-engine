@@ -12,7 +12,7 @@ import time
 import numpy as np
 
 from analysis.lab_ai import context
-from analysis.lab_ai.ollama import OllamaError, chat
+from analysis.lab_ai.ollama import OllamaError, chat, chat_think
 
 SCHEMA = {"type": "object", "additionalProperties": False, "required": ["decision", "score", "reason"],
           "properties": {"decision": {"type": "string", "enum": ["take", "skip"]},
@@ -43,6 +43,18 @@ def pretrade_context(trade, root: str = "data/lake") -> dict:
     return ctx
 
 
+def features(ctx: dict, side: int) -> dict:
+    """Flat numeric features known at entry (for a plain non-AI filter). Returns are signed by trade direction."""
+    a = ctx.get("at_entry", {})
+    t = ctx.get("trend_4h", {})
+    f = {"ret_1h": a.get("ret_1h_pct", 0) * side, "ret_4h": a.get("ret_4h_pct", 0) * side,
+         "ret_24h": a.get("ret_24h_pct", 0) * side, "rsi": a.get("rsi14_15m", 50) - 50,
+         "atr": a.get("atr_15m_pct", 0), "range_pos": (a.get("pos_in_24h_range_pct", 50) - 50) * side / 50,
+         "vol": min(a.get("volume_1h_vs_avg", 1), 10), "btc_24h": a.get("btc_24h_ret_pct", 0) * side,
+         "ema50_dist": t.get("close_vs_ema50_pct", 0) * side, "stop_pct": ctx.get("stop_pct", 0), "side": side}
+    return {k: float(v) for k, v in f.items()}
+
+
 def prompt(ctx: dict, news=None) -> str:
     text = "ENTRY SIGNAL\n" + json.dumps(ctx, indent=1)
     if news:
@@ -65,8 +77,7 @@ def decide(ctx: dict, model: str, think: bool = True, think_tokens: int = 700, n
     out_tok, think_chars, data, last = 0, 0, None, {}
     try:
         if think:
-            a = chat(model, SYSTEM, user, schema=None, think=True, num_predict=think_tokens, temperature=0.2,
-                     num_ctx=num_ctx, host=host)
+            a = chat_think(model, SYSTEM, user, schema=None, num_predict=think_tokens, num_ctx=num_ctx, host=host)
             out_tok, think_chars, last = a["out_tokens"], len(a["thinking"]), a
             try:
                 data = _json_from(a["text"])
@@ -115,9 +126,12 @@ def compare(rows: list[dict]) -> dict:
         return float(g / l) if l > 0 else None
 
     out = {"n": len(ok), "take_rate": float(take.mean()),
-           "all_exp_r": float(r.mean()), "all_win": float(win.mean()), "all_pf": pf(r)}
+           "all_exp_r": float(r.mean()), "all_win": float(win.mean()), "all_pf": pf(r),
+           "all_total_r": float(r.sum()), "all_return_pct_at_1pct_risk": float(r.sum())}
     if take.any():
-        out.update(take_n=int(take.sum()), take_exp_r=float(r[take].mean()), take_win=float(win[take].mean()), take_pf=pf(r[take]))
+        out.update(take_n=int(take.sum()), take_exp_r=float(r[take].mean()), take_win=float(win[take].mean()), take_pf=pf(r[take]),
+                   take_total_r=float(r[take].sum()), take_return_pct_at_1pct_risk=float(r[take].sum()),
+                   lift_r_per_trade=float(r[take].mean() - r.mean()))
     if (~take).any():
         out.update(skip_n=int((~take).sum()), skip_exp_r=float(r[~take].mean()), skip_win=float(win[~take].mean()))
     if score.std() > 0 and r.std() > 0:

@@ -4,7 +4,7 @@ from __future__ import annotations
 import json
 import time
 
-from analysis.lab_ai.ollama import OllamaError, chat
+from analysis.lab_ai.ollama import OllamaError, chat, chat_think
 
 CAUSES = ["clean_win", "trend_follow_through", "stopped_by_noise", "cost_drag", "regime_mismatch",
           "news_shock", "false_signal", "time_decay", "other"]
@@ -116,8 +116,7 @@ def review_x(ctx: dict, model: str, think: bool | None, num_predict: int = 700, 
     tok = {"out": 0, "think_chars": 0}
     try:
         if think:
-            a = chat(model, system, user, schema=None, think=True, num_predict=num_predict, temperature=0.2,
-                     num_ctx=num_ctx, host=host)
+            a = chat_think(model, system, user, schema=None, num_predict=num_predict, num_ctx=num_ctx, host=host)
             tok["out"] += a["out_tokens"]
             tok["think_chars"] = len(a["thinking"])
             try:
