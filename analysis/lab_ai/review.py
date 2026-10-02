@@ -117,7 +117,7 @@ def review_x(ctx: dict, model: str, think: bool | None, num_predict: int = 700, 
     try:
         if think:
             r1 = model.startswith("deepseek-r1")
-            a = chat_think(model, system, user, schema=None, num_predict=num_predict * (2 if r1 else 1), num_ctx=num_ctx, host=host)
+            a = chat_think(model, system, user, schema=None, num_predict=int(num_predict * (1.5 if r1 else 1)), num_ctx=num_ctx, host=host)
             tok["out"] += a["out_tokens"]
             tok["think_chars"] = len(a["thinking"])
             try:

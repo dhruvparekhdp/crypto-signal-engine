@@ -18,7 +18,7 @@ import pandas as pd
 from analysis.lab_ai import context, review
 from analysis.lab_ai.web import headlines
 
-MODELS = [("llama3.2:3b", None, 400), ("qwen3:8b", True, 700), ("deepseek-r1:8b", True, 700)]
+MODELS = [("llama3.2:3b", None, 400), ("qwen3:8b", True, 2000), ("deepseek-r1:8b", True, 2000)]
 
 
 def pick_hist(df, n):

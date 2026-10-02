@@ -69,7 +69,7 @@ def _json_from(text):
     return json.loads(text[a:b + 1])
 
 
-def decide(ctx: dict, model: str, think: bool = True, think_tokens: int = 700, news=None, num_ctx: int = 8192,
+def decide(ctx: dict, model: str, think: bool = True, think_tokens: int = 2000, news=None, num_ctx: int = 8192,
            host: str = "http://127.0.0.1:11434") -> dict:
     """Bounded think-then-answer, like review_x, so a thinking model always ends with a decision."""
     t0 = time.time()
@@ -78,7 +78,7 @@ def decide(ctx: dict, model: str, think: bool = True, think_tokens: int = 700, n
     try:
         if think:
             r1 = model.startswith("deepseek-r1")
-            a = chat_think(model, SYSTEM, user, schema=None, num_predict=think_tokens * (2 if r1 else 1), num_ctx=num_ctx, host=host)
+            a = chat_think(model, SYSTEM, user, schema=None, num_predict=int(think_tokens * (1.5 if r1 else 1)), num_ctx=num_ctx, host=host)
             out_tok, think_chars, last = a["out_tokens"], len(a["thinking"]), a
             try:
                 data = _json_from(a["text"])

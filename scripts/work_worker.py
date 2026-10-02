@@ -97,7 +97,7 @@ def decide(meta, item, model):
     r1 = model.startswith("deepseek-r1")
     tokens, data = 0, None
     try:
-        a = chat_think(model, system, user, schema=None, num_predict=meta["think_tokens"] * (2 if r1 else 1))
+        a = chat_think(model, system, user, schema=None, num_predict=int(meta["think_tokens"] * (1.5 if r1 else 1)))
         tokens += a["out_tokens"]
         try:
             data = json_from(a["text"])
@@ -122,7 +122,7 @@ def decide(meta, item, model):
     except Exception as e:  # noqa: BLE001 - a failed task is reported, not fatal
         return {"ok": False, "error": str(e)[:100], "wall_s": time.time() - t0}
     return {"ok": True, "decision": data["decision"], "score": int(data["score"]), "reason": str(data.get("reason", ""))[:240],
-            "wall_s": time.time() - t0, "out_tokens": tokens}
+            "wall_s": time.time() - t0, "out_tokens": tokens, "think_budget": meta["think_tokens"]}
 
 
 def installed_models():

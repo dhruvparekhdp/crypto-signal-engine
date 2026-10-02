@@ -28,7 +28,7 @@ def main():
     ap.add_argument("--n", type=int, default=150)
     ap.add_argument("--models", default="qwen3:8b")
     ap.add_argument("--think", choices=["on", "off"], default="on")
-    ap.add_argument("--think-tokens", type=int, default=700)
+    ap.add_argument("--think-tokens", type=int, default=2000)
     ap.add_argument("--web", action="store_true", help="recent trades only; old ones are skipped to avoid hindsight")
     ap.add_argument("--shard", default="0/1")
     ap.add_argument("--seed", type=int, default=11)

@@ -26,7 +26,7 @@ def main():
     ap.add_argument("--spec", action="append", default=[], help="strategy filter; --n trades are sampled from EACH spec")
     ap.add_argument("--n", type=int, default=150)
     ap.add_argument("--models", default="qwen3:8b,deepseek-r1:8b")
-    ap.add_argument("--think-tokens", type=int, default=700)
+    ap.add_argument("--think-tokens", type=int, default=2000, help="thinking budget per decision (deepseek-r1 gets 1.5x)")
     ap.add_argument("--seed", type=int, default=11)
     ap.add_argument("--root", default="data/lake")
     a = ap.parse_args()

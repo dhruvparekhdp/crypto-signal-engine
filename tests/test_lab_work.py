@@ -165,7 +165,7 @@ class TestR1Policy(unittest.TestCase):
         with mock.patch.object(w, "chat", side_effect=fake_chat):
             r = w.decide(meta, {"user": "u"}, "deepseek-r1:8b")
         self.assertTrue(r["ok"])
-        self.assertEqual(calls[0]["num_predict"], 1400)              # twice the budget: r1 cannot stop thinking early
+        self.assertEqual(calls[0]["num_predict"], 1050)              # 1.5x the budget: r1 cannot stop thinking early
         self.assertIsNone(calls[1].get("schema"))                    # and the follow-up is plain text, not schema-constrained
         self.assertIsNone(calls[1].get("think"))
 
