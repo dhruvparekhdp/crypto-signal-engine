@@ -237,3 +237,48 @@ class TestAIReviewIsSeparate(unittest.TestCase):
                            capture_output=True, text=True)
         self.assertNotEqual(r.returncode, 0)
         self.assertIn("refusing cloud models", r.stdout + r.stderr)
+
+
+class TestAIGate(unittest.TestCase):
+    def test_gate_context_hides_every_outcome_field(self):
+        from unittest import mock
+        from analysis.lab_ai import gate
+        fake = {"symbol": "BTCUSDT", "at_entry": {"rsi14_15m": 50},
+                "outcome": {"r_net": 9.9, "exit_reason": "target"},
+                "next_16_closes_15m_pct_in_trade_direction": [1, 2, 3],
+                "last_16_closes_15m_pct_vs_entry": [0.1, 0.2]}
+        with mock.patch("analysis.lab_ai.context.build", return_value=dict(fake)):
+            ctx = gate.pretrade_context(pd.Series({"symbol": "BTCUSDT"}))
+        self.assertNotIn("outcome", ctx)
+        self.assertNotIn("next_16_closes_15m_pct_in_trade_direction", ctx)
+        self.assertIn("last_16_closes_15m_pct_vs_entry", ctx)        # the past is allowed
+        self.assertNotIn("9.9", gate.prompt(ctx))
+
+    def test_prompt_never_mentions_results(self):
+        from analysis.lab_ai import gate
+        self.assertIn("result is hidden", gate.SYSTEM)
+        for word in ("r_net", "mfe_r", "mae_r", "move_after"):
+            self.assertNotIn(word, gate.SYSTEM)
+
+    def test_compare_rewards_a_model_that_actually_predicts(self):
+        from analysis.lab_ai import gate
+        rng = np.random.default_rng(0)
+        rows = []
+        for _ in range(300):
+            score = int(rng.integers(1, 6))
+            rows.append({"ok": True, "score": score, "decision": "take" if score >= 3 else "skip",
+                         "r_net": float(rng.normal(0.4 * (score - 3), 1.2))})
+        c = gate.compare(rows)
+        self.assertGreater(c["take_exp_r"], c["skip_exp_r"])
+        self.assertGreater(c["auc"], 0.6)
+        self.assertGreater(c["take_minus_skip_ci"][0], 0)
+
+    def test_compare_finds_nothing_in_a_coin_flip_model(self):
+        from analysis.lab_ai import gate
+        rng = np.random.default_rng(1)
+        rows = [{"ok": True, "score": int(rng.integers(1, 6)), "decision": "take" if rng.random() < 0.5 else "skip",
+                 "r_net": float(rng.normal(0.1, 1.2))} for _ in range(300)]
+        c = gate.compare(rows)
+        self.assertLess(c["take_minus_skip_ci"][0], 0.05)
+        self.assertGreater(c["take_minus_skip_ci"][1], -0.05)
+        self.assertTrue(0.4 < c["auc"] < 0.6)

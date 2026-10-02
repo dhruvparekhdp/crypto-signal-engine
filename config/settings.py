@@ -115,42 +115,46 @@ class Settings(BaseSettings):
     gemini_api_key: SecretStr | None = None
     anthropic_api_key: SecretStr | None = None
 
-    # Groq first, as the owner asked. Web search is gpt-oss with Groq's
+    # Free models only on OpenRouter (the account has no credits: paid models and the :online search
+    # plugin return HTTP 402). Chains that must search therefore end on Groq's own +search tool.
+    # Groq first, as the owner asked, and every chain that does not need web search ends on OpenRouter: a
+    # Groq free-tier 429 is org-wide, so consecutive Groq entries all die
+    # together and only a different provider at the tail survives it.
+    # qwen/qwen3.8-27b is deliberately not a Groq lead (live 1 Oct logs: 400
+    # JSON-validation failures and 429 "request too large" on every call).
+    # Web search is gpt-oss with Groq's
     # built-in browser_search tool ("+search"): groq/compound and
     # compound-mini were decommissioned on 21 Sep 2026 and now return errors.
     # The reviews it writes are stored with their news context so the local
     # model can study them later.
     llm_chain_pre_trade: str = (
-        "groq:qwen/qwen3.8-27b, groq:openai/gpt-oss-20b, groq:openai/gpt-oss-120b, "
+        "groq:openai/gpt-oss-120b, groq:openai/gpt-oss-20b, "
         "hf:meta-llama/Llama-3.1-8B-Instruct, openrouter:qwen/qwen3.8-27b:free")
     llm_chain_post_trade: str = (
-        "groq:qwen/qwen3.8-27b, groq:openai/gpt-oss-20b, groq:openai/gpt-oss-120b, "
+        "groq:openai/gpt-oss-120b+search, groq:openai/gpt-oss-120b, "
         "hf:meta-llama/Llama-3.1-8B-Instruct, openrouter:nvidia/nemotron-3-ultra-550b-a55b:free")
-    # The world-events briefing. 70B / 120B reasoning models with DuckDuckGo search.
+    # The world-events briefing. Every entry can actually search.
     llm_chain_briefing: str = (
-        "groq:qwen/qwen3.8-27b, groq:openai/gpt-oss-20b, groq:openai/gpt-oss-120b, "
-        "hf:meta-llama/Llama-3.1-8B-Instruct")
+        "groq:openai/gpt-oss-120b+search, groq:openai/gpt-oss-20b+search")
     market_briefing_enabled: bool = True
     market_briefing_minutes: int = 30
     # Hourly: why each watchlist coin moved, and how our signals fared.
     llm_chain_attribution: str = (
-        "groq:qwen/qwen3.8-27b, groq:openai/gpt-oss-20b, groq:openai/gpt-oss-120b, "
-        "hf:meta-llama/Llama-3.1-8B-Instruct")
+        "groq:openai/gpt-oss-120b+search, groq:openai/gpt-oss-20b+search")
     move_attribution_enabled: bool = True
     # The event monitor: adaptive, jittered web checks with a daily cap.
     event_monitor_enabled: bool = True
     event_monitor_daily_cap: int = 120
     llm_chain_briefing_calm: str = (
-        "groq:qwen/qwen3.8-27b, groq:openai/gpt-oss-20b, groq:openai/gpt-oss-120b, "
-        "hf:meta-llama/Llama-3.1-8B-Instruct")
+        "groq:openai/gpt-oss-20b+search, groq:openai/gpt-oss-120b+search")
     # Labelling past moves from the Binance lake (scripts/review_history.py).
     # Local first: it is bulk work and the free Groq requests are shared with
     # live trading. The biggest moves use web search to find that day's news.
     llm_chain_history: str = (
-        "ollama:qwen3:8b, groq:openai/gpt-oss-120b, openrouter:qwen/qwen3-32b, "
+        "ollama:qwen3:8b, groq:openai/gpt-oss-120b, "
         "openrouter:nvidia/nemotron-3-ultra-550b-a55b:free")
     llm_chain_history_search: str = (
-        "groq:openai/gpt-oss-120b+search, openrouter:qwen/qwen3-32b:online")
+        "groq:openai/gpt-oss-120b+search, groq:openai/gpt-oss-20b+search")
     # Entry protections (analysis/protections.py): session window, daily
     # loss limit, losing-streak brake, pair cooldown, correlated exposure,
     # stop-vs-fee floor and liquidation distance.
@@ -276,13 +280,15 @@ class Settings(BaseSettings):
     # a few hundred headlines a day it is also the one that would cost the
     # most through a metered API. Local first, and the free tiers behind it.
     llm_chain_news_scoring: str = (
-        "groq:qwen/qwen3.8-27b, groq:openai/gpt-oss-20b, hf:meta-llama/Llama-3.1-8B-Instruct")
+        "groq:qwen/qwen3.8-27b, groq:openai/gpt-oss-20b, "
+        "hf:meta-llama/Llama-3.1-8B-Instruct, openrouter:qwen/qwen3.8-27b:free")
 
     # Groq leads, not the laptop: this call sits inside the 30-second paper
     # tick with a 12-second budget, and an 8B model on the i5 needs 10-25 s
     # just to read the prompt. gemini-2.5-* is being shut down in October.
     llm_chain_position_review: str = (
-        "groq:qwen/qwen3.8-27b, groq:openai/gpt-oss-20b, groq:openai/gpt-oss-120b, hf:meta-llama/Llama-3.1-8B-Instruct")
+        "groq:openai/gpt-oss-20b, hf:meta-llama/Llama-3.1-8B-Instruct, "
+        "openrouter:qwen/qwen3.8-27b:free")
 
     llm_chain_research: str = (
         "anthropic:claude-opus-5-5, anthropic:claude-opus-5, gemini:gemini-3.1-pro-preview")
@@ -316,8 +322,7 @@ class Settings(BaseSettings):
     event_precedent_extended_hold_enabled: bool = False
     event_precedent_extended_hold_minutes: int = 4320   # 3 days
     llm_chain_event_precedent: str = (
-        "groq:openai/gpt-oss-120b+search, groq:openai/gpt-oss-20b+search, "
-        "openrouter:qwen/qwen3-32b:online")
+        "groq:openai/gpt-oss-120b+search, groq:openai/gpt-oss-20b+search")
 
     # Market Data & External APIs
     twelvedata_api_key: str | None = None

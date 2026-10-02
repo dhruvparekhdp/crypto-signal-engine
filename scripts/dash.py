@@ -97,10 +97,11 @@ def ai_view():
         rv = []
         f = Path(d["results"]) if d.get("results") else None
         if f is not None and f.is_file():
-            for l in f.read_text().splitlines()[-6:]:
+            for l in f.read_text().splitlines()[-8:]:
                 try:
                     r = json.loads(l)
-                    rv.append({k: r.get(k) for k in ("model", "strategy", "symbol", "cause", "signal_quality", "wall_s", "ok", "consistent", "hypothesis")})
+                    rv.append({k: r.get(k) for k in ("model", "strategy", "symbol", "cause", "signal_quality", "wall_s", "ok",
+                                                       "consistent", "hypothesis", "decision", "score", "r_net", "reason")})
                 except json.JSONDecodeError:
                     pass
         d["recent"] = rv
@@ -115,10 +116,11 @@ def results_view():
             try:
                 rows = list(csv.DictReader(open(sp)))
                 rows.sort(key=lambda r: -float(r["expectancy_r"]))
-                out.append({"run": f"{base.name}/{sp.parent.name}", "top": [
-                    {k: (round(float(r[k]), 3) if k not in ("strategy", "params") and r.get(k) not in (None, "") else r.get(k)) for k in
-                     ("strategy", "params", "n", "win_rate", "expectancy_r", "profit_factor", "null_p") if k in r}
-                    for r in rows[:6]]})
+                keys = ("strategy", "params", "exit", "n", "win_rate", "expectancy_r", "ci_lo", "ci_hi", "profit_factor",
+                        "max_dd_r", "null_mean_r", "null_p")
+                out.append({"run": f"{base.name}/{sp.parent.name}", "configs": len(rows), "positive": sum(float(r["expectancy_r"]) > 0 for r in rows),
+                            "top": [{k: (round(float(r[k]), 3) if k not in ("strategy", "params", "exit") and r.get(k) not in (None, "") else r.get(k))
+                                     for k in keys if k in r} for r in rows[:30]]})
             except (OSError, KeyError, ValueError):
                 pass
     return out
