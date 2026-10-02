@@ -41,7 +41,7 @@ def main():
         Path("status").mkdir(exist_ok=True)
         Path("machine.json").write_text(json.dumps(stats(a.name)))
         files = (["machine.json", "status", "logs"] + [str(p) for p in Path("data/lab/runs").glob("*/summary.csv")]
-                 + [str(p) for p in Path("data/lab").glob("*.csv")] + [str(p) for p in Path("data/lab/breakdown").glob("*.csv")])
+                 + [str(p) for p in Path("data/lab").glob("*.csv")] + [str(p) for p in Path("data/lab").glob("*.json")] + [str(p) for p in Path("data/lab/breakdown").glob("*.csv")])
         cmd = (f"COPYFILE_DISABLE=1 tar --no-xattrs -cf - {' '.join(files)} 2>/dev/null | "
                f"ssh -o BatchMode=yes -o ConnectTimeout=8 {a.to} 'mkdir -p {a.remote_dir}/{a.name} && cd {a.remote_dir}/{a.name} && tar -xf -'")
         subprocess.run(cmd, shell=True, capture_output=True)

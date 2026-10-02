@@ -295,3 +295,22 @@ class TestReviewPrompt(unittest.TestCase):
         from analysis.lab_ai.review import system_x
         firsts = {system_x(f"trade{i}").split("no particular order:\n")[1].split(":")[0].strip() for i in range(12)}
         self.assertGreater(len(firsts), 2)
+
+
+class TestOddTimeframes(unittest.TestCase):
+    def test_8h_and_12h_bars_are_built_from_complete_lower_bars_only(self):
+        import tempfile
+        from pathlib import Path
+        from analysis.lab.data import load_bars
+        with tempfile.TemporaryDirectory() as d:
+            p = Path(d) / "um" / "klines" / "ZZZUSDT" / "1m"
+            p.mkdir(parents=True)
+            t0 = int(pd.Timestamp("2024-01-01", tz="UTC").timestamp() * 1000)
+            n = 60 * 24 * 3 - 90                       # three days minus 90 minutes: the last 8h bar is incomplete
+            t = t0 + np.arange(n, dtype=np.int64) * 60_000
+            pd.DataFrame({"open_time": t, "open": 1.0, "high": 2.0, "low": 0.5, "close": 1.5, "volume": 1.0,
+                          "taker_buy_volume": 0.5}).to_parquet(p / "2024-01.parquet")
+            b8 = load_bars("ZZZUSDT", "8h", root=d)
+            self.assertEqual(len(b8), 8)                # 9 slots, the partial one is dropped
+            self.assertTrue(((b8.t - t0) % (8 * 3_600_000) == 0).all())
+            self.assertEqual(len(load_bars("ZZZUSDT", "12h", root=d)), 5)

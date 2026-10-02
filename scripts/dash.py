@@ -77,10 +77,10 @@ def load_jobs():
         for sp in sorted((base / "status").glob("*.json")):
             try:
                 d = json.loads(sp.read_text())
-                if "stage" in d:          # an AI-queue progress file, shown in its own section
+                if "stage" in d or "cmd" not in d or "name" not in d:   # an AI-queue file, the banner, or something else
                     continue
                 jobs.append(job_view(d, base / "logs"))
-            except (OSError, json.JSONDecodeError):
+            except Exception:  # noqa: BLE001 - one odd file must not take the page down
                 pass
     return jobs
 
@@ -180,11 +180,25 @@ def gate_compare_safe(rows):
         return {}
 
 
+def banner_view():
+    """One glance: what is running, what is finished, what is paused. status/banner.json is written by hand or by a job."""
+    try:
+        return json.loads((ROOT / "status" / "banner.json").read_text())
+    except (OSError, json.JSONDecodeError):
+        return None
+
+
 def noai_view():
     """Rules-only findings written by scripts.portfolio_wallet and scripts.breakdown on the Mac."""
-    out = {"wallet": {}, "breakdown": {}}
+    out = {"wallet": {}, "breakdown": {}, "timeframes": []}
     for base in [ROOT] + list((ROOT / "remote").glob("*")):
         lab = base / "data" / "lab"
+        f = lab / "noai_report.json"
+        if f.exists():
+            try:
+                out["timeframes"] = json.loads(f.read_text())
+            except (OSError, json.JSONDecodeError):
+                pass
         for months in (12, 24):
             f = lab / f"wallet_{months}m.csv"
             if f.exists():
@@ -249,7 +263,15 @@ def state():
             machines.append(m)
         except (OSError, json.JSONDecodeError):
             pass
-    return {"now": time.time(), "machines": machines, "jobs": load_jobs(), "ai": ai_view() + work_view(), "results": results_view(), "noai": noai_view()}
+    def safe(fn, default):
+        try:
+            return fn()
+        except Exception:  # noqa: BLE001 - each section fails on its own, never the whole page
+            return default
+
+    return {"now": time.time(), "machines": machines, "jobs": safe(load_jobs, []),
+            "ai": safe(ai_view, []) + safe(work_view, []), "results": safe(results_view, []),
+            "noai": safe(noai_view, {"wallet": {}, "breakdown": {}, "timeframes": []}), "banner": safe(banner_view, None)}
 
 
 PAGE = (Path(__file__).parent / "dash.html").read_text() if (Path(__file__).parent / "dash.html").exists() else "dash.html missing"

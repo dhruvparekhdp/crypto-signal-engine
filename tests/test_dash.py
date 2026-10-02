@@ -35,3 +35,23 @@ class TestDashJson(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestDashRobustness(unittest.TestCase):
+    def test_a_stray_json_file_in_status_does_not_break_the_page(self):
+        import os
+        import tempfile
+        from pathlib import Path
+        with tempfile.TemporaryDirectory() as d:
+            (Path(d) / "status").mkdir()
+            (Path(d) / "status" / "banner.json").write_text(json.dumps({"title": "x", "items": []}))
+            (Path(d) / "status" / "junk.json").write_text("{not json")
+            (Path(d) / "status" / "job.json").write_text(json.dumps({"name": "j", "cmd": "c", "state": "done", "started": 1, "finished": 2, "beat": 2}))
+            old = dash.ROOT
+            dash.ROOT = Path(d)
+            try:
+                jobs = dash.load_jobs()
+                self.assertEqual([j["name"] for j in jobs], ["j"])
+                self.assertEqual(dash.banner_view()["title"], "x")
+            finally:
+                dash.ROOT = old
