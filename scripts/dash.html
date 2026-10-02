@@ -16,7 +16,8 @@ table{width:100%;border-collapse:collapse;font-size:12px}td,th{padding:4px 6px;t
 </style></head><body>
 <h1>Lab Monitor</h1><div class="sub" id="upd">loading…</div>
 <h2>Machines</h2><div id="mach"></div>
-<h2>Without AI vs with AI (local models, outcomes hidden from the model)</h2><div id="gate"></div>
+<h2>1 · Without AI: what the rules alone did</h2><div id="noai"></div>
+<h2>2 · With AI vs without (local models, outcomes hidden from the model)</h2><div id="gate"></div>
 <h2>AI review queue (explaining finished trades)</h2><div id="ai"></div>
 <h2>Backtest jobs</h2><div id="jobs"></div>
 <h2>Best results so far</h2><div id="res"></div>
@@ -28,6 +29,10 @@ return `<div class="card"><div class="row"><b>${esc(m.name)}</b><span class="sub
 <div class="grid"><div><div class="k">CPU</div><div class="v">${m.cpu_pct??'–'}%</div></div><div><div class="k">RAM</div><div class="v">${m.ram_used_gb}/${m.ram_total_gb}G</div></div>
 <div><div class="k">Temp</div><div class="v ${m.temp_c>85?'neg':''}">${m.temp_c??'–'}°C</div></div>
 <div><div class="k">Power</div><div class="v ${warn?'neg':''}">${m.ac===undefined?'–':(m.ac?'plugged':'battery')} ${m.battery_pct!=null?m.battery_pct+'%':''}</div></div></div></div>`}
+function noai(n){if(!n)return '';const w=n.wallet||{},b=n.breakdown||{};
+const tbl=(rows,title)=>!rows||!rows.length?'':`<div class="card"><div class="k">${title}</div><div class="wrap"><table><tr>${rows[0].map(c=>`<th>${esc(c||'')}</th>`).join('')}</tr>${rows.slice(1).map(r=>`<tr>${r.map((c,i)=>`<td class="${i?'n '+(typeof c==='number'&&/R_per|20|0\./.test('x')?'':''):''}">${typeof c==='number'?c:esc(c)}</td>`).join('')}</tr>`).join('')}</table></div></div>`;
+const wal=Object.entries(w).map(([k,rows])=>`<div class="card"><div class="k">25 USDT wallet started at the first of every month, followed for ${k} (the four 4h strategies together, no AI). "hit 100" is the share of start dates that reached 100 USDT.</div><div class="wrap"><table><tr><th>risk</th><th>open at once</th><th>pause after 3 losses</th><th>hit 100</th><th>bust</th><th>still going</th><th>median end</th><th>worst DD</th></tr>${rows.map(r=>`<tr><td class="n">${Math.round(r.risk*100)}%</td><td class="n">${r.concurrent}</td><td class="n">${r.loss_streak_pause?'yes':'no'}</td><td class="n ${r.hit_100>0?'pos':''}">${Math.round(r.hit_100*100)}%</td><td class="n ${r.bust>0?'neg':''}">${Math.round(r.bust*100)}%</td><td class="n">${Math.round(r.still_running*100)}%</td><td class="n ${r.median_end_balance>25?'pos':'neg'}">${num(r.median_end_balance,1)}</td><td class="n">${Math.round(r.worst_dd_pct)}%</td></tr>`).join('')}</table></div></div>`).join('');
+return `${wal}${tbl(b.strategy_by_year,'R per trade by strategy and year (negative in red would mean a losing year)')}${tbl(b.by_symbol,'by coin')}${tbl(b.by_side,'longs vs shorts')}${tbl(b.by_strategy,'by strategy')}`}
 function pct(x){return x==null?'–':Math.round(x*100)+'%'}
 function num(x,d=2){return x==null?'–':(+x).toFixed(d)}
 function cls(x){return x==null?'':(x>0?'pos':'neg')}
@@ -64,14 +69,16 @@ const row=x=>`<tr><td>${esc(x.strategy)}<div class="k">${esc((x.params||'').slic
 const head=`<tr><th>strategy</th><th>n</th><th>win</th><th>R/trade</th><th>CI lo</th><th>PF</th><th>max DD (R)</th>${nl?'<th>null p</th>':''}</tr>`;
 return `<div class="card"><div class="row"><b>${esc(r.run)}</b><span class="sub">${r.positive}/${r.configs} configs positive</span></div><div class="wrap"><table>${head}${r.top.slice(0,6).map(row).join('')}</table></div>
 ${r.top.length>6?`<details><summary class="sub">all ${r.top.length} shown</summary><div class="wrap"><table>${head}${r.top.slice(6).map(row).join('')}</table></div></details>`:''}</div>`}
-async function tick(){try{const s=await (await fetch('/api/state',{cache:'no-store'})).json();
+async function tick(){let s;try{s=await (await fetch('/api/state',{cache:'no-store'})).json();}catch(e){document.getElementById('upd').textContent='cannot reach the server · retrying';return}
+try{
 document.getElementById('upd').textContent='live · '+new Date().toLocaleTimeString()+' · refreshes every 6s';
 document.getElementById('mach').innerHTML=s.machines.map(mach).join('');
 const G=s.ai.filter(x=>x.kind==='gate'),Q=s.ai.filter(x=>x.kind!=='gate');
 document.getElementById('gate').innerHTML=G.length?G.map(gate).join(''):'<div class="card sub">AI gate experiment not started yet</div>';
 document.getElementById('ai').innerHTML=Q.length?Q.map(ai).join(''):'<div class="card sub">no review queue running</div>';
 document.getElementById('jobs').innerHTML=s.jobs.length?s.jobs.map(job).join(''):'<div class="card sub">no jobs</div>';
+document.getElementById('noai').innerHTML=noai(s.noai)||'<div class="card sub">no rules-only findings yet</div>';
 document.getElementById('res').innerHTML=s.results.length?s.results.map(res).join(''):'<div class="card sub">no finished runs yet</div>';}
-catch(e){document.getElementById('upd').textContent='cannot reach the server · retrying'}}
+catch(e){document.getElementById('upd').textContent='display error: '+e.message}}
 tick();setInterval(tick,6000);
 </script></body></html>

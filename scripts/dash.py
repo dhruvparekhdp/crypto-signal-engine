@@ -180,6 +180,37 @@ def gate_compare_safe(rows):
         return {}
 
 
+def noai_view():
+    """Rules-only findings written by scripts.portfolio_wallet and scripts.breakdown on the Mac."""
+    out = {"wallet": {}, "breakdown": {}}
+    for base in [ROOT] + list((ROOT / "remote").glob("*")):
+        lab = base / "data" / "lab"
+        for months in (12, 24):
+            f = lab / f"wallet_{months}m.csv"
+            if f.exists():
+                try:
+                    rows = list(csv.DictReader(open(f)))
+                    for r in rows:
+                        for k in r:
+                            try:
+                                r[k] = round(float(r[k]), 3)
+                            except ValueError:
+                                pass
+                    rows.sort(key=lambda r: (-(r["hit_100"] or 0), -(r["median_end_balance"] or 0)))
+                    out["wallet"][f"{months} months"] = rows[:14]
+                except (OSError, ValueError):
+                    pass
+        for name in ("by_year", "by_symbol", "by_side", "by_strategy", "strategy_by_year"):
+            f = lab / "breakdown" / f"{name}.csv"
+            if f.exists():
+                try:
+                    rows = list(csv.reader(open(f)))
+                    out["breakdown"][name] = [[(round(float(c), 3) if i else c) if c.replace(".", "", 1).replace("-", "", 1).isdigit() or i == 0 else c for i, c in enumerate(r)] for r in rows]
+                except (OSError, ValueError):
+                    pass
+    return out
+
+
 def results_view():
     out = []
     for base in [ROOT] + list((ROOT / "remote").glob("*")):
@@ -197,6 +228,18 @@ def results_view():
     return out
 
 
+def scrub(o):
+    """NaN and Infinity are not valid JSON; browsers reject the whole payload. Send null instead."""
+    import math
+    if isinstance(o, float):
+        return o if math.isfinite(o) else None
+    if isinstance(o, dict):
+        return {k: scrub(v) for k, v in o.items()}
+    if isinstance(o, (list, tuple)):
+        return [scrub(v) for v in o]
+    return o
+
+
 def state():
     machines = [machine()]
     for mp in (ROOT / "remote").glob("*/machine.json"):
@@ -206,7 +249,7 @@ def state():
             machines.append(m)
         except (OSError, json.JSONDecodeError):
             pass
-    return {"now": time.time(), "machines": machines, "jobs": load_jobs(), "ai": ai_view() + work_view(), "results": results_view()}
+    return {"now": time.time(), "machines": machines, "jobs": load_jobs(), "ai": ai_view() + work_view(), "results": results_view(), "noai": noai_view()}
 
 
 PAGE = (Path(__file__).parent / "dash.html").read_text() if (Path(__file__).parent / "dash.html").exists() else "dash.html missing"
@@ -219,7 +262,7 @@ class H(BaseHTTPRequestHandler):
     def do_GET(self):
         here = Path(__file__).parent
         if self.path.startswith("/api/state"):
-            body, ct = json.dumps(state()).encode(), "application/json"
+            body, ct = json.dumps(scrub(state()), allow_nan=False).encode(), "application/json"
         elif self.path.startswith("/setup.sh"):
             body, ct = (here / "worker_setup.sh").read_bytes(), "text/x-shellscript"
         elif self.path.startswith("/worker.py"):
