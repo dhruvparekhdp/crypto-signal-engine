@@ -161,3 +161,25 @@ async def test_live_verdict_fetches_daily_bars_once_per_day_and_survives_failure
         assert await runner2._regime_verdict(None, "SOLUSDT", now_ms) is None
     with patch("scheduler.runner.settings.swing_regime_filter", "off"):
         assert await runner2._regime_verdict(None, "SOLUSDT", now_ms) is None
+
+
+@pytest.mark.asyncio
+async def test_swing_signals_are_not_crowded_out_by_intraday_ones():
+    """The scoreboard read the newest 400 signals; 15m shadow signals arrive dozens a day and pushed swing rows out."""
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+    session_maker = async_sessionmaker(engine, expire_on_commit=False)
+    from storage.repository import Repository
+    async with session_maker() as s:
+        repo = Repository(s)
+        common = dict(direction="long", trigger_description="x", confidence=0.5, current_price=1.0, edge_pct=0, target_price=None, stop_loss=None,
+                      stake_pct=0, sentiment_score=0)
+        await repo.log_crypto_signal(symbol="solusdt", signal_type="swing_donchian", timeframe="4h",
+                                     indicators_summary="a | " + rg.Verdict(0.2, 10.0, []).tag(), trade_mode="swing", **common)
+        for i in range(450):
+            await repo.log_crypto_signal(symbol="btcusdt", signal_type="confluence", timeframe="15m",
+                                         indicators_summary="", trade_mode="intraday", **common)
+        assert all(r.trade_mode != "swing" for r in await repo.crypto_signals_between(90, 0))
+        rows = await repo.swing_signals_since(120)
+        assert [r.signal_type for r in rows] == ["swing_donchian"]

@@ -1127,6 +1127,15 @@ class Repository:
             q.order_by(CryptoSignalLog.timestamp.desc()).limit(limit))
         return list(res.scalars().all())
 
+    async def swing_signals_since(self, days: int, limit: int = 2000) -> list[CryptoSignalLog]:
+        """Swing-book signals only. The intraday shadow signals arrive dozens a day, so a plain
+        newest-N window would push every swing row out of it."""
+        q = (select(CryptoSignalLog)
+             .where(CryptoSignalLog.timestamp >= _now_utc() - timedelta(days=days))
+             .where(CryptoSignalLog.trade_mode == "swing")
+             .order_by(CryptoSignalLog.timestamp.desc()).limit(limit))
+        return list((await self.session.execute(q)).scalars().all())
+
     async def pending_crypto_signals(self, older_than_minutes: int = 240,
                                      limit: int = 200) -> list[CryptoSignalLog]:
         """

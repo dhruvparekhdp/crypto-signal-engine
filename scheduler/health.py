@@ -1260,7 +1260,7 @@ async def _swing_regime_section(runner, trades, rs) -> dict:
         from storage.database import AsyncSessionFactory
         from storage.repository import Repository
         async with AsyncSessionFactory() as session:
-            rows = await Repository(session).crypto_signals_between(90, 0)
+            rows = await Repository(session).swing_signals_since(120)
         sigs = [{"symbol": r.symbol, "signal_type": r.signal_type, "direction": r.direction,
                  "timestamp": r.timestamp if r.timestamp.tzinfo else r.timestamp.replace(tzinfo=UTC),
                  "indicators_summary": r.indicators_summary or ""}
