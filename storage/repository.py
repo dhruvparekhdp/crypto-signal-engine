@@ -1250,6 +1250,25 @@ class Repository:
 
     # ── Signal reviews ────────────────────────────────────────────────────
 
+    async def link_pre_reviews(self, symbol: str, signal_type: str, log_id: int, within_s: int = 600) -> int:
+        """Attach the signal's id to its pre-trade review(s) from the last few minutes. The review runs
+        before the signal row exists, which left every review with signal_log_id = 0 and unscoreable."""
+        from sqlalchemy import update
+
+        from storage.models import SignalReview
+        try:
+            res = await self.session.execute(
+                update(SignalReview)
+                .where(SignalReview.phase == "pre", SignalReview.symbol == symbol,
+                       SignalReview.signal_type == signal_type, SignalReview.signal_log_id == 0,
+                       SignalReview.created_at >= _now_utc() - timedelta(seconds=within_s))
+                .values(signal_log_id=log_id))
+            await self.session.commit()
+            return res.rowcount or 0
+        except Exception:  # noqa: BLE001 - linking is bookkeeping; never fail the signal over it
+            await self.session.rollback()
+            return 0
+
     async def save_review(self, phase: str, symbol: str, **kw) -> None:
         """Record one review. Never raises into the caller: a lost post-mortem
         is not worth failing a trade close over."""

@@ -27,7 +27,7 @@ async def test_swing_trade_opens_holds_its_stop_and_closes_at_target():
         st.current_price = 60000.0
         st.atr_14 = 300.0
         runner.crypto_store._states["btcusdt"] = st
-        setup = sb.SwingSetup("BTCUSDT", "keltner_break", +1, 0, 1000.0, 60000.0)   # 4h ATR 1000 -> 5% stop
+        setup = sb.SwingSetup("BTCUSDT", "keltner_break", +1, 0, 1000.0, 60000.0)   # 4h ATR 1000 -> 5% stop (tf defaults to 4h)
         runner._pending_swing.append(sb.to_signal(setup, 60000.0, datetime.now(UTC)))
         runner._review_open_position = AsyncMock(side_effect=AssertionError("AI must not review swing positions"))
 

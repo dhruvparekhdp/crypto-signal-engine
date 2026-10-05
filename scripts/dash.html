@@ -20,6 +20,7 @@ table{width:100%;border-collapse:collapse;font-size:12px}td,th{padding:4px 6px;t
 <h2>1 · Without AI: what the rules alone did</h2><div id="noai"></div>
 <h2>2 · With AI vs without (local models, outcomes hidden from the model)</h2><div id="gate"></div>
 <h2>AI review queue (explaining finished trades)</h2><div id="ai"></div>
+<h2>Test runs</h2><div id="tests"></div>
 <h2>Backtest jobs</h2><div id="jobs"></div>
 <h2>Best results so far</h2><div id="res"></div>
 <script>
@@ -65,6 +66,11 @@ return `<div class="card"><div class="row"><b>${esc(a.title||a.name)}</b><span c
 <div class="sub">stage ${esc(a.stage)} · ${a.done}/${a.total} reviews · ${esc(a.model)}${a.think?' (thinking)':''}</div>
 <div class="bar"><i style="width:${pct}%"></i></div><div class="sub">${pct}% · elapsed ${fmt(a.elapsed_s||0)}${eta?' · about '+fmt(eta)+' left on this stage':''} · avg ${a.avg_s?a.avg_s.toFixed(0)+'s':'–'} per review</div>
 <div class="wrap"><table><tr><th>model</th><th>strategy</th><th>cause</th><th>q</th><th>s</th></tr>${(a.recent||[]).slice().reverse().map(r=>`<tr><td>${esc((r.model||'').split(':')[0])}</td><td>${esc(r.strategy)}</td><td class="${r.consistent===true?'pos':r.consistent===false?'neg':''}">${esc(r.cause)}</td><td class="n">${r.signal_quality??''}</td><td class="n">${r.wall_s?Math.round(r.wall_s):''}</td></tr>`).join('')}</table></div></div>`}
+function testrun(j){const pc=j.pct??(j.state==='done'?100:0);const ok=j.failed===0&&j.state==='done';
+return `<div class="card"><div class="row"><b>${esc(j.name)}</b><span class="pill ${j.state==='done'?(ok?'done':'failed'):j.state}">${esc(j.state==='done'?(ok?'all passed':'failures'):j.state)}</span></div>
+<div class="sub">${esc(j.host)} · ${fmt(j.elapsed_s)}${j.passed!=null?` · <span class="pos">${j.passed} passed</span>`:''}${j.failed?` · <span class="neg">${j.failed} failed</span>`:''}</div>
+<div class="bar"><i style="width:${pc}%"></i></div><div class="sub">${pc}%</div>
+${(j.failures||[]).length?`<pre>${esc(j.failures.join('\n'))}</pre>`:''}</div>`}
 function job(j){const n=j.symbols_done;return `<div class="card"><div class="row"><b>${esc(j.name)}</b><span class="pill ${j.state}">${esc(j.state)}</span></div>
 <div class="sub">${esc(j.host)} · elapsed ${fmt(j.elapsed_s)}${n?` · ${n}/12 symbols done`:''}</div>${n?`<div class="bar"><i style="width:${Math.min(100,n/12*100)}%"></i></div>`:''}
 <pre>${esc(j.tail.join('\n'))}</pre></div>`}
@@ -80,7 +86,9 @@ document.getElementById('mach').innerHTML=s.machines.map(mach).join('');
 const G=s.ai.filter(x=>x.kind==='gate'),Q=s.ai.filter(x=>x.kind!=='gate');
 document.getElementById('gate').innerHTML=G.length?G.map(gate).join(''):'<div class="card sub">AI gate experiment not started yet</div>';
 document.getElementById('ai').innerHTML=Q.length?Q.map(ai).join(''):'<div class="card sub">no review queue running</div>';
-document.getElementById('jobs').innerHTML=s.jobs.length?s.jobs.map(job).join(''):'<div class="card sub">no jobs</div>';
+const T=s.jobs.filter(j=>j.kind==='tests'),B=s.jobs.filter(j=>j.kind!=='tests');
+document.getElementById('tests').innerHTML=T.length?T.map(testrun).join(''):'<div class="card sub">no test runs yet</div>';
+document.getElementById('jobs').innerHTML=B.length?B.map(job).join(''):'<div class="card sub">no jobs</div>';
 document.getElementById('banner').innerHTML=banner(s.banner);
 document.getElementById('noai').innerHTML=noai(s.noai)||'<div class="card sub">no rules-only findings yet</div>';
 document.getElementById('res').innerHTML=s.results.length?s.results.map(res).join(''):'<div class="card sub">no finished runs yet</div>';}

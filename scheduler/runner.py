@@ -19,6 +19,7 @@ Candles are never persisted — they live in memory, capped per symbol, and are
 refetched on boot. Only fired signals, snapshots and paper trades reach the DB.
 """
 import asyncio
+import json
 import math
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
@@ -173,6 +174,22 @@ def _record_start(path: Path, window_minutes: int = 60) -> list[str]:
     return recent
 
 
+
+
+def _briefing_can_wait(latest, now, event_near: bool) -> bool:
+    """Skip the web-searched briefing while nothing is happening: the last briefing found no events, it is
+    younger than market_briefing_quiet_minutes, and no scheduled event is near. 17% of briefings were the
+    same "no new events" line, each one a Groq call out of the shared free-tier quota."""
+    if latest is None or event_near:
+        return False
+    try:
+        events = json.loads(latest.events or "[]")
+    except (TypeError, ValueError):
+        events = []
+    if events:
+        return False
+    created = latest.created_at if latest.created_at.tzinfo else latest.created_at.replace(tzinfo=UTC)
+    return (now - created).total_seconds() < settings.market_briefing_quiet_minutes * 60
 
 def _family_may_trade(sig) -> bool:
     """Only the families named in settings.paper_open_families open paper trades; the rest are shadow
@@ -806,6 +823,25 @@ class AppRunner:
         except Exception:
             log.exception("paper_trading_job_failed")
 
+    async def _candle_refresh_job(self) -> None:
+        """Keep market_candles current. Nothing live reads it (trading uses in-memory candles), but the
+        status pages and later analyses do, and it had silently stopped at the last manual backfill."""
+        if not settings.candle_refresh_enabled:
+            return
+        from collectors.binance_history import BinanceHistory
+        now = datetime.now(UTC)
+        states = await self.crypto_store.get_all()
+        saved = 0
+        for st in states:
+            for interval, back in (("5m", timedelta(hours=3)), ("1h", timedelta(hours=8))):
+                try:
+                    async for batch in BinanceHistory().fetch_range(st.symbol.upper(), interval, now - back, now):
+                        async with AsyncSessionFactory() as session:
+                            saved += await Repository(session).save_candles(batch)
+                except Exception as e:  # noqa: BLE001 - a coin failing must not stop the rest
+                    log.warning("candle_refresh_failed", symbol=st.symbol, interval=interval, error=str(e)[:120])
+        log.info("candle_refresh_done", saved=saved)
+
     async def _swing_scan_job(self) -> None:
         """Every few minutes: evaluate the swing strategies on each coin's last CLOSED 4h bar.
         A fresh signal (bar closed within swing_signal_max_age_minutes) is queued for the paper job."""
@@ -821,27 +857,30 @@ class AppRunner:
             symbols = [s_ for s_ in CRYPTO if s_.lower() in states]
             now = datetime.now(UTC)
             now_ms = int(now.timestamp() * 1000)
+            from analysis.lab.data import INTERVAL_MS
             async with httpx.AsyncClient() as client:
+              for tf in sb.timeframes(specs):
                 for sym in symbols:
                     try:
-                        b = await sb.fetch_bars(client, sym, now_ms)
+                        b = await sb.fetch_bars(client, sym, now_ms, tf)
                     except Exception as e:  # noqa: BLE001 - one coin failing must not stop the rest
-                        log.warning("swing_fetch_failed", symbol=sym, error=str(e)[:120])
+                        log.warning("swing_fetch_failed", symbol=sym, tf=tf, error=str(e)[:120])
                         continue
                     if b is None:
                         continue
                     last = int(b.t[-1])
-                    if self._swing_seen.get(sym) == last:
+                    key = f"{sym}@{tf}"
+                    if self._swing_seen.get(key) == last:
                         continue
-                    self._swing_seen[sym] = last
+                    self._swing_seen[key] = last
                     setup = sb.evaluate(b, specs)
-                    age_min = (now_ms - (last + sb.TF_MS)) / 60000
-                    self._swing_last[sym] = {"bar_close": last + sb.TF_MS, "signal": setup.strategy if setup else None,
+                    age_min = (now_ms - (last + INTERVAL_MS[tf])) / 60000
+                    self._swing_last[key] = {"bar_close": last + INTERVAL_MS[tf], "signal": setup.strategy if setup else None,
                                              "side": setup.side if setup else 0, "age_min": round(age_min, 1)}
                     if setup is None:
                         continue
                     if age_min > settings.swing_signal_max_age_minutes:
-                        log.info("swing_signal_stale", symbol=sym, strategy=setup.strategy, age_min=round(age_min))
+                        log.info("swing_signal_stale", symbol=sym, tf=tf, strategy=setup.strategy, age_min=round(age_min))
                         continue
                     st = states.get(sym.lower())
                     price = st.current_price if st is not None and st.current_price > 0 else setup.close
@@ -850,7 +889,7 @@ class AppRunner:
                         log.info("swing_signal_stop_too_wide", symbol=sym, strategy=setup.strategy)
                         continue
                     self._pending_swing.append(sig)
-                    log.info("swing_signal", symbol=sym, strategy=setup.strategy, side=sig.direction,
+                    log.info("swing_signal", symbol=sym, tf=tf, strategy=setup.strategy, side=sig.direction,
                              price=price, stop=sig.stop_loss, target=sig.target_price)
         except Exception:
             log.exception("swing_scan_failed")
@@ -910,7 +949,7 @@ class AppRunner:
             risk_pct = abs(price - stop) / price * 100
             await repo.add_trade_events([_event(
                 pos, cycle.id, now, "opened", "entry", new=f"{price:.6g}",
-                note=(f"SWING {pos.side.value} {sig.signal_type} · stop {stop:.6g} ({risk_pct:.2f}% away, 3xATR 4h) · "
+                note=(f"SWING {sig.timeframe} {pos.side.value} {sig.signal_type} · stop {stop:.6g} ({risk_pct:.2f}% away, 3xATR {sig.timeframe}) · "
                       f"target {target:.6g} (3R) · {leverage:.1f}x · margin {pos.margin:.0f} · "
                       f"risking {risk * 100:.2f}% of the wallet (book drawdown {dd * 100:.0f}%, losing streak {streak}) · "
                       f"closes only at stop, target or after 7 days"))])
@@ -947,7 +986,8 @@ class AppRunner:
         veto_reason = extra.pop("veto_reason", getattr(sig, "veto_reason", ""))
         try:
             async with AsyncSessionFactory() as session:
-                return await Repository(session).log_crypto_signal(
+                repo_ = Repository(session)
+                log_id = await repo_.log_crypto_signal(
                     symbol=sig.symbol,
                     signal_type=sig.signal_type,
                     direction=sig.direction,
@@ -967,6 +1007,10 @@ class AppRunner:
                     veto_reason=veto_reason,
                     **extra,
                 )
+                # The pre-trade review ran before this row existed; link it now so it can be scored.
+                if log_id:
+                    await repo_.link_pre_reviews(sig.symbol, sig.signal_type, log_id)
+                return log_id
         except Exception:
             log.exception("crypto_signal_db_log_failed", symbol=sig.symbol)
             return 0
@@ -1008,6 +1052,8 @@ class AppRunner:
         """
         if not (self.groq_sentinel.is_available and settings.groq_signal_review_enabled):
             return "", ""
+        if not _family_may_trade(sig):
+            return "", ""          # shadow-only signals never trade: an AI review would only spend the free-tier quota
         news, briefing_id = await self._news_context(sig.symbol)
         delta, ai_summary, verdict = await self.groq_sentinel.review_signal_candidate(
             sig, state, model=scfg.groq_model, book=states, news=news)
@@ -1059,6 +1105,8 @@ class AppRunner:
         keeps calling _ai_review_candidate one at a time.
         """
         if not (self.groq_sentinel.is_available and settings.groq_signal_review_enabled):
+            return ("", ""), ("", "")
+        if not _family_may_trade(sig):
             return ("", ""), ("", "")
         news, briefing_id = await self._news_context(sig.symbol)
         (delta_p, summary_p, verdict_p), (delta_m, summary_m, verdict_m) = (
@@ -1693,7 +1741,8 @@ class AppRunner:
                     # in the numbers. So a REJECT costs real confidence and
                     # the ordinary threshold decides, which keeps every
                     # decision in one place and visible in the logs.
-                    if self.groq_sentinel.is_available and settings.groq_signal_review_enabled:
+                    if (self.groq_sentinel.is_available and settings.groq_signal_review_enabled
+                            and _family_may_trade(sig)):
                         news, briefing_id = await self._news_context(sig.symbol)
                         delta, ai_summary, verdict = (
                             await self.groq_sentinel.review_signal_candidate(
@@ -2104,6 +2153,9 @@ class AppRunner:
         from collectors.market_briefing import as_news_items, fetch_briefing
 
         if not settings.market_briefing_enabled or not chain_for("briefing"):
+            return
+        if _briefing_can_wait(self.latest_briefing, datetime.now(UTC), self._blackout(now_utc()) is not None):
+            log.info("market_briefing_skipped_quiet")
             return
         try:
             got = await fetch_briefing()
@@ -2756,6 +2808,14 @@ class AppRunner:
             id="coindcx_poll",
             max_instances=1,
             next_run_time=datetime.now(UTC),
+        )
+        self.scheduler.add_job(
+            self._candle_refresh_job,
+            "interval",
+            seconds=3600,
+            id="candle_refresh",
+            max_instances=1,
+            next_run_time=datetime.now(UTC) + timedelta(minutes=2),
         )
         self.scheduler.add_job(
             self._swing_scan_job,

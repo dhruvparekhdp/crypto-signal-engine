@@ -532,14 +532,14 @@ class TestTheNavBarActuallyFits(unittest.TestCase):
         self.assertIn(".sidebar.more-open .side-secondary{order:-1", self.phone)
 
     def test_everything_unreachable_from_the_bar_is_in_the_sheet(self):
-        """Nine destinations behind More, and none of them orphaned."""
+        """Ten destinations behind More (the Market Simulator joined them so six tabs fit the bar), none orphaned."""
         import re
 
         secondary = re.findall(r'class="side-item side-secondary"[^>]*data-tab="(\w+)"',
                                health._HTML)
         self.assertEqual(set(secondary),
                          {"predict", "historic", "watchlist", "moves", "v2", "journal",
-                          "audit", "diag", "settings"})
+                          "audit", "diag", "settings", "simulator"})
 
 
 class TestPricesAreFormatted(unittest.TestCase):

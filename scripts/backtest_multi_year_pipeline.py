@@ -525,9 +525,35 @@ def select_representative_trades(trades: list[dict], target_count: int = 480) ->
     return sorted(selected, key=lambda x: x.get("entry_time", ""))
 
 
+ROUND_TRIP_COST_PCT = 0.168   # taker fees + GST + spread both ways, % of price (analysis.paper_cycle.stop_out_costs)
+
+
+def unique_trades(all_trades: list[dict]) -> list[dict]:
+    """The 1m/6m/1y/2y/3y windows are all anchored to now and nested, so the same recent trade appears in up
+    to five of them. Aggregate statistics must count each trade once."""
+    seen, out = set(), []
+    for t in all_trades:
+        k = (t.get("symbol"), t.get("direction"), t.get("entry_time"))
+        if k not in seen:
+            seen.add(k)
+            out.append(t)
+    return out
+
+
+def trade_r(t: dict, cost_pct: float = ROUND_TRIP_COST_PCT) -> float:
+    """Net R from the trade's own prices: (price move - round-trip cost) / stop distance. Not a constant
+    per exit label: a take-profit is +2/1.2 = +1.67 R before costs, not +2."""
+    entry, sl = float(t.get("entry_price") or 0), float(t.get("sl") or 0)
+    risk_pct = abs(entry - sl) / entry * 100 if entry > 0 else 0.0
+    if risk_pct <= 0:
+        return 0.0
+    return (float(t.get("pnl_pct", 0.0)) - cost_pct) / risk_pct
+
+
 def audit_all_simulated_trades(all_trades: list[dict]) -> dict:
-    """Systematically categorize and audit ALL 100,392 trades across all coins & windows into solutions."""
-    total = len(all_trades)
+    """Categorise and score every UNIQUE trade, net of costs."""
+    trades = unique_trades(all_trades)
+    total = len(trades)
     archetypes = {
         "trend_continuation_winners": 0,
         "counter_trend_stop_loss": 0,
@@ -537,41 +563,29 @@ def audit_all_simulated_trades(all_trades: list[dict]) -> dict:
     }
     gross_pnl = 0.0
     wins = 0
-    losses = 0
     total_r = 0.0
-
-    for t in all_trades:
+    for t in trades:
         reason = t.get("exit_reason", "")
         pnl = float(t.get("pnl_pct", 0.0))
         gross_pnl += pnl
-
+        r = trade_r(t)
+        total_r += r
+        wins += int(r > 0)
         if "TAKE_PROFIT" in reason:
-            wins += 1
-            total_r += 2.0
-            if abs(pnl) > 3.0:
-                archetypes["macro_momentum_breakouts"] += 1
-            else:
-                archetypes["trend_continuation_winners"] += 1
+            archetypes["macro_momentum_breakouts" if abs(pnl) > 3.0 else "trend_continuation_winners"] += 1
         elif "STOP_LOSS" in reason:
-            losses += 1
-            total_r -= 1.2
-            if abs(pnl) < 1.8:
-                archetypes["liquidity_sweep_traps"] += 1
-            else:
-                archetypes["counter_trend_stop_loss"] += 1
+            archetypes["liquidity_sweep_traps" if abs(pnl) < 1.8 else "counter_trend_stop_loss"] += 1
         elif "STAGNATION" in reason:
             archetypes["stagnation_capital_saved"] += 1
-            if pnl > 0:
-                wins += 1
-            else:
-                losses += 1
-
     return {
         "total_trades_audited": total,
+        "duplicates_removed": len(all_trades) - total,
         "archetypes": archetypes,
         "win_rate": round(wins / max(1, total) * 100, 2),
         "total_simulated_pnl_pct": round(gross_pnl, 2),
         "total_r_multiple": round(total_r, 1),
+        "net_of_costs": True,
+        "cost_pct_per_round_trip": ROUND_TRIP_COST_PCT,
     }
 
 

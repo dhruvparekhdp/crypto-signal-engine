@@ -29,15 +29,36 @@ class TestPlan(unittest.TestCase):
         p = Part("spot", "klines", "ETHUSDT", "1s", "2025-02")
         self.assertIn("/data/spot/monthly/klines/ETHUSDT/1s/ETHUSDT-1s-2025-02.zip", p.url)
 
+    def _on(self, today):
+        """Run plan() as if it were `today`. The test used to read the real clock, so it failed for the
+        first days of every month, when the previous month is still fetched daily (the monthly file is
+        not published yet) — correct behaviour, wrong test."""
+        from unittest.mock import patch
+
+        class _Today(date):
+            @classmethod
+            def today(cls):
+                return today
+        return patch("collectors.binance_lake.date", _Today)
+
     def test_whole_months_monthly_current_month_daily(self):
-        end = date.today() - timedelta(days=1)
-        start = date(end.year - 1, end.month, 1)
-        parts = plan("um", "klines", "btcusdt", "1h", start, end)
+        today = date(2026, 6, 20)
+        with self._on(today):
+            end = today - timedelta(days=1)
+            start = date(end.year - 1, end.month, 1)
+            parts = plan("um", "klines", "btcusdt", "1h", start, end)
         monthly = [p for p in parts if not p.daily]
         daily = [p for p in parts if p.daily]
         self.assertEqual(len(monthly), 12)
-        self.assertEqual(len(daily), end.day if end.month == date.today().month else 0)
+        self.assertEqual(len(daily), end.day)
         self.assertTrue(all(p.symbol == "BTCUSDT" for p in parts))
+
+    def test_a_month_that_just_ended_is_fetched_daily_until_its_file_exists(self):
+        today = date(2026, 10, 3)
+        with self._on(today):
+            parts = plan("um", "klines", "btcusdt", "1h", date(2026, 9, 1), today - timedelta(days=1))
+        self.assertTrue(all(p.daily for p in parts))
+        self.assertEqual(len(parts), 30 + 2)
 
     def test_metrics_are_daily_funding_monthly(self):
         parts = plan("um", "metrics", "BTCUSDT", "", date(2024, 1, 1), date(2024, 1, 31))

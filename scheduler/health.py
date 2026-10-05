@@ -2,7 +2,35 @@
 from __future__ import annotations
 
 import asyncio
-import json
+import json as _stdjson
+import math
+import types as _types
+
+
+def _json_response(data, **kw):
+    kw.setdefault("dumps", _strict_dumps)
+    return web.json_response(data, **kw)
+
+
+def _finite(o):
+    """NaN and Infinity are not JSON. A browser rejects the whole payload over one of them (a released
+    paper target is stored as Infinity), so every API response sends null instead."""
+    if isinstance(o, float):
+        return o if math.isfinite(o) else None
+    if isinstance(o, dict):
+        return {k: _finite(v) for k, v in o.items()}
+    if isinstance(o, (list, tuple)):
+        return [_finite(v) for v in o]
+    return o
+
+
+def _strict_dumps(obj, **kw):
+    kw.pop("allow_nan", None)
+    return _stdjson.dumps(_finite(obj), allow_nan=False, **kw)
+
+
+json = _types.SimpleNamespace(**{k: getattr(_stdjson, k) for k in dir(_stdjson) if not k.startswith("__")})
+json.dumps = _strict_dumps
 import math
 from datetime import UTC, datetime, timedelta
 
@@ -566,7 +594,7 @@ async def _api_predict(runner, request: web.Request) -> web.Response:
             })
 
     surges.sort(key=lambda x: -x["magnitude"])
-    return web.json_response({
+    return _json_response({
         "generated_at": _iso(datetime.now(UTC)),
         "note": ("The band is roughly one standard deviation of this market's "
                  "own recent range projected over the horizon: price should "
@@ -739,7 +767,7 @@ async def _api_debug_signals(runner, request: web.Request) -> web.Response:
         out.append(row)
 
     fired = [r for r in out if r.get("gate") is None and "WOULD" in r.get("verdict", "")]
-    return web.json_response({
+    return _json_response({
         "checked": len(out),
         "would_fire": len(fired),
         "gate_profile": GATE.label,
@@ -766,8 +794,8 @@ async def _api_signal_history(runner, request: web.Request) -> web.Response:
 
     payload = [_signal_row(r) for r in rows]
     if counts is None:
-        return web.json_response(payload)
-    return web.json_response({"signals": payload, "counts": counts})
+        return _json_response(payload)
+    return _json_response({"signals": payload, "counts": counts})
 
 
 async def _api_signal_accuracy(runner, request: web.Request) -> web.Response:
@@ -819,7 +847,7 @@ async def _api_signal_accuracy(runner, request: web.Request) -> web.Response:
         prev = e
 
     overall, resolved = rate(rows)
-    return web.json_response({
+    return _json_response({
         "total": len(rows), "resolved": resolved, "pending": counts["pending"],
         "win_rate_pct": overall,
         "median_move_pct": round(statistics.median(moves), 4) if moves else None,
@@ -875,7 +903,7 @@ async def _api_debug_volume(runner, request: web.Request) -> web.Response:
             probe = {"error": "no candle pair answered",
                      "tried": list(runner.coindcx._pair_variants(symbol))}
 
-    return web.json_response({
+    return _json_response({
         "note": ("A symbol with per_bar_volume_usable=false has no volume "
                  "information at all — the volume family abstains, so only "
                  "four families can vote and signals are correspondingly "
@@ -910,7 +938,7 @@ async def _api_audit(runner, request: web.Request) -> web.Response:
         "min_target_pct": round(_SCALP.min_target_pct * 100, 4),
         "min_edge_multiple": _SCALP.min_edge_multiple,
     }
-    return web.json_response(report)
+    return _json_response(report)
 
 
 async def _api_reviews(runner, request: web.Request) -> web.Response:
@@ -957,7 +985,7 @@ async def _api_reviewer_scorecard(runner, request: web.Request) -> web.Response:
     days = max(1, min(90, int(request.query.get("days", 14))))
     async with AsyncSessionFactory() as session:
         repo = Repository(session)
-        return web.json_response({
+        return _json_response({
             "days": days,
             "scorecard": await repo.reviewer_scorecard(days),
             "post_trade_factors": await repo.review_factor_counts("post", days),
@@ -973,7 +1001,7 @@ async def _api_audit_methods(runner, request: web.Request) -> web.Response:
     """
     from analysis.signal_audit import method_catalogue
 
-    return web.json_response({"stages": method_catalogue()})
+    return _json_response({"stages": method_catalogue()})
 
 
 async def _api_research(runner, request: web.Request) -> web.Response:
@@ -991,13 +1019,13 @@ async def _api_research(runner, request: web.Request) -> web.Response:
     if request.query.get("fresh") == "1":
         async with AsyncSessionFactory() as session:
             found = await load_and_analyse(session, days=_SETTINGS.snapshot_retention_days)
-        return web.json_response({
+        return _json_response({
             "report": render(found), "rows": found.rows, "rejected": found.rejected,
             "span_days": found.span_days, "cost_pct": found.cost_pct,
             "hypotheses": {}, "generated": "just now",
         })
 
-    return web.json_response({
+    return _json_response({
         "report": getattr(runner, "last_research_text", "")
                   or "No research pass has run yet. It runs weekly, and needs "
                      "labelled snapshots — labels are written 30 minutes to a "
@@ -1030,27 +1058,27 @@ async def _api_sentiment_ingest(runner, request: web.Request) -> web.Response:
 
     secret = _SETTINGS.sentiment_ingest_token
     if not secret:
-        return web.json_response(
+        return _json_response(
             {"error": "ingest disabled", "hint": "set SENTIMENT_INGEST_TOKEN"}, status=503)
 
     supplied = request.headers.get("X-Ingest-Token") or ""
     if not hmac.compare_digest(supplied, secret):
-        return web.json_response({"error": "unauthorised"}, status=401)
+        return _json_response({"error": "unauthorised"}, status=401)
 
     try:
         body = await request.json()
     except Exception:
-        return web.json_response({"error": "body must be JSON"}, status=400)
+        return _json_response({"error": "body must be JSON"}, status=400)
 
     items = body.get("items")
     if not isinstance(items, list):
-        return web.json_response({"error": "expected an 'items' list"}, status=400)
+        return _json_response({"error": "expected an 'items' list"}, status=400)
     if len(items) > 500:
-        return web.json_response({"error": "at most 500 items per batch"}, status=413)
+        return _json_response({"error": "at most 500 items per batch"}, status=413)
 
     async with AsyncSessionFactory() as session:
         accepted, duplicates = await Repository(session).ingest_news_sentiment(items)
-    return web.json_response({"accepted": accepted, "duplicates": duplicates,
+    return _json_response({"accepted": accepted, "duplicates": duplicates,
                               "received": len(items)})
 
 
@@ -1063,7 +1091,7 @@ async def _api_sentiment_recent(runner, request: web.Request) -> web.Response:
     hours = max(1, min(72, int(request.query.get("hours") or 6)))
     async with AsyncSessionFactory() as session:
         rows = await Repository(session).recent_news_sentiment(symbol, hours)
-    return web.json_response([{
+    return _json_response([{
         "symbol": r.symbol.upper(), "headline": r.headline, "source": r.source,
         "score": round(r.score, 3), "confidence": round(r.confidence, 3),
         "event_type": r.event_type, "model": r.model, "url": r.url,
@@ -1166,6 +1194,57 @@ async def _paper_db_snapshot() -> dict:
 
     from scheduler import cache
     return await cache.cached("paper_db_snapshot", 4.0, fetch)
+
+
+async def _api_swing(runner, request: web.Request) -> web.Response:
+    """
+    The swing book against its own backtest: what each coin's last closed 4h bar said, open swing
+    positions, and closed swing trades in R next to what five years of testing expect.
+    """
+    snap = await _paper_db_snapshot()
+    cycle = snap["cycle"]
+    rows = [r for r in (snap.get("rows") or []) if getattr(r, "trade_mode", "") == "swing"]
+    trades = [t for t in (snap.get("trades") or []) if str(getattr(t, "signal_type", "")).startswith("swing_")]
+
+    def r_of(t):
+        side = 1 if t.side == "long" else -1
+        risk = abs(t.entry_price - t.stop_price) / t.entry_price if t.entry_price else 0
+        move = side * (t.exit_price - t.entry_price) / t.entry_price if t.entry_price else 0
+        cost = (t.trading_fees + t.funding_paid) / (t.margin * t.leverage) if t.margin and t.leverage else 0
+        return (move - cost) / risk if risk > 0 else 0.0
+
+    rs = [r_of(t) for t in trades]
+    by_strategy = {}
+    for t, r in zip(trades, rs):
+        b = by_strategy.setdefault(t.signal_type.replace("swing_", ""), {"n": 0, "wins": 0, "sum_r": 0.0})
+        b["n"] += 1
+        b["wins"] += int(r > 0)
+        b["sum_r"] += r
+    return _json_response({
+        "enabled": _SETTINGS.swing_enabled,
+        "rules": {"strategies": _SETTINGS.swing_strategies, "timeframes": "4h and 8h", "stop": "3 x ATR(14) of the signal bars",
+                  "target": "3R", "time_limit_minutes": _SETTINGS.swing_hold_minutes,
+                  "risk_per_trade": _SETTINGS.swing_risk_pct, "adaptive_risk": _SETTINGS.swing_adaptive_risk,
+                  "max_open": _SETTINGS.swing_max_open, "max_leverage": _SETTINGS.swing_max_leverage,
+                  "families_that_open_trades": _SETTINGS.paper_open_families},
+        "expected_from_backtest": {"r_per_trade": "+0.14 to +0.28 net", "win_rate": "42-45%",
+                                   "losing_streaks": "8-12 trades happen", "trades_per_day_all_coins": 2.2,
+                                   "judge_after_trades": 30},
+        "scan": getattr(runner, "_swing_last", {}),
+        "open": [{"symbol": r.symbol, "side": r.side, "strategy": r.signal_type, "entry": r.entry_price,
+                  "stop": r.stop_price, "target": r.target_price, "leverage": r.leverage, "margin": r.margin,
+                  "opened_at": r.opened_at.isoformat() if r.opened_at else None,
+                  "expires_at": r.expires_at.isoformat() if r.expires_at else None} for r in rows],
+        "closed": {"n": len(trades), "wins": sum(1 for r in rs if r > 0),
+                   "win_rate": (sum(1 for r in rs if r > 0) / len(rs)) if rs else None,
+                   "avg_r": (sum(rs) / len(rs)) if rs else None, "total_r": sum(rs),
+                   "net_pnl": sum(t.net_pnl for t in trades), "by_strategy": by_strategy,
+                   "last": [{"symbol": t.symbol, "strategy": t.signal_type, "side": t.side, "r": round(r, 2),
+                             "exit_reason": t.exit_reason, "net_pnl": round(t.net_pnl, 2),
+                             "closed_at": t.closed_at.isoformat() if t.closed_at else None}
+                            for t, r in list(zip(trades, rs))[-15:]]},
+        "wallet": cycle.wallet if cycle is not None else None,
+    })
 
 
 async def _api_paper(runner, request: web.Request) -> web.Response:
@@ -1281,10 +1360,10 @@ async def _api_paper_events(runner, request: web.Request) -> web.Response:
         opened = datetime.fromisoformat(raw.replace("Z", "+00:00"))
         opened = opened.astimezone(UTC).replace(tzinfo=None) if opened.tzinfo else opened
     except ValueError:
-        return web.json_response({"error": "opened_at must be ISO"}, status=400)
+        return _json_response({"error": "opened_at must be ISO"}, status=400)
     async with AsyncSessionFactory() as session:
         rows = await Repository(session).trade_events(sym, opened)
-    return web.json_response({"events": [{
+    return _json_response({"events": [{
         "at": _iso(e.at), "kind": e.kind, "field": e.field, "old": e.old, "new": e.new,
         "note": e.note} for e in rows]})
 
@@ -2179,7 +2258,7 @@ section h2{color:var(--accent-soft)}
   <a class="side-item side-secondary" data-tab="predict" href="/predict"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12h4l3-8 4 16 3-8h4"/></svg><span>Price Outlook</span></a>
   <div class="side-item" data-tab="crypto" onclick="switchTab('crypto')"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 17l6-6 4 4 8-8"/><path d="M17 7h4v4"/></svg><span>Signals</span></div>
   <div class="side-item" data-tab="mirror" onclick="switchTab('mirror')"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 14c.2-1 .7-1.7 1.5-2.5 1-.9 1.5-2.2 1.5-3.5A6 6 0 0 0 6 8c0 1 .2 2.2 1.5 3.5.7.9 1.2 1.5 1.5 2.5"/><path d="M9 18h6"/><path d="M10 22h4"/></svg><span>Mirror Signals</span></div>
-  <div class="side-item" data-tab="simulator" onclick="switchTab('simulator')"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg><span>Market Simulator</span></div>
+  <div class="side-item side-secondary" data-tab="simulator" onclick="switchTab('simulator')"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg><span>Market Simulator</span></div>
   <div class="side-item" data-tab="paper" onclick="switchTab('paper')"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18M3 12h18M3 18h12"/></svg><span>Paper Trading</span></div>
   <div class="side-item" data-tab="guard" onclick="switchTab('guard')"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l8 4v5c0 5-3.4 8.5-8 10-4.6-1.5-8-5-8-10V7z"/></svg><span>Session Guard</span></div>
   <div class="side-group">Analysis</div>
@@ -4038,7 +4117,7 @@ function updateSimulatorEstimates(){
   const timeStr = (hours > 0 ? (hours + ' hrs ') : '') + mins + ' mins';
 
   const finishDate = new Date(Date.now() + totalDurationSec * 1000);
-  const finishStr = finishDate.toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'}) + ' (' + finishDate.toLocaleDateString([], {month: 'short', day: 'numeric'}) + ')';
+  const finishStr = window.fmtStamp(finishDate.toISOString());   // the one shared formatter: date + time, IST
 
   setText('sim-est-steps', totalSteps.toLocaleString() + ' Steps');
   setText('sim-est-hours', totalMarketHours.toLocaleString() + ' market hours');
@@ -4076,7 +4155,7 @@ function getSimulatorFormValues() {
     sl_r: parseFloat(document.getElementById('sim-input-sl')?.value || '1.5'),
     anti_flip: parseInt(document.getElementById('sim-input-antiflip')?.value || '90'),
     stagnation: parseInt(document.getElementById('sim-input-stagnation')?.value || '60'),
-    max_ai_reviews: parseInt(document.getElementById('sim-input-maxai')?.value || '150'),
+    max_ai_reviews: 150,
     cycle_start: parseFloat(document.getElementById('sim-input-cycle-start')?.value || '25'),
     cycle_target: parseFloat(document.getElementById('sim-input-cycle-target')?.value || '100'),
     cycle_margin_pct: parseFloat(document.getElementById('sim-input-cycle-margin')?.value || '25'),
@@ -4084,9 +4163,9 @@ function getSimulatorFormValues() {
     stepped_mode: document.getElementById('sim-input-stepped')?.checked ?? true,
     step_market_hours: parseFloat(document.getElementById('sim-input-step-hours')?.value || '1.0'),
     step_seconds: parseFloat(document.getElementById('sim-input-step-seconds')?.value || '60.0'),
-    gemini_key: document.getElementById('sim-input-gemini-key')?.value || '',
-    openrouter_key: document.getElementById('sim-input-openrouter-key')?.value || '',
-    hf_tokens: document.getElementById('sim-input-hf-tokens')?.value || '',
+    gemini_key: '',
+    openrouter_key: '',
+    hf_tokens: '',
     ai_provider: document.getElementById('sim-input-ai-provider')?.value || 'none',
   };
 }
@@ -4136,7 +4215,6 @@ function applySimulatorConfig(c) {
   if (c.sl_r !== undefined && document.getElementById('sim-input-sl')) document.getElementById('sim-input-sl').value = c.sl_r;
   if (c.anti_flip !== undefined && document.getElementById('sim-input-antiflip')) document.getElementById('sim-input-antiflip').value = c.anti_flip;
   if (c.stagnation !== undefined && document.getElementById('sim-input-stagnation')) document.getElementById('sim-input-stagnation').value = c.stagnation;
-  if (c.max_ai_reviews !== undefined && document.getElementById('sim-input-maxai')) document.getElementById('sim-input-maxai').value = c.max_ai_reviews;
   if (c.cycle_start !== undefined && document.getElementById('sim-input-cycle-start')) document.getElementById('sim-input-cycle-start').value = c.cycle_start;
   if (c.cycle_target !== undefined && document.getElementById('sim-input-cycle-target')) document.getElementById('sim-input-cycle-target').value = c.cycle_target;
   if (c.cycle_margin_pct !== undefined && document.getElementById('sim-input-cycle-margin')) document.getElementById('sim-input-cycle-margin').value = c.cycle_margin_pct;
@@ -4144,9 +4222,6 @@ function applySimulatorConfig(c) {
   if (c.stepped_mode !== undefined && document.getElementById('sim-input-stepped')) document.getElementById('sim-input-stepped').checked = !!c.stepped_mode;
   if (c.step_market_hours !== undefined && document.getElementById('sim-input-step-hours')) document.getElementById('sim-input-step-hours').value = c.step_market_hours;
   if (c.step_seconds !== undefined && document.getElementById('sim-input-step-seconds')) document.getElementById('sim-input-step-seconds').value = c.step_seconds;
-  if (c.gemini_key && document.getElementById('sim-input-gemini-key')) document.getElementById('sim-input-gemini-key').value = c.gemini_key;
-  if (c.openrouter_key !== undefined && document.getElementById('sim-input-openrouter-key')) document.getElementById('sim-input-openrouter-key').value = c.openrouter_key;
-  if (c.hf_tokens !== undefined && document.getElementById('sim-input-hf-tokens')) document.getElementById('sim-input-hf-tokens').value = c.hf_tokens;
   if (c.ai_provider && document.getElementById('sim-input-ai-provider')) document.getElementById('sim-input-ai-provider').value = c.ai_provider;
 }
 
@@ -4155,10 +4230,9 @@ function attachSimulatorInputListeners() {
   if (_simListenersAttached) return;
   const ids = [
     'sim-input-strategy', 'sim-input-years', 'sim-input-tp', 'sim-input-sl', 'sim-input-antiflip',
-    'sim-input-stagnation', 'sim-input-maxai', 'sim-input-cycle-start',
+    'sim-input-stagnation', 'sim-input-cycle-start',
     'sim-input-cycle-target', 'sim-input-cycle-margin', 'sim-input-cycle-lev',
     'sim-input-stepped', 'sim-input-step-hours', 'sim-input-step-seconds',
-    'sim-input-gemini-key', 'sim-input-openrouter-key', 'sim-input-hf-tokens',
     'sim-input-ai-provider'
   ];
   ids.forEach(id => {
@@ -4223,7 +4297,7 @@ async function startSimulator(){
   const sl = parseFloat(document.getElementById('sim-input-sl')?.value || '1.5');
   const antiflip = parseInt(document.getElementById('sim-input-antiflip')?.value || '90');
   const stagnation = parseInt(document.getElementById('sim-input-stagnation')?.value || '60');
-  const maxai = parseInt(document.getElementById('sim-input-maxai')?.value || '150');
+  const maxai = 150;
   const cycleStart = parseFloat(document.getElementById('sim-input-cycle-start')?.value || '25');
   const cycleTarget = parseFloat(document.getElementById('sim-input-cycle-target')?.value || '100');
   const cycleMargin = parseFloat(document.getElementById('sim-input-cycle-margin')?.value || '25');
@@ -4231,9 +4305,9 @@ async function startSimulator(){
   const stepped = document.getElementById('sim-input-stepped')?.checked ?? true;
   const stepHours = parseFloat(document.getElementById('sim-input-step-hours')?.value || '1.0');
   const stepSeconds = parseFloat(document.getElementById('sim-input-step-seconds')?.value || '60.0');
-  const geminiKey = document.getElementById('sim-input-gemini-key')?.value || '';
-  const openrouterKey = document.getElementById('sim-input-openrouter-key')?.value || '';
-  const hfTokens = document.getElementById('sim-input-hf-tokens')?.value || '';
+  const geminiKey = '';
+  const openrouterKey = '';
+  const hfTokens = '';
   const aiProvider = document.getElementById('sim-input-ai-provider')?.value || 'none';
 
   saveSimulatorSettings();
@@ -4637,10 +4711,13 @@ function renderCryptoSignalCard(s){
   const viable = move >= MIN_TARGET_PCT;
   const mode = s.trade_mode || 'intraday';
   const isDelivery = mode === 'delivery';
-  const lev = s.leverage_suggested || (isDelivery ? 2 : 10);
-  const modeBadge = isDelivery 
-    ? `<span class="pt-mode deliv">📦 Delivery</span>`
-    : `<span class="pt-mode intra">⚡ Intraday ${lev}x</span>`;
+  // No leverage on the badge: the paper book sizes each trade itself, so a 'suggested' leverage here
+  // showed a number no trade actually used.
+  const modeBadge = mode === 'swing'
+    ? `<span class="pt-mode deliv">Swing ${s.timeframe || '4h'}</span>`
+    : isDelivery
+      ? `<span class="pt-mode deliv">📦 Delivery</span>`
+      : `<span class="pt-mode intra">⚡ Intraday</span>`;
   const roe = move * PAPER_LEVERAGE;
 
   // The track runs stop -> target, so it reads left-to-right the same way for
@@ -5102,7 +5179,7 @@ async def _api_auth_verify(runner, request: web.Request) -> web.Response:
     denied = check_bearer_auth(request, _SETTINGS.api_auth_token)
     if denied is not None:
         return denied
-    return web.json_response({"ok": True})
+    return _json_response({"ok": True})
 
 
 ADMIN_COOKIE = "admin_session"
@@ -5145,31 +5222,31 @@ async def _api_settings_auth_login(runner, request: web.Request) -> web.Response
         body = await request.json()
         password = str(body.get("password") or "")
         if not password:
-            return web.json_response({"ok": False, "error": "Password required"}, status=400)
+            return _json_response({"ok": False, "error": "Password required"}, status=400)
         from storage.database import AsyncSessionFactory
         from storage.repository import Repository
         async with AsyncSessionFactory() as session:
             repo = Repository(session)
             ok, token = await repo.verify_admin_password(password)
             if not ok or not token:
-                return web.json_response({"ok": False, "error": "Invalid password"}, status=401)
+                return _json_response({"ok": False, "error": "Invalid password"}, status=401)
             # Logged in for 7 days in every tab and page of this browser: an
             # HttpOnly cookie (scripts cannot read it) that other sites cannot
             # send (SameSite=Strict). The token is still returned for the
             # iOS app and older pages that send it as a header.
-            resp = web.json_response({"ok": True, "token": token,
+            resp = _json_response({"ok": True, "token": token,
                                       "expires_days": ADMIN_SESSION_DAYS})
             resp.set_cookie(ADMIN_COOKIE, token, max_age=ADMIN_SESSION_DAYS * 86400,
                             httponly=True, samesite="Strict", path="/",
                             secure=request.secure)
             return resp
     except Exception as exc:
-        return web.json_response({"ok": False, "error": str(exc)}, status=500)
+        return _json_response({"ok": False, "error": str(exc)}, status=500)
 
 
 async def _api_settings_auth_status(runner, request: web.Request) -> web.Response:
     ok = await _verify_admin_session(request)
-    return web.json_response({"authenticated": ok})
+    return _json_response({"authenticated": ok})
 
 
 async def _api_settings_auth_logout(runner, request: web.Request) -> web.Response:
@@ -5182,7 +5259,7 @@ async def _api_settings_auth_logout(runner, request: web.Request) -> web.Respons
                 await Repository(session).invalidate_session_token(token)
         except Exception:
             pass
-    resp = web.json_response({"ok": True})
+    resp = _json_response({"ok": True})
     resp.del_cookie(ADMIN_COOKIE, path="/")
     return resp
 
@@ -5192,7 +5269,7 @@ async def _api_paper_config_get(runner, request: web.Request) -> web.Response:
     from storage.repository import Repository
     async with AsyncSessionFactory() as session:
         cfg = await Repository(session).get_paper_config()
-        return web.json_response({
+        return _json_response({
             "enabled": cfg.enabled,
             "starting_wallet": cfg.starting_wallet,
             "target_wallet": cfg.target_wallet,
@@ -5218,7 +5295,7 @@ async def _api_paper_config_get(runner, request: web.Request) -> web.Response:
 async def _api_paper_config_post(runner, request: web.Request) -> web.Response:
     is_admin = await _verify_admin_session(request)
     if not is_admin:
-        return web.json_response({"error": "unauthorized"}, status=401)
+        return _json_response({"error": "unauthorized"}, status=401)
     try:
         body = await request.json()
         from storage.database import AsyncSessionFactory
@@ -5252,9 +5329,9 @@ async def _api_paper_config_post(runner, request: web.Request) -> web.Response:
             # up to 4s — same discipline as /api/app-settings's own save.
             from scheduler import cache
             cache.invalidate("pipeline_db_read")
-            return web.json_response({"ok": True, "enabled": cfg.enabled, "starting_wallet": cfg.starting_wallet})
+            return _json_response({"ok": True, "enabled": cfg.enabled, "starting_wallet": cfg.starting_wallet})
     except Exception as exc:
-        return web.json_response({"error": str(exc)}, status=400)
+        return _json_response({"error": str(exc)}, status=400)
 
 
 async def _api_strategy_config_get(runner, request: web.Request) -> web.Response:
@@ -5262,7 +5339,7 @@ async def _api_strategy_config_get(runner, request: web.Request) -> web.Response
     from storage.repository import Repository
     async with AsyncSessionFactory() as session:
         cfg = await Repository(session).get_strategy_config()
-        return web.json_response({
+        return _json_response({
             "crypto_min_confidence": cfg.crypto_min_confidence,
             "high_conviction_only": cfg.high_conviction_only,
             "crypto_volume_spike_enabled": cfg.crypto_volume_spike_enabled,
@@ -5280,7 +5357,7 @@ async def _api_strategy_config_get(runner, request: web.Request) -> web.Response
 async def _api_strategy_config_post(runner, request: web.Request) -> web.Response:
     is_admin = await _verify_admin_session(request)
     if not is_admin:
-        return web.json_response({"error": "unauthorized"}, status=401)
+        return _json_response({"error": "unauthorized"}, status=401)
     try:
         body = await request.json()
         from storage.database import AsyncSessionFactory
@@ -5310,9 +5387,9 @@ async def _api_strategy_config_post(runner, request: web.Request) -> web.Respons
                 _apply(_SETTINGS, through)
                 if hasattr(runner, "on_settings_changed"):
                     runner.on_settings_changed(list(through))
-            return web.json_response({"ok": True, "groq_model": cfg.groq_model})
+            return _json_response({"ok": True, "groq_model": cfg.groq_model})
     except Exception as exc:
-        return web.json_response({"error": str(exc)}, status=400)
+        return _json_response({"error": str(exc)}, status=400)
 
 
 async def _api_collector_toggle(runner, request: web.Request) -> web.Response:
@@ -7360,7 +7437,7 @@ async def _api_debug_perf(runner, request: web.Request) -> web.Response:
     # role (mirror review re-reviewing far more than expected, say) is
     # visible immediately instead of only showing up in a provider bill.
     body["ai_calls_today"] = calls_today()
-    return web.json_response(body)
+    return _json_response(body)
 
 
 async def _api_debug_null_test(runner, request: web.Request) -> web.Response:
@@ -7399,16 +7476,16 @@ async def _api_debug_null_test(runner, request: web.Request) -> web.Response:
 
     entries, paths = await _load_null_test_inputs(days)
     if not entries:
-        return web.json_response(
+        return _json_response(
             {"ok": False, "reason": f"no signals in the last {days} days"})
     if not paths:
-        return web.json_response(
+        return _json_response(
             {"ok": False, "reason": "no usable price history for that window"})
 
     cost_pct = spec_for(next(iter(paths))).round_trip_pct * 100
     result = compare_against_random(entries, paths, stop_pct, target_pct,
                                     hold_hours, cost_pct, trials=trials)
-    return web.json_response({
+    return _json_response({
         "ok": True,
         "params": {"days": days, "trials": trials, "stop_pct": stop_pct,
                   "target_pct": target_pct, "hold_hours": hold_hours,
@@ -7482,6 +7559,7 @@ async def make_app(runner) -> web.Application:
     app.router.add_post("/api/simulator/pause", _bind(_api_simulator_pause))
     app.router.add_get("/api/crypto/forecasts", _bind(_api_crypto_forecasts))
     app.router.add_get("/api/paper", _bind(_api_paper))
+    app.router.add_get("/api/swing", _bind(_api_swing))
     app.router.add_get("/api/paper/events", _bind(_api_paper_events))
     app.router.add_get("/api/debug/coindcx", _bind(_api_debug_coindcx))
     app.router.add_get("/api/research", _bind(_api_research))

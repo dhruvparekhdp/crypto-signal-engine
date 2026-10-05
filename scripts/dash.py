@@ -76,9 +76,17 @@ def job_view(st, logdir):
     lines = tail(log, 400)
     stale = time.time() - st.get("beat", 0) > 60 and st["state"] == "running"
     now = st.get("finished") or time.time()
+    # pytest runs: "[ 45%]" progress and the final "N passed, M failed" line
+    raw = " ".join(lines[-60:])
+    pct = [int(m) for m in re.findall(r"\[\s*(\d+)%\]", raw)]
+    passed = re.findall(r"(\d+) passed", raw)
+    failed = re.findall(r"(\d+) failed", raw)
+    failures = [l for l in lines if l.startswith("FAILED ")][-12:]
     return {"name": st["name"], "host": st.get("host"), "state": "stalled?" if stale else st["state"],
             "elapsed_s": round(now - st["started"]), "symbols_done": progress_from_log(lines),
-            "tail": lines[-8:], "cmd": st.get("cmd", "")[:160]}
+            "tail": lines[-8:], "cmd": st.get("cmd", "")[:160], "kind": "tests" if "pytest" in st.get("cmd", "") else "backtest",
+            "pct": pct[-1] if pct else None, "passed": int(passed[-1]) if passed else None,
+            "failed": int(failed[-1]) if failed else (0 if passed else None), "failures": failures}
 
 
 def load_jobs():

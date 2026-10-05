@@ -285,34 +285,15 @@ def stop_and_target(
     leverage: float,
     stop_pct_of_margin: float,
     reward_risk: float,
-    confidence: float | None = None,
-    atr_pct: float | None = None,
 ) -> tuple[float, float]:
     """
     Convert a risk budget expressed in margin terms into actual prices.
 
-    Calibrates stop distance adaptively:
-    - High confidence (>=0.80): tight 0.25 margin stop, floor 1.5x ATR
-    - Standard confidence (0.70-0.79): standard 0.30 margin stop, floor 1.8x ATR
-    - Lower/marginal (<0.70): wider 0.35 margin stop, floor 2.2x ATR
+    (A confidence- and ATR-adaptive variant lived here but no caller ever passed those arguments, so it
+    never ran; it was removed rather than left looking live. Swing trades place their stops from the 4h
+    ATR in analysis.swing_book instead.)
     """
-    base_stop_pct = stop_pct_of_margin
-    atr_floor_mult = 1.8
-    if confidence is not None:
-        if confidence >= 0.80:
-            base_stop_pct = min(stop_pct_of_margin, 0.25)
-            atr_floor_mult = 1.5
-        elif confidence >= 0.70:
-            base_stop_pct = max(stop_pct_of_margin, 0.30)
-            atr_floor_mult = 1.8
-        else:
-            base_stop_pct = max(stop_pct_of_margin, 0.35)
-            atr_floor_mult = 2.2
-
-    stop_move = base_stop_pct / leverage
-    if atr_pct is not None and atr_pct > 0:
-        stop_move = max(stop_move, atr_floor_mult * atr_pct)
-
+    stop_move = stop_pct_of_margin / leverage
     target_move = stop_move * reward_risk
     s = sign_of(side)
     return entry * (1.0 - s * stop_move), entry * (1.0 + s * target_move)

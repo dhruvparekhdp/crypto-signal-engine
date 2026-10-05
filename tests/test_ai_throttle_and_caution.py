@@ -241,3 +241,16 @@ async def test_approve_still_costs_nothing():
 
 if __name__ == "__main__":
     unittest.main()
+
+
+import pytest as _pytest_hk
+from unittest.mock import patch as _patch_hk
+
+
+@_pytest_hk.fixture(autouse=True)
+def _intraday_signals_may_be_reviewed():
+    """These tests exercise AI review of intraday signals. Since the swing book became the trading book,
+    shadow-only intraday signals skip AI review unless a caller opts back in, which these tests do."""
+    from config.settings import settings
+    with _patch_hk.object(settings, "paper_open_families", "all"):
+        yield

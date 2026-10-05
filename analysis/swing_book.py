@@ -38,14 +38,21 @@ STOP_ATR = 3.0
 REWARD_RISK = 3.0
 MIN_STOP_PCT = 0.003
 MAX_STOP_PCT = 0.08
-DEFAULT_SPECS = "vol_breakout:z=3.0,keltner_break:k=2.5,donchian:n=100,ichimoku"
+DEFAULT_SPECS = ("4h@vol_breakout:z=3.0,4h@keltner_break:k=2.5,4h@donchian:n=100,4h@ichimoku,"
+                 "8h@keltner_break:k=2.0,8h@vol_breakout:z=3.0,8h@donchian:n=100,8h@ichimoku")
+# 8h joined after its own null test (all four beat random entries, p < 0.04) and 2.5x slippage stress.
+# 12h is not live: Ichimoku failed its null test there (p = 0.17).
 
 
-def parse_specs(text: str) -> list[tuple[str, dict]]:
-    """'vol_breakout:z=3.0,ichimoku' -> [('vol_breakout', {'z': 3.0}), ('ichimoku', {})], in priority order."""
+def parse_specs(text: str) -> list[tuple[str, str, dict]]:
+    """'4h@vol_breakout:z=3.0,8h@ichimoku' -> [('4h', 'vol_breakout', {'z': 3.0}), ('8h', 'ichimoku', {})],
+    in priority order. A spec without '<tf>@' is 4h."""
     out = []
     for part in [p.strip() for p in (text or "").split(",") if p.strip()]:
-        sid, _, rest = part.partition(":")
+        tf, at, rest_ = part.partition("@")
+        if not at:
+            tf, rest_ = TF, part
+        sid, _, rest = rest_.partition(":")
         params = {}
         for kv in [x for x in rest.split(";") if x]:
             k, _, v = kv.partition("=")
@@ -53,24 +60,28 @@ def parse_specs(text: str) -> list[tuple[str, dict]]:
                 params[k] = int(v) if v.isdigit() else float(v)
             except ValueError:
                 params[k] = v
-        if sid in REGISTRY:
-            out.append((sid, params))
+        if sid in REGISTRY and tf in INTERVAL_MS:
+            out.append((tf, sid, params))
     return out
 
 
-def bars_from_klines(symbol: str, rows: list, now_ms: int) -> Bars | None:
-    """Binance kline rows -> Bars of CLOSED 4h bars only (the forming bar is dropped)."""
-    rows = [r for r in rows if int(r[0]) + TF_MS <= now_ms]
+def timeframes(specs) -> list[str]:
+    return sorted({tf for tf, _, _ in specs}, key=lambda t: INTERVAL_MS[t])
+
+
+def bars_from_klines(symbol: str, rows: list, now_ms: int, tf: str = TF) -> Bars | None:
+    """Binance kline rows -> Bars of CLOSED bars only (the forming bar is dropped)."""
+    rows = [r for r in rows if int(r[0]) + INTERVAL_MS[tf] <= now_ms]
     if len(rows) < 150:
         return None
     a = np.array([[float(r[i]) for i in (0, 1, 2, 3, 4, 5, 9)] for r in rows])
-    return Bars(symbol.upper(), TF, a[:, 0].astype(np.int64), a[:, 1], a[:, 2], a[:, 3], a[:, 4], a[:, 5], a[:, 6])
+    return Bars(symbol.upper(), tf, a[:, 0].astype(np.int64), a[:, 1], a[:, 2], a[:, 3], a[:, 4], a[:, 5], a[:, 6])
 
 
-async def fetch_bars(client, symbol: str, now_ms: int, limit: int = 500) -> Bars | None:
-    r = await client.get(FAPI_KLINES, params={"symbol": symbol.upper(), "interval": TF, "limit": limit}, timeout=15)
+async def fetch_bars(client, symbol: str, now_ms: int, tf: str = TF, limit: int = 500) -> Bars | None:
+    r = await client.get(FAPI_KLINES, params={"symbol": symbol.upper(), "interval": tf, "limit": limit}, timeout=15)
     r.raise_for_status()
-    return bars_from_klines(symbol, r.json(), now_ms)
+    return bars_from_klines(symbol, r.json(), now_ms, tf)
 
 
 @dataclass
@@ -81,17 +92,21 @@ class SwingSetup:
     bar_open_ms: int          # the closed bar the signal fired on
     atr: float
     close: float
+    tf: str = TF
 
 
-def evaluate(b: Bars, specs: list[tuple[str, dict]]) -> SwingSetup | None:
-    """The first strategy (in priority order) that fires on the LAST closed bar, or None."""
+def evaluate(b: Bars, specs) -> SwingSetup | None:
+    """The first strategy (in priority order) for this bar size that fires on the LAST closed bar, or None.
+    `specs` items are (tf, strategy, params); only those matching b.interval are used."""
     atr = float(F.atr(b.h, b.l, b.c)[-1])
     if not atr > 0:
         return None
-    for sid, params in specs:
+    for tf, sid, params in specs:
+        if tf != b.interval:
+            continue
         s = int(REGISTRY[sid].signals(b, params)[-1])
         if s != 0:
-            return SwingSetup(b.symbol, sid, s, int(b.t[-1]), atr, float(b.c[-1]))
+            return SwingSetup(b.symbol, sid, s, int(b.t[-1]), atr, float(b.c[-1]), b.interval)
     return None
 
 
@@ -112,12 +127,12 @@ def to_signal(setup: SwingSetup, price: float, now: datetime) -> CryptoSignal | 
     return CryptoSignal(
         symbol=setup.symbol.lower(), signal_type=f"swing_{setup.strategy}",
         direction="long" if setup.side > 0 else "short",
-        trigger_description=(f"{REGISTRY[setup.strategy].name} fired on the 4h bar closed at "
-                             f"{datetime.fromtimestamp((setup.bar_open_ms + TF_MS) / 1000, UTC):%Y-%m-%d %H:%M} UTC; "
+        trigger_description=(f"{REGISTRY[setup.strategy].name} fired on the {setup.tf} bar closed at "
+                             f"{datetime.fromtimestamp((setup.bar_open_ms + INTERVAL_MS[setup.tf]) / 1000, UTC):%Y-%m-%d %H:%M} UTC; "
                              f"stop 3xATR ({stop_pct:.2f}%), target 3R, 7-day limit"),
         confidence=0.8, current_price=price, target_price=target, stop_loss=stop,
-        edge_pct=0.0, stake_pct=0.0, timeframe=TF, sentiment_score=0.0,
-        indicators_summary=f"atr4h={setup.atr:.6g} bar_close={setup.close:.6g}",
+        edge_pct=0.0, stake_pct=0.0, timeframe=setup.tf, sentiment_score=0.0,
+        indicators_summary=f"atr{setup.tf}={setup.atr:.6g} bar_close={setup.close:.6g}",
         timestamp=now, trade_mode="swing", leverage_suggested=1.0)
 
 

@@ -138,6 +138,8 @@ class Settings(BaseSettings):
         "groq:openai/gpt-oss-120b+search, groq:openai/gpt-oss-20b+search")
     market_briefing_enabled: bool = True
     market_briefing_minutes: int = 30
+    # After a briefing that found nothing, wait this long before the next one unless an event is near.
+    market_briefing_quiet_minutes: int = 120
     # Hourly: why each watchlist coin moved, and how our signals fared.
     llm_chain_attribution: str = (
         "groq:openai/gpt-oss-120b+search, groq:openai/gpt-oss-20b+search")
@@ -165,7 +167,8 @@ class Settings(BaseSettings):
     # exactly the tested exits (3xATR stop, 3R target, 7 days). paper_open_families decides which signal
     # families may open paper trades; the rest are logged as shadow signals only.
     swing_enabled: bool = True
-    swing_strategies: str = "vol_breakout:z=3.0,keltner_break:k=2.5,donchian:n=100,ichimoku"
+    swing_strategies: str = ("4h@vol_breakout:z=3.0,4h@keltner_break:k=2.5,4h@donchian:n=100,4h@ichimoku,"
+                             "8h@keltner_break:k=2.0,8h@vol_breakout:z=3.0,8h@donchian:n=100,8h@ichimoku")
     swing_scan_seconds: int = 300
     swing_risk_pct: float = 0.01
     # Backtest (scripts/portfolio_wallet, fixed vs adaptive): cutting risk in drawdowns barely reduced the
@@ -178,6 +181,7 @@ class Settings(BaseSettings):
     paper_open_families: str = "swing"
     # The 60-minute "flat or losing -> close" rule cut trades at small losses; off unless asked for.
     smart_60m_enabled: bool = False
+    candle_refresh_enabled: bool = True
     profit_lock_enabled: bool = True
     profit_lock_at_pct: float = 0.5
     profit_lock_to_pct: float = 0.35
