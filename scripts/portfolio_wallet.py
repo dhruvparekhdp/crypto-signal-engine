@@ -25,8 +25,13 @@ def one_start(trades: pd.DataFrame, t0: int, months: int, cfg: WalletConfig):
         return None
     res = run_wallet(win, dataclasses.replace(cfg, reset=False))
     c = res.cycles[0]
+    ledger = [{"t": pd.to_datetime(r["t"], unit="ms").strftime("%Y-%m-%d %H:%M"), "symbol": r["symbol"],
+               "side": "long" if r["side"] > 0 else "short", "strategy": r.get("strategy", ""),
+               "notional": round(r["notional"], 2), "pnl": round(r["pnl"], 3), "balance": round(r["balance_after"], 2),
+               "exit": r.get("reason", "")} for r in res.ledger if r.get("cycle", 1) == 1]
     return {"start": pd.to_datetime(t0, unit="ms").strftime("%Y-%m"), "status": c["status"], "end": c["end"],
-            "trades": c["trades"], "days": (c["t1"] - c["t0"]) / 86_400_000, "dd": c["dd"]}
+            "trades": c["trades"], "days": (c["t1"] - c["t0"]) / 86_400_000, "dd": c["dd"], "peak": c["peak"],
+            "ledger": ledger, "skipped": dict(res.skipped)}
 
 
 def main():
@@ -39,6 +44,9 @@ def main():
     ap.add_argument("--loss-streak", default="0")
     ap.add_argument("--risk-mode", default="fixed", help="fixed,adaptive")
     ap.add_argument("--trades-extra", action="append", default=[], help="more trade files to add (e.g. 8h)")
+    ap.add_argument("--detail-out", default=None, help="JSON with every start's full history for the --detail-* settings")
+    ap.add_argument("--detail-risk", default="0.01,0.02,0.05")
+    ap.add_argument("--detail-concurrent", default="4")
     ap.add_argument("--out", default=None)
     a = ap.parse_args()
     tr = pd.concat([pd.read_parquet(f) for f in [a.trades] + a.trades_extra])
@@ -47,14 +55,19 @@ def main():
     starts = [int(t.timestamp() * 1000) for t in pd.date_range(pd.to_datetime(first, unit="ms").normalize().replace(day=1) + pd.offsets.MonthBegin(1),
                                                               pd.to_datetime(last - a.months * MONTH_MS, unit="ms"), freq="MS", tz="UTC")]
     print(f"{len(tr)} trades, {tr.strategy.nunique()} strategies ({', '.join(sorted(tr.strategy.unique()))}); {len(starts)} start dates, {a.months}-month horizon\n")
-    rows = []
+    rows, details = [], []
     for risk in map(float, a.risk.split(",")):
         for lev in map(float, a.leverage.split(",")):
             for conc in map(int, a.concurrent.split(",")):
                 for ls, mode in [(int(x), m) for x in a.loss_streak.split(",") for m in a.risk_mode.split(",")]:
                     cfg = WalletConfig(risk_pct=risk, leverage=lev, max_concurrent=conc, loss_streak_pause=ls or None, risk_mode=mode)
                     outs = [o for o in (one_start(tr, t, a.months, cfg) for t in starts) if o]
-                    d = pd.DataFrame(outs)
+                    if (a.detail_out and str(risk) in a.detail_risk.split(",") and str(conc) in a.detail_concurrent.split(",")
+                            and ls == 0 and mode == "fixed"):
+                        details.append({"label": f"risk {risk * 100:g}% per trade, up to {conc} open, {lev:g}x max",
+                                        "risk": risk, "concurrent": conc, "months": a.months,
+                                        "starts": [{k: v for k, v in o.items()} for o in outs]})
+                    d = pd.DataFrame([{k: v for k, v in o.items() if k not in ("ledger", "skipped")} for o in outs])
                     hit, bust, run = (d.status == "TARGET").mean(), (d.status == "BUST").mean(), (d.status == "IN_PROGRESS").mean()
                     rows.append({"mode": mode, "risk": risk, "lev": lev, "concurrent": conc, "loss_streak_pause": ls, "starts": len(d),
                                  "hit_100": hit, "bust": bust, "still_running": run,
@@ -67,6 +80,11 @@ def main():
     if a.out:
         out.to_csv(a.out, index=False)
         print("\nsaved", a.out)
+    if a.detail_out:
+        import json
+        with open(a.detail_out, "w") as f:
+            json.dump({"months": a.months, "trades_file": a.trades, "settings": details}, f, default=float)
+        print("saved", a.detail_out, f"({len(details)} settings with full histories)")
 
 
 if __name__ == "__main__":

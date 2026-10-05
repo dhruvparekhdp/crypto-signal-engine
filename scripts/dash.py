@@ -240,7 +240,48 @@ def noai_view():
                     out["breakdown"][name] = [[(round(float(c), 3) if i else c) if c.replace(".", "", 1).replace("-", "", 1).isdigit() or i == 0 else c for i, c in enumerate(r)] for r in rows]
                 except (OSError, ValueError):
                     pass
+    try:
+        out["wallet_detail"] = wallet_detail_summary()
+    except Exception:  # noqa: BLE001 - the page must render even if a history file is half written
+        out["wallet_detail"] = []
     return out
+
+
+def _wallet_detail(months: int):
+    for base in [ROOT] + list((ROOT / "remote").glob("*")):
+        f = base / "data" / "lab" / f"wallet_detail_{months}m.json"
+        if f.exists():
+            try:
+                return json.loads(f.read_text())
+            except (OSError, json.JSONDecodeError):
+                return None
+    return None
+
+
+def wallet_detail_summary():
+    """Per setting, every start date's outcome (no trade ledgers: those load on demand)."""
+    out = []
+    for months in (12, 24):
+        d = _wallet_detail(months)
+        if not d:
+            continue
+        for i, st in enumerate(d["settings"]):
+            starts = [{k: v for k, v in x.items() if k not in ("ledger",)} for x in st["starts"]]
+            n = len(starts)
+            out.append({"months": months, "i": i, "label": st["label"], "n": n,
+                        "hit": sum(x["status"] == "TARGET" for x in starts), "bust": sum(x["status"] == "BUST" for x in starts),
+                        "median_end": sorted(x["end"] for x in starts)[n // 2] if n else None, "starts": starts})
+    return out
+
+
+def wallet_ledger(months: int, i: int, start: str):
+    d = _wallet_detail(months)
+    if not d or i >= len(d["settings"]):
+        return []
+    for x in d["settings"][i]["starts"]:
+        if x["start"] == start:
+            return x["ledger"]
+    return []
 
 
 def results_view():
@@ -303,6 +344,12 @@ class H(BaseHTTPRequestHandler):
         here = Path(__file__).parent
         if self.path.startswith("/api/state"):
             body, ct = json.dumps(scrub(state()), allow_nan=False).encode(), "application/json"
+        elif self.path.startswith("/api/wallet_ledger"):
+            from urllib.parse import parse_qs, urlparse
+            q = parse_qs(urlparse(self.path).query)
+            body = json.dumps(scrub(wallet_ledger(int(q.get("months", ["12"])[0]), int(q.get("i", ["0"])[0]),
+                                                  q.get("start", [""])[0])), allow_nan=False).encode()
+            ct = "application/json"
         elif self.path.startswith("/setup.sh"):
             body, ct = (here / "worker_setup.sh").read_bytes(), "text/x-shellscript"
         elif self.path.startswith("/worker.py"):
