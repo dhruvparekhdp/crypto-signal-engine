@@ -184,6 +184,11 @@ class Settings(BaseSettings):
     swing_regime_filter: str = "shadow"
     swing_regime_vol_rank_max: float = 0.67
     swing_regime_adx_max: float = 30.0
+    # Crypto signals arrive in same-direction clusters (97% of multi-signal bars), so several open trades are one
+    # bet. Capping trades per direction did more for the backtested wallet than any risk level.
+    swing_max_same_side: int = 2
+    # Five years show no edge on these: original and mirror both average about zero.
+    swing_exclude_symbols: str = "BCHUSDT,LTCUSDT"
     paper_open_families: str = "swing"
     # The 60-minute "flat or losing -> close" rule cut trades at small losses; off unless asked for.
     smart_60m_enabled: bool = False

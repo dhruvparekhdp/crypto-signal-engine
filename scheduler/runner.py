@@ -941,8 +941,10 @@ class AppRunner:
         from analysis import swing_book as sb
         from analysis.paper_cycle import fees_for, spec_for, stop_out_costs
         from analysis.paper_trading import Side, open_position
-        sigs = list(self._pending_swing)
+        # strongest strategy/coin first, so the limited slots go to the best of signals that arrive together
+        sigs = sorted(self._pending_swing, key=lambda s_: -sb.priority(s_.signal_type, s_.timeframe, s_.symbol))
         self._pending_swing.clear()
+        excluded = {x.strip().lower() for x in settings.swing_exclude_symbols.split(",") if x.strip()}
         closed = sorted([t for t in await repo.get_cycle_trades(cycle.id)
                          if str(getattr(t, "signal_type", "")).startswith("swing_")],
                         key=lambda t: t.closed_at)
@@ -954,8 +956,17 @@ class AppRunner:
             if sig.symbol in open_syms:
                 await self._mark_skipped(log_id, "already_open_in_symbol")
                 continue
+            if sig.symbol in excluded:
+                await self._mark_skipped(log_id, "coin_without_edge")
+                continue
             if n_swing >= settings.swing_max_open:
                 await self._mark_skipped(log_id, "swing_book_full")
+                continue
+            side_word = sig.direction
+            same_side = sum(1 for p in cstate.positions
+                            if getattr(p, "trade_mode", "") == "swing" and getattr(p.side, "value", p.side) == side_word)
+            if settings.swing_max_same_side and same_side >= settings.swing_max_same_side:
+                await self._mark_skipped(log_id, f"max_{settings.swing_max_same_side}_{side_word}s_open")
                 continue
             verdict = getattr(sig, "regime", None)
             if settings.swing_regime_filter == "on" and verdict is not None and verdict.would_skip:

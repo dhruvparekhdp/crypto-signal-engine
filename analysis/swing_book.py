@@ -178,3 +178,19 @@ def book_state(closed: list) -> tuple[float, int]:
         equity_at_peak = t.wallet_after + (peak - cum)
         dd = (peak - cum) / equity_at_peak if equity_at_peak > 0 else 0.0
     return dd, streak
+
+
+# Backtest R per trade after costs (5 years, scripts/mirror_analysis.py), used only to choose between signals
+# that arrive together: the open slots go to the strongest strategy and coin first.
+STRATEGY_R = {("vol_breakout", "4h"): 0.254, ("donchian", "4h"): 0.153, ("keltner_break", "4h"): 0.145,
+              ("ichimoku", "4h"): 0.131, ("keltner_break", "8h"): 0.294, ("vol_breakout", "8h"): 0.293,
+              ("donchian", "8h"): 0.283, ("ichimoku", "8h"): 0.191}
+COIN_R = {"SOL": 0.440, "LINK": 0.392, "DOGE": 0.328, "SUI": 0.298, "ADA": 0.272, "ETH": 0.215, "BNB": 0.206,
+          "AVAX": 0.190, "BTC": 0.112, "XRP": 0.099, "LTC": 0.003, "BCH": -0.016}
+
+
+def priority(signal_type: str, timeframe: str, symbol: str) -> float:
+    """Higher = take first. Unknown strategies or coins rank at the book's average."""
+    strat = signal_type.replace("swing_", "")
+    coin = symbol.upper().replace("USDT", "")
+    return STRATEGY_R.get((strat, timeframe), 0.2) + COIN_R.get(coin, 0.2)

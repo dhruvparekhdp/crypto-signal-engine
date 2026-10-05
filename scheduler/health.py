@@ -1227,6 +1227,8 @@ async def _api_swing(runner, request: web.Request) -> web.Response:
                   "target": "3R", "time_limit_minutes": _SETTINGS.swing_hold_minutes,
                   "risk_per_trade": _SETTINGS.swing_risk_pct, "adaptive_risk": _SETTINGS.swing_adaptive_risk,
                   "max_open": _SETTINGS.swing_max_open, "max_leverage": _SETTINGS.swing_max_leverage,
+                  "max_same_direction": _SETTINGS.swing_max_same_side, "excluded_coins": _SETTINGS.swing_exclude_symbols,
+                  "signal_order": "strongest strategy and coin first (5-year backtest R per trade)",
                   "families_that_open_trades": _SETTINGS.paper_open_families},
         "expected_from_backtest": {"r_per_trade": "+0.14 to +0.28 net", "win_rate": "42-45%",
                                    "losing_streaks": "8-12 trades happen", "trades_per_day_all_coins": 2.2,
