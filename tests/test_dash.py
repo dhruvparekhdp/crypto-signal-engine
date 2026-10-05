@@ -87,3 +87,14 @@ class TestBacktestProgress(unittest.TestCase):
         self.assertEqual(dash._describe("x", "python -m scripts.run_lab --tf 8h --null-trials 30")[1],
                          "8h null test: do the strategies beat random entries?")
         self.assertEqual(dash._describe("x", "python -m pytest -q")[0], "tests")
+
+
+class TestWorkerLiveness(unittest.TestCase):
+    def test_counts_every_descendant_and_the_busy_ones(self):
+        from scripts import dash
+        table = {10: (1, 0.0), 11: (10, 0.0), 12: (11, 97.0), 13: (11, 95.0), 14: (11, 0.0), 99: (1, 50.0)}
+        self.assertEqual(dash.workers(10, table), {"processes": 4, "busy": 2, "cpu_pct": 192})
+
+    def test_a_dead_job_reports_nothing(self):
+        from scripts import dash
+        self.assertIsNone(dash.workers(42, {10: (1, 0.0)}))

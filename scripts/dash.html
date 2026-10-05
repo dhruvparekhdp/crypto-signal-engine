@@ -151,10 +151,11 @@ function jobcard(j){const p=j.progress||{},pc=j.progress_pct??0,st=j.state==='st
  const coins=p.total?`<div class="coins">${(p.coins||[]).map(c=>`<span class="coin ok" title="done after ${fmt(c.at_s)}">✓ ${esc(c.symbol)}</span>`).join('')}${Array.from({length:Math.max(0,p.total-(p.coins||[]).length)}).map(()=>`<span class="coin">waiting</span>`).join('')}</div>`:'';
  const facts=[p.total?`${p.done}/${p.total} coins`:'',p.strategies?`${p.strategies} strategy settings`:'',p.trades?`${big(p.trades)} trades`:'',
   j.state==='running'?`running ${fmt(j.elapsed_s)}`:j.finished?`took ${fmt(j.elapsed_s)}`:'',j.finished?`finished ${clock(j.finished)}`:`started ${clock(j.started)}`,p.eta_s?`<b>~${fmt(p.eta_s)} left</b>`:'',p.phase||''].filter(Boolean).join(' · ');
+ const wk=j.workers?`<div class="sub ${j.workers.busy?'':'neg'}">${j.workers.busy?`⚙ ${j.workers.busy} of ${j.workers.processes} worker processes busy · ${j.workers.cpu_pct}% CPU: working`:`no busy worker processes: check it, it may be stuck`}</div>`:'';
  const why=j.state==='failed'?`<div class="sub neg">${typeof j.exit_code==='string'?'stopped: '+esc(j.exit_code):'stopped with exit code '+(j.exit_code??'?')}${j.errors&&j.errors.length?' · '+esc(j.errors[j.errors.length-1]):''}</div>`:'';
  const body=`<div class="row"><b>${esc(j.title)}</b><span class="pill ${st}">${esc(WORD[j.state]||j.state)}</span></div>
  <div class="bar"><i style="width:${pc}%;${st==='failed'?'background:var(--bad)':st==='done'?'background:var(--ok)':''}"></i></div>
- <div class="sub">${Math.round(pc)}% · ${facts}</div>${why}${j.state==='running'?coins:''}`;
+ <div class="sub">${Math.round(pc)}% · ${facts}</div>${wk}${why}${j.state==='running'?coins:''}`;
  return j.state==='done'?`<div class="card" style="padding:10px 14px"><details id="job-${esc(j.name)}"><summary style="display:block">${body}</summary>${coins}<div class="sub mono" style="margin-top:6px">${esc(j.name)} on ${esc(j.host)}: ${esc(j.cmd)}</div><pre>${esc((j.tail||[]).join('\n'))}</pre></details></div>`
   :`<div class="card">${body}<details id="log-${esc(j.name)}"><summary class="sub">log</summary><div class="sub mono">${esc(j.cmd)}</div><pre>${esc((j.tail||[]).join('\n'))}</pre></details></div>`}
 

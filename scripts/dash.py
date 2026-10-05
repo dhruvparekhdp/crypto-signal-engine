@@ -147,6 +147,39 @@ def job_view(st, logdir):
             "failed": int(failed[-1]) if failed else (0 if passed else None), "failures": failures}
 
 
+def _proc_table() -> dict:
+    """pid -> (ppid, cpu%) for every process, one `ps` call per refresh."""
+    import subprocess
+    try:
+        out = subprocess.run(["ps", "-eo", "pid=,ppid=,pcpu="], capture_output=True, text=True, timeout=5).stdout
+    except (OSError, subprocess.SubprocessError):
+        return {}
+    t = {}
+    for line in out.splitlines():
+        parts = line.split()
+        if len(parts) == 3:
+            t[int(parts[0])] = (int(parts[1]), float(parts[2]))
+    return t
+
+
+def workers(pid: int | None, table: dict) -> dict | None:
+    """Processes under a job and their CPU: tells 'slow but working' from 'stuck' at a glance."""
+    if not pid or pid not in table:
+        return None
+    kids, frontier = [], [pid]
+    while frontier:
+        p = frontier.pop()
+        for c, (pp, _) in table.items():
+            if pp == p:
+                kids.append(c)
+                frontier.append(c)
+    busy = [c for c in kids if table[c][1] >= 20]
+    return {"processes": len(kids), "busy": len(busy), "cpu_pct": round(sum(table[c][1] for c in kids))}
+
+
+_tables: dict = {}
+
+
 def overall(jobs: list[dict]) -> dict:
     """One number for 'how much is finished': each job counts equally, a running job by its own progress."""
     n = len(jobs)
@@ -159,13 +192,17 @@ def overall(jobs: list[dict]) -> dict:
 
 def load_jobs():
     jobs = []
+    _tables.clear()
     for base in [ROOT] + [p for p in (ROOT / "remote").glob("*") if p.is_dir()]:
         for sp in sorted((base / "status").glob("*.json")):
             try:
                 d = json.loads(sp.read_text())
                 if "stage" in d or "cmd" not in d or "name" not in d:   # an AI-queue file, the banner, or something else
                     continue
-                jobs.append(job_view(d, base / "logs"))
+                v = job_view(d, base / "logs")
+                if v["state"] in ("running", "stalled?") and base == ROOT:
+                    v["workers"] = workers(d.get("pid"), table if (table := _tables.setdefault("t", _proc_table())) else {})
+                jobs.append(v)
             except Exception:  # noqa: BLE001 - one odd file must not take the page down
                 pass
     return jobs
