@@ -959,7 +959,7 @@ class AppRunner:
             if sig.symbol in excluded:
                 await self._mark_skipped(log_id, "coin_without_edge")
                 continue
-            if n_swing >= settings.swing_max_open:
+            if settings.swing_max_open and n_swing >= settings.swing_max_open:
                 await self._mark_skipped(log_id, "swing_book_full")
                 continue
             side_word = sig.direction

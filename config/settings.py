@@ -174,8 +174,8 @@ class Settings(BaseSettings):
     # Backtest (scripts/portfolio_wallet, fixed vs adaptive): cutting risk in drawdowns barely reduced the
     # worst drawdown but halved the profit, so fixed risk is the default.
     swing_adaptive_risk: bool = False
-    swing_max_open: int = 4
-    swing_max_leverage: float = 3.0
+    swing_max_open: int = 0                   # 0 = no limit: free margin and leverage decide how many fit
+    swing_max_leverage: float = 10.0          # a ceiling: each trade uses the lowest leverage its margin needs
     swing_hold_minutes: int = 10080
     swing_signal_max_age_minutes: int = 60
     # Regime check (analysis/regime_gate.py): skip swing signals when Bitcoin's 30-day volatility is in the top
@@ -186,9 +186,24 @@ class Settings(BaseSettings):
     swing_regime_adx_max: float = 30.0
     # Crypto signals arrive in same-direction clusters (97% of multi-signal bars), so several open trades are one
     # bet. Capping trades per direction did more for the backtested wallet than any risk level.
-    swing_max_same_side: int = 2
+    swing_max_same_side: int = 0              # 0 = no limit (2 was the best backtest setting; see design notes)
     # Five years show no edge on these: original and mirror both average about zero.
     swing_exclude_symbols: str = "BCHUSDT,LTCUSDT"
+    # Live swing book (execution/live_book.py): copies swing entries to a small Binance USD-M futures account.
+    # "off" | "testnet" (testnet.binancefuture.com, fake money) | "live". Keys come from the environment only:
+    # futures-enabled, withdrawals disabled, IP-restricted to this server.
+    live_trading_mode: str = "off"
+    binance_api_key: SecretStr | None = None
+    binance_api_secret: SecretStr | None = None
+    binance_testnet_api_key: SecretStr | None = None
+    binance_testnet_api_secret: SecretStr | None = None
+    live_max_balance_usdt: float = 20.0       # the bot treats the account as at most this, whatever it holds
+    live_risk_pct: float = 0.015              # risk per trade
+    live_max_risk_pct: float = 0.025          # Binance's minimum order may force more; refused above this
+    live_max_open: int = 0                    # 0 = no limit
+    live_max_leverage: int = 10
+    live_daily_loss_pct: float = 0.06         # no new entries after losing this share of the capped balance today
+    live_respect_regime_filter: bool = True   # real money skips wild-market / strong-trend signals even in shadow
     paper_open_families: str = "swing"
     # The 60-minute "flat or losing -> close" rule cut trades at small losses; off unless asked for.
     smart_60m_enabled: bool = False

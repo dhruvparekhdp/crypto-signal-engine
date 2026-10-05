@@ -12,7 +12,7 @@ from storage.models import Base
 PRICES = {"BTCUSDT": 60000.0, "SOLUSDT": 150.0, "DOGEUSDT": 0.2, "XRPUSDT": 0.6, "BCHUSDT": 400.0}
 
 
-async def run(signals):
+async def run(signals, cap=2):
     engine = create_async_engine("sqlite+aiosqlite:///:memory:")
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
@@ -22,6 +22,7 @@ async def run(signals):
     runner.notifier = AsyncMock()
     with patch("scheduler.runner.settings.paper_trading_enabled", True), \
          patch("scheduler.runner.settings.session_filter_enabled", False), \
+         patch("scheduler.runner.settings.swing_max_same_side", cap), \
          patch("scheduler.runner.AsyncSessionFactory", session_maker):
         for sym, px in PRICES.items():
             st = CryptoState(symbol=sym.lower(), base_asset=sym[:-4])
@@ -66,3 +67,9 @@ async def test_coins_without_edge_are_not_traded():
 def test_priority_prefers_strong_strategy_and_coin():
     assert sb.priority("swing_vol_breakout", "4h", "solusdt") > sb.priority("swing_ichimoku", "4h", "xrpusdt")
     assert sb.priority("swing_unknown", "1h", "newusdt") == pytest.approx(0.4)
+
+
+@pytest.mark.asyncio
+async def test_with_no_cap_every_signal_that_fits_opens():
+    rows, _ = await run([("XRPUSDT", "ichimoku", +1), ("SOLUSDT", "vol_breakout", +1), ("BTCUSDT", "donchian", +1)], cap=0)
+    assert len(rows) == 3

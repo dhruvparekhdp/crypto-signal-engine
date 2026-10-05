@@ -26,17 +26,22 @@ VARIANTS = {
     "4pct_6open_total_10_side3": dict(risk_pct=0.04, max_concurrent=6, max_open_risk=0.10, max_same_side=3),
     "6pct_total_12_side2": dict(risk_pct=0.06, max_concurrent=4, max_open_risk=0.12, max_same_side=2),
     "start100_to400_2pct": dict(risk_pct=0.02, max_concurrent=4, start=100.0, target=400.0),
+    "1pct_unlimited": dict(risk_pct=0.01, max_concurrent=99),
+    "2pct_unlimited": dict(risk_pct=0.02, max_concurrent=99),
+    "3pct_unlimited": dict(risk_pct=0.03, max_concurrent=99),
+    "5pct_unlimited": dict(risk_pct=0.05, max_concurrent=99),
+    "3pct_unlimited_total_15": dict(risk_pct=0.03, max_concurrent=99, max_open_risk=0.15),
 }
 
 
-def run(trades: pd.DataFrame, months: int, variants: dict) -> dict:
+def run(trades: pd.DataFrame, months: int, variants: dict, leverage: float = 5.0) -> dict:
     first, last = int(trades.entry_t.min()), int(trades.entry_t.max())
     starts = [int(t.timestamp() * 1000) for t in pd.date_range(
         pd.to_datetime(first, unit="ms").normalize().replace(day=1) + pd.offsets.MonthBegin(1),
         pd.to_datetime(last - months * MONTH_MS, unit="ms"), freq="MS", tz="UTC")]
     out = {}
     for name, kw in variants.items():
-        cfg = WalletConfig(leverage=5.0, reset=False, **kw)
+        cfg = WalletConfig(leverage=leverage, reset=False, **kw)
         res = [o for o in (one_start(trades, t, months, cfg) for t in starts) if o]
         by_year = defaultdict(list)
         for o in res:
@@ -71,6 +76,7 @@ def main():
     ap.add_argument("--trades", action="append", default=None,
                     help="trade files (default: the live 4h and 8h sets)")
     ap.add_argument("--months", default="12,24")
+    ap.add_argument("--leverage", type=float, default=5.0, help="leverage ceiling; each trade uses only what it needs")
     ap.add_argument("--out", default="data/lab/wallet_experiments.json")
     a = ap.parse_args()
     files = a.trades or ["data/lab/runs/cand_4h/trades.parquet", "data/lab/runs/null_8h/trades.parquet"]
@@ -79,7 +85,7 @@ def main():
     print(f"{len(tr)} trades from {', '.join(files)}\n", flush=True)
     result = {"trades": len(tr), "files": files, "horizons": {}}
     for m in map(int, a.months.split(",")):
-        result["horizons"][str(m)] = run(tr, m, VARIANTS)
+        result["horizons"][str(m)] = run(tr, m, VARIANTS, a.leverage)
     with open(a.out, "w") as f:
         json.dump(result, f, default=float)
     print("\nsaved", a.out)
