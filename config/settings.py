@@ -178,6 +178,12 @@ class Settings(BaseSettings):
     swing_max_leverage: float = 3.0
     swing_hold_minutes: int = 10080
     swing_signal_max_age_minutes: int = 60
+    # Regime check (analysis/regime_gate.py): skip swing signals when Bitcoin's 30-day volatility is in the top
+    # third of its past year, or the coin's daily ADX is above 30. "shadow" tags every signal and still trades it,
+    # so the live book can confirm the backtest before the filter is allowed to block anything; "on" skips.
+    swing_regime_filter: str = "shadow"
+    swing_regime_vol_rank_max: float = 0.67
+    swing_regime_adx_max: float = 30.0
     paper_open_families: str = "swing"
     # The 60-minute "flat or losing -> close" rule cut trades at small losses; off unless asked for.
     smart_60m_enabled: bool = False

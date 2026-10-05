@@ -14,7 +14,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from analysis.lab import features as F
+from analysis import regime_gate
 from analysis.lab.data import load_bars
 
 DAY = 86_400_000
@@ -22,16 +22,15 @@ SRC = {"4h": "data/lab/runs/cand_4h", "8h": "data/lab/runs/null_8h"}
 
 
 def btc_vol_rank() -> tuple[np.ndarray, np.ndarray]:
-    """(time known, percentile of BTC 30d vol within the previous 365 days), from closed daily bars."""
+    """(time known, percentile of BTC 30d vol within the previous 365 days), from closed daily bars.
+    Same function the live engine uses (analysis.regime_gate)."""
     b = load_bars("BTCUSDT", "1d")
-    vol = pd.Series(np.diff(np.log(b.c), prepend=np.nan)).rolling(30).std()
-    rank = vol.rolling(365, min_periods=180).apply(lambda w: (w[:-1] < w[-1]).mean(), raw=True)
-    return b.t + DAY, rank.to_numpy()
+    return b.t + DAY, regime_gate.vol_rank_series(b.c)
 
 
 def coin_adx(symbol: str) -> tuple[np.ndarray, np.ndarray]:
     b = load_bars(symbol, "1d")
-    return b.t + DAY, F.adx(b.h, b.l, b.c)[0]
+    return b.t + DAY, regime_gate.adx_series(b.h, b.l, b.c)
 
 
 def tag(tr: pd.DataFrame) -> pd.DataFrame:

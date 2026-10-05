@@ -237,6 +237,8 @@ class AppRunner:
         self._pending_swing: list[CryptoSignal] = []
         self._swing_seen: dict[str, int] = {}
         self._swing_last: dict[str, dict] = {}
+        self._regime_daily: dict[str, tuple] = {}     # symbol -> (UTC day, Bars of closed daily bars)
+        self._regime_now: dict = {}
         # Mirror review (27 Sep): primary+mirror candidate pairs held between
         # AI reviews while settings.mirror_review_enabled is on, keyed by
         # the primary candidate's round-0 crypto_signal_log id. Empty and
@@ -842,6 +844,37 @@ class AppRunner:
                     log.warning("candle_refresh_failed", symbol=st.symbol, interval=interval, error=str(e)[:120])
         log.info("candle_refresh_done", saved=saved)
 
+    async def _daily_bars(self, client, symbol: str, now_ms: int):
+        """Closed daily bars for the regime check, fetched once per UTC day per coin."""
+        from analysis import swing_book as sb
+        day = now_ms // 86_400_000
+        hit = self._regime_daily.get(symbol)
+        if hit and hit[0] == day:
+            return hit[1]
+        b = await sb.fetch_bars(client, symbol, now_ms, "1d", limit=500)
+        self._regime_daily[symbol] = (day, b)
+        return b
+
+    async def _regime_verdict(self, client, symbol: str, now_ms: int):
+        """analysis.regime_gate verdict for a swing signal, or None if the check is off or data is missing.
+        Never raises: a failed fetch must not stop a signal."""
+        mode = settings.swing_regime_filter
+        if mode not in ("shadow", "on"):
+            return None
+        from analysis import regime_gate
+        try:
+            btc = await self._daily_bars(client, "BTCUSDT", now_ms)
+            coin = await self._daily_bars(client, symbol, now_ms)
+            v = regime_gate.judge(btc.c if btc is not None else None,
+                                  coin.h if coin is not None else None, coin.l if coin is not None else None,
+                                  coin.c if coin is not None else None,
+                                  settings.swing_regime_vol_rank_max, settings.swing_regime_adx_max)
+            self._regime_now = {"btc_vol_rank": v.btc_vol_rank, "mode": mode, "at": now_ms}
+            return v
+        except Exception as e:  # noqa: BLE001
+            log.warning("regime_check_failed", symbol=symbol, error=str(e)[:120])
+            return None
+
     async def _swing_scan_job(self) -> None:
         """Every few minutes: evaluate the swing strategies on each coin's last CLOSED 4h bar.
         A fresh signal (bar closed within swing_signal_max_age_minutes) is queued for the paper job."""
@@ -888,9 +921,15 @@ class AppRunner:
                     if sig is None:
                         log.info("swing_signal_stop_too_wide", symbol=sym, strategy=setup.strategy)
                         continue
+                    verdict = await self._regime_verdict(client, sym, now_ms)
+                    sig.regime = verdict
+                    if verdict is not None:
+                        sig.indicators_summary = f"{sig.indicators_summary} | {verdict.tag()}"
+                        self._swing_last[key]["regime"] = verdict.as_dict()
                     self._pending_swing.append(sig)
                     log.info("swing_signal", symbol=sym, tf=tf, strategy=setup.strategy, side=sig.direction,
-                             price=price, stop=sig.stop_loss, target=sig.target_price)
+                             price=price, stop=sig.stop_loss, target=sig.target_price,
+                             regime=verdict.tag() if verdict is not None else "off")
         except Exception:
             log.exception("swing_scan_failed")
 
@@ -917,6 +956,10 @@ class AppRunner:
                 continue
             if n_swing >= settings.swing_max_open:
                 await self._mark_skipped(log_id, "swing_book_full")
+                continue
+            verdict = getattr(sig, "regime", None)
+            if settings.swing_regime_filter == "on" and verdict is not None and verdict.would_skip:
+                await self._mark_skipped(log_id, "regime_" + "_".join(verdict.reasons))
                 continue
             st = states.get(sig.symbol)
             price = st.current_price if st is not None and st.current_price > 0 else sig.current_price
@@ -952,7 +995,8 @@ class AppRunner:
                 note=(f"SWING {sig.timeframe} {pos.side.value} {sig.signal_type} · stop {stop:.6g} ({risk_pct:.2f}% away, 3xATR {sig.timeframe}) · "
                       f"target {target:.6g} (3R) · {leverage:.1f}x · margin {pos.margin:.0f} · "
                       f"risking {risk * 100:.2f}% of the wallet (book drawdown {dd * 100:.0f}%, losing streak {streak}) · "
-                      f"closes only at stop, target or after 7 days"))])
+                      f"closes only at stop, target or after 7 days"
+                      + (f" · {verdict.tag()} ({settings.swing_regime_filter})" if verdict is not None else "")))])
             cstate.position_ids[len(cstate.positions)] = row.id
             cstate.positions.append(pos)
             open_syms.add(sig.symbol)

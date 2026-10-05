@@ -45,6 +45,7 @@ class CryptoSignal:
     tp1_price: float = 0.0               # First scale-out target (+1.0R)
     tp2_price: float = 0.0               # Second runner target (+2.0R to +2.5R)
     veto_reason: str = ""                # Explanation if rejected by filter
+    regime: object = None                # analysis.regime_gate.Verdict for swing signals (shadow or live filter)
 
 
 def compute_crypto_stake(edge_pct: float, confidence: float) -> float:

@@ -1245,7 +1245,31 @@ async def _api_swing(runner, request: web.Request) -> web.Response:
                              "closed_at": t.closed_at.isoformat() if t.closed_at else None}
                             for t, r in list(zip(trades, rs))[-15:]]},
         "wallet": cycle.wallet if cycle is not None else None,
+        "regime_filter": await _swing_regime_section(runner, trades, rs),
     })
+
+
+async def _swing_regime_section(runner, trades, rs) -> dict:
+    """Shadow test of analysis.regime_gate: closed swing trades split by the verdict their signal carried."""
+    from analysis import regime_gate
+    out = {"mode": _SETTINGS.swing_regime_filter, "vol_rank_max": _SETTINGS.swing_regime_vol_rank_max,
+           "adx_max": _SETTINGS.swing_regime_adx_max, "now": getattr(runner, "_regime_now", {}) or {}}
+    try:
+        from storage.database import AsyncSessionFactory
+        from storage.repository import Repository
+        async with AsyncSessionFactory() as session:
+            rows = await Repository(session).crypto_signals_between(90, 0)
+        sigs = [{"symbol": r.symbol, "signal_type": r.signal_type, "direction": r.direction,
+                 "timestamp": r.timestamp if r.timestamp.tzinfo else r.timestamp.replace(tzinfo=UTC),
+                 "indicators_summary": r.indicators_summary or ""}
+                for r in rows if getattr(r, "trade_mode", "") == "swing"]
+        trs = [{"symbol": t.symbol, "signal_type": t.signal_type, "side": t.side, "r": r,
+                "opened_at": t.opened_at if t.opened_at.tzinfo else t.opened_at.replace(tzinfo=UTC)}
+               for t, r in zip(trades, rs) if t.opened_at is not None]
+        out["scoreboard"] = regime_gate.shadow_scoreboard(sigs, trs)
+    except Exception as e:  # noqa: BLE001 - the swing monitor must render even if this part fails
+        out["error"] = str(e)[:200]
+    return out
 
 
 async def _api_paper(runner, request: web.Request) -> web.Response:
@@ -2389,6 +2413,7 @@ section h2{color:var(--accent-soft)}
   <div id="paper-banner"></div>
 
   <div class="pt-strip" id="paper-strip"></div>
+  <div id="regime-card" style="margin:10px 0"></div>
 
   <div class="pt-shead">
     <h2>Open positions</h2>
@@ -2909,6 +2934,23 @@ function _ptExpiry(iso){
   return `<span class="pt-muted">in ${Math.round(mins)}m</span>`;
 }
 
+async function loadRegimeCard(){
+  /* Shadow test of the market filter: closed swing trades split by what the filter would have done. */
+  const el = document.getElementById('regime-card'); if(!el) return;
+  let d; try { d = await (await fetch('/api/swing')).json(); } catch(e){ return; }
+  const g = d.regime_filter; if(!g){ el.innerHTML=''; return; }
+  const sb = g.scoreboard || {take:{n:0},skip:{n:0}}, now = g.now || {};
+  const r = x => x==null ? '–' : (x>0?'+':'') + x.toFixed(2) + ' R';
+  const row = (label, x, hint) => `<tr><td>${label}</td><td style="text-align:right">${x.n}</td><td style="text-align:right">${x.n?Math.round(100*x.wins/x.n)+'%':'–'}</td><td style="text-align:right" class="${x.avg_r>0?'pos':x.avg_r<0?'neg':''}">${r(x.avg_r)}</td><td class="pt-muted">${hint}</td></tr>`;
+  const rank = now.btc_vol_rank;
+  const state = rank==null ? 'not measured yet' : rank > g.vol_rank_max ? `<b class="neg">wild</b> (${Math.round(rank*100)}th percentile of the past year)` : `<b class="pos">calm or normal</b> (${Math.round(rank*100)}th percentile of the past year)`;
+  el.innerHTML = `<div class="cr-note"><b>Market filter · ${g.mode==='on'?'ON (skipping)':g.mode==='shadow'?'shadow test (trading everything, recording what it would skip)':'off'}</b><br>
+  Skips a swing signal when Bitcoin's 30-day volatility is in the top third of its past year, or the coin's daily ADX is above ${g.adx_max}. Bitcoin right now: ${state}.
+  <table class="tbl" style="margin-top:8px"><thead><tr><th>closed swing trades</th><th>n</th><th>won</th><th>avg</th><th>backtest expects</th></tr></thead><tbody>
+  ${row('filter would take', sb.take, '+0.36 R')}${row('filter would skip', sb.skip, 'about 0 or worse')}${sb.untagged&&sb.untagged.n?row('opened before the test began', sb.untagged, ''):''}</tbody></table>
+  <span class="pt-muted">Switch it on once each group has 30+ trades and "skip" is clearly below "take".</span></div>`;
+}
+
 async function loadPaper(){
   let d;
   try { d = await (await fetch('/api/paper')).json(); }
@@ -2919,6 +2961,7 @@ async function loadPaper(){
   }
   _pt = d;
   renderPaper();
+  loadRegimeCard();
 }
 
 function renderPaper(){
