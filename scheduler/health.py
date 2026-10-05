@@ -2254,29 +2254,12 @@ section h2{color:var(--accent-soft)}
     <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#0ea5e9" stroke-width="2"><path d="M3 17l6-6 4 4 8-8"/><path d="M17 7h4v4"/></svg>
     <b>Trading Desk</b>
   </div>
-  <div class="side-group">Live</div>
-  <div class="side-item" data-tab="dashboard" onclick="switchTab('dashboard')"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12h7V3H3zM14 21h7v-9h-7zM14 9h7V3h-7zM3 21h7v-6H3z"/></svg><span>Dashboard</span></div>
-  <a class="side-item side-secondary" data-tab="predict" href="/predict"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12h4l3-8 4 16 3-8h4"/></svg><span>Price Outlook</span></a>
-  <div class="side-item" data-tab="crypto" onclick="switchTab('crypto')"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 17l6-6 4 4 8-8"/><path d="M17 7h4v4"/></svg><span>Signals</span></div>
-  <div class="side-item" data-tab="mirror" onclick="switchTab('mirror')"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 14c.2-1 .7-1.7 1.5-2.5 1-.9 1.5-2.2 1.5-3.5A6 6 0 0 0 6 8c0 1 .2 2.2 1.5 3.5.7.9 1.2 1.5 1.5 2.5"/><path d="M9 18h6"/><path d="M10 22h4"/></svg><span>Mirror Signals</span></div>
-  <div class="side-item side-secondary" data-tab="simulator" onclick="switchTab('simulator')"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg><span>Market Simulator</span></div>
-  <div class="side-item" data-tab="paper" onclick="switchTab('paper')"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18M3 12h18M3 18h12"/></svg><span>Paper Trading</span></div>
-  <div class="side-item" data-tab="guard" onclick="switchTab('guard')"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l8 4v5c0 5-3.4 8.5-8 10-4.6-1.5-8-5-8-10V7z"/></svg><span>Session Guard</span></div>
-  <div class="side-group">Analysis</div>
-  <div class="side-item" data-tab="accuracy" onclick="switchTab('accuracy')"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20V10M18 20V4M6 20v-4"/></svg><span>Accuracy</span></div>
-  <div class="side-item side-secondary" data-tab="historic" onclick="switchTab('historic')"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 5a9 3 0 1018 0 9 3 0 10-18 0M3 5v14a9 3 0 0018 0V5"/></svg><span>Historic Data</span></div>
-  <div class="side-item side-secondary" data-tab="watchlist" onclick="switchTab('watchlist')"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l2.6 5.3 5.9.9-4.3 4.1 1 5.8-5.2-2.7-5.2 2.7 1-5.8L3.5 9.2l5.9-.9z"/></svg><span>Watchlist</span></div>
-  <div class="side-group">Other</div>
-  <a class="side-item side-secondary" data-tab="moves" href="/moves"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 17l6-6 4 4 8-8"/><path d="M14 7h7v7"/></svg><span>Market Moves</span></a>
-  <a class="side-item side-secondary" data-tab="v2" href="/v2"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 17l6-6 4 4 8-8"/><path d="M14 7h7v7"/></svg><span>v2 Shadow</span></a>
-  <a class="side-item side-secondary" data-tab="journal" href="/journal"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 17l6-6 4 4 8-8"/><path d="M14 7h7v7"/></svg><span>Journal</span></a>
-  <a class="side-item side-secondary" data-tab="audit" href="/audit"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 3h6v5l4 9a2 2 0 01-1.8 3H6.8A2 2 0 015 16l4-9z"/><path d="M9 8h6"/></svg><span>Signal Audit</span></a>
-  <a class="side-item side-secondary" data-tab="diag" href="/api/debug/binance"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2v4M12 18v4M4.9 4.9l2.8 2.8M16.3 16.3l2.8 2.8M2 12h4M18 12h4"/></svg><span>Diagnostics</span></a>
-  <a class="side-item side-secondary" data-tab="settings" href="/settings"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19 12a7 7 0 00-.1-1l2-1.6-2-3.4-2.4 1a7 7 0 00-1.7-1L14.5 3h-4l-.4 2.6a7 7 0 00-1.7 1l-2.4-1-2 3.4L6 11a7 7 0 000 2l-2 1.6 2 3.4 2.4-1a7 7 0 001.7 1l.4 2.6h4l.4-2.6a7 7 0 001.7-1l2.4 1 2-3.4-2-1.6a7 7 0 00.1-1z"/></svg><span>Settings</span></a>
-  <div class="side-item side-more" onclick="toggleMore()">
-    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round"><circle cx="5" cy="12" r="1.6"/><circle cx="12" cy="12" r="1.6"/><circle cx="19" cy="12" r="1.6"/></svg>
-    <span>More</span>
-  </div>
+  <div class="side-item" data-tab="dashboard" data-group="trading" onclick="switchTab('dashboard')"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3v18h18"/><path d="M7 15l4-4 3 3 5-6"/></svg><span>Trading</span></div>
+  <div class="side-item" data-tab="crypto" data-group="signals" onclick="switchTab('crypto')"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12h4l3-8 4 16 3-8h6"/></svg><span>Signals</span></div>
+  <a class="side-item" data-tab="market" data-group="market" href="/predict"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 3"/></svg><span>Market</span></a>
+  <a class="side-item" data-tab="research" data-group="research" href="/pipeline"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 3h6M10 3v6L4 19a2 2 0 0 0 2 3h12a2 2 0 0 0 2-3l-6-10V3"/></svg><span>Research</span></a>
+  <a class="side-item" data-tab="settings" data-group="settings" href="/settings"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.6 1.6 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.6 1.6 0 0 0-2.7 1.1V21a2 2 0 1 1-4 0v-.1a1.6 1.6 0 0 0-2.6-1.1l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1A1.6 1.6 0 0 0 3 15.4H3a2 2 0 1 1 0-4h.1a1.6 1.6 0 0 0 1.1-2.6l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.6 1.6 0 0 0 1.8.3H9a1.6 1.6 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.6 1.6 0 0 0 1 1.5 1.6 1.6 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.6 1.6 0 0 0-.3 1.8V9a1.6 1.6 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.6 1.6 0 0 0-1.5 1z"/></svg><span>Settings</span></a>
+  <a class="side-item" data-tab="admin" data-group="admin" href="/data"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><ellipse cx="12" cy="5" rx="8" ry="3"/><path d="M4 5v14c0 1.7 3.6 3 8 3s8-1.3 8-3V5"/><path d="M4 12c0 1.7 3.6 3 8 3s8-1.3 8-3"/></svg><span>Admin</span></a>
   <div class="side-themes" id="side-themes">
     <span class="dot" data-t="amber"   style="background:#f59e0b" onclick="setSiteTheme('amber')"   title="Amber Terminal"></span>
     <span class="dot" data-t="carbon"  style="background:#a3e635" onclick="setSiteTheme('carbon')"  title="Carbon Lime"></span>
@@ -3554,7 +3537,8 @@ const TAB_META = {
 
 function switchTab(tab){
   document.querySelectorAll('.tab-btn').forEach(b=>b.classList.toggle('active',b.dataset.tab===tab));
-  document.querySelectorAll('.side-item').forEach(b=>b.classList.toggle('active',b.dataset.tab===tab));
+  const grp = window.hubGroupOf ? window.hubGroupOf('/#'+tab) : null;
+  document.querySelectorAll('.side-item').forEach(b=>b.classList.toggle('active', grp ? b.dataset.group===grp.id : b.dataset.tab===tab));
   document.querySelectorAll('.tab-content').forEach(c=>c.classList.toggle('active',c.id==='tab-'+tab));
   const m = TAB_META[tab];
   if(m){
@@ -3564,6 +3548,7 @@ function switchTab(tab){
   // The hash keeps a reload on the same screen, which matters on a free
   // instance that restarts often.
   if(location.hash !== '#'+tab) history.replaceState(null,'','#'+tab);
+  if(window.renderHub) window.renderHub();
   if(tab==='paper')     loadPaper();
   if(tab==='guard')     loadGuard();
   if(tab==='accuracy')  loadAccuracy();
@@ -6982,6 +6967,59 @@ load(); setInterval(load,300000);
 """
 
 
+_HUB_SNIPPET = """
+<style>
+/* Page groups: one strip of related pages at the top of every page (see HUB_GROUPS). */
+.hub-strip{display:flex;gap:6px;align-items:center;flex-wrap:wrap;padding:8px 12px;margin:0 0 12px;
+  border-bottom:1px solid rgba(127,127,127,.25);font:13px/1.3 system-ui,-apple-system,"Segoe UI",sans-serif}
+.hub-strip b{margin-right:6px;font-size:11px;letter-spacing:.08em;text-transform:uppercase;opacity:.65}
+.hub-strip a{padding:4px 11px;border-radius:999px;text-decoration:none;color:inherit;opacity:.78;
+  border:1px solid rgba(127,127,127,.32);white-space:nowrap}
+.hub-strip a:hover{opacity:1}
+.hub-strip a.on{opacity:1;font-weight:600;background:rgba(127,127,127,.2)}
+@media(max-width:640px){.hub-strip{flex-wrap:nowrap;overflow-x:auto;-webkit-overflow-scrolling:touch}}
+</style>
+<script>
+(function(){
+  /* Six groups instead of twenty menu entries. Every page still exists at its own address. */
+  var G = [
+    {id:"trading", label:"Trading", items:[["Overview","/#dashboard"],["Paper book","/#paper"],["Session guard","/#guard"]]},
+    {id:"signals", label:"Signals", items:[["Live signals","/#crypto"],["Mirror","/#mirror"],["Accuracy","/#accuracy"],["Audit","/audit"],["History","/#historic"]]},
+    {id:"market", label:"Market", items:[["Price outlook","/predict"],["Market moves","/moves"],["Chart","/chart"]]},
+    {id:"research", label:"Research", items:[["Pipeline","/pipeline"],["v2 shadow","/v2"],["Simulator","/#simulator"]]},
+    {id:"settings", label:"Settings", items:[["Settings","/settings"],["Watchlist","/#watchlist"]]},
+    {id:"admin", label:"Admin", items:[["Data","/data"],["Diagnostics","/api/debug/binance"],["API list","/api-docs"],["Journal","/journal"]]}
+  ];
+  window.HUB_GROUPS = G;
+  function here(){ return location.pathname === "/" ? "/" + (location.hash || "#dashboard") : location.pathname.replace(/\\/$/, ""); }
+  window.hubGroupOf = function(url){
+    for (var i = 0; i < G.length; i++) for (var j = 0; j < G[i].items.length; j++) if (G[i].items[j][1] === url) return G[i];
+    return null;
+  };
+  window.renderHub = function(){
+    var cur = here(), g = window.hubGroupOf(cur), el = document.getElementById("hub-strip");
+    if (!g) { if (el) el.remove(); return; }
+    if (!el) {
+      el = document.createElement("nav"); el.id = "hub-strip"; el.className = "hub-strip"; el.setAttribute("aria-label", g.label + " pages");
+      var head = document.querySelector(".main-head");
+      if (head && head.parentNode) head.parentNode.insertBefore(el, head); else document.body.insertBefore(el, document.body.firstChild);
+    }
+    var onMain = location.pathname === "/";
+    el.innerHTML = "<b>" + g.label + "</b>" + g.items.map(function(it){
+      var tab = onMain && it[1].indexOf("/#") === 0 ? it[1].slice(2) : "";
+      return '<a href="' + it[1] + '"' + (it[1] === cur ? ' class="on" aria-current="page"' : "") + (tab ? ' data-hub-tab="' + tab + '"' : "") + ">" + it[0] + "</a>";
+    }).join("");
+  };
+  document.addEventListener("click", function(e){
+    var a = e.target.closest && e.target.closest("[data-hub-tab]");
+    if (a && typeof window.switchTab === "function") { e.preventDefault(); window.switchTab(a.getAttribute("data-hub-tab")); }
+  });
+  document.addEventListener("DOMContentLoaded", window.renderHub);
+  window.addEventListener("hashchange", window.renderHub);
+})();
+</script>
+"""
+
 _THEME_SNIPPET = """
 <style>
 /* Theme palettes */
@@ -7416,6 +7454,7 @@ _HTML = (
     .replace("__MIN_TARGET_PCT__", f"{_SCALP.min_target_pct * 100:.4f}")
     .replace("__PAPER_LEVERAGE__", f"{_SETTINGS.paper_leverage:g}")
 )
+_THEME_SNIPPET = _THEME_SNIPPET + _HUB_SNIPPET
 _HTML = _HTML.replace("</head>", _THEME_SNIPPET + "</head>")
 _DATA_HTML = _DATA_HTML.replace("</head>", _THEME_SNIPPET + "</head>")
 _SETTINGS_HTML = _SETTINGS_HTML.replace("</head>", _THEME_SNIPPET + "</head>")
@@ -7918,7 +7957,7 @@ refresh();
 </script>
 </body>
 </html>"""
-    return web.Response(text=html, content_type="text/html")
+    return web.Response(text=html.replace("</head>", _THEME_SNIPPET + "</head>"), content_type="text/html")
 
 
 async def _dashboard(request: web.Request) -> web.Response:

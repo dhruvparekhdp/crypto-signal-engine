@@ -40,15 +40,11 @@ class TestPhoneNavigation(unittest.TestCase):
         self.assertIn("side-secondary", self.html)
         self.assertIn(".side-secondary{display:none}", self.html)
 
-    def test_the_five_kept_on_the_bar_are_the_live_ones(self):
-        for tab in ("dashboard", "crypto", "paper", "guard", "accuracy"):
-            with self.subTest(tab=tab):
-                self.assertIn(f'class="side-item" data-tab="{tab}"', self.html)
-
-    def test_the_rest_are_behind_more(self):
-        for tab in ("historic", "watchlist", "diag", "settings"):
-            with self.subTest(tab=tab):
-                self.assertIn(f'class="side-item side-secondary" data-tab="{tab}"', self.html)
+    def test_the_bar_holds_the_six_page_groups(self):
+        """Twenty menu entries became six groups; each group's pages sit in the hub strip at the top."""
+        for group in ("trading", "signals", "market", "research", "settings", "admin"):
+            with self.subTest(group=group):
+                self.assertRegex(self.html, rf'class="side-item" data-tab="\w+" data-group="{group}"')
 
     def test_more_is_hidden_on_desktop(self):
         self.assertIn(".side-more{display:none}", self.html)
@@ -418,10 +414,21 @@ class TestEveryDestinationIsReachableOnAPhone(unittest.TestCase):
         self.assertLess(default, phone,
                         "the default must come first or it overrides the phone rule")
 
-    def test_every_secondary_destination_is_in_the_sheet(self):
-        for tab in ("accuracy", "historic", "watchlist", "audit", "diag", "settings"):
+    def test_every_former_destination_is_in_a_page_group(self):
+        """Nothing the old menu reached may become unreachable: every page is listed in HUB_GROUPS."""
+        hub = self.html[self.html.index("window.HUB_GROUPS"[:0] + "var G = ["):self.html.index("window.HUB_GROUPS = G")]
+        for url in ("/#dashboard", "/#crypto", "/#mirror", "/#paper", "/#guard", "/#accuracy", "/#historic",
+                    "/#watchlist", "/#simulator", "/audit", "/predict", "/moves", "/chart", "/pipeline", "/v2",
+                    "/settings", "/data", "/api/debug/binance", "/api-docs", "/journal"):
+            with self.subTest(url=url):
+                self.assertIn(f'"{url}"]', hub)
+
+    def test_every_in_page_link_has_a_tab_to_open(self):
+        import re
+        hub = self.html[self.html.index("var G = ["):self.html.index("window.HUB_GROUPS = G")]
+        for tab in re.findall(r'"/#(\w+)"', hub):
             with self.subTest(tab=tab):
-                self.assertIn(f'data-tab="{tab}"', self.html)
+                self.assertIn(f'id="tab-{tab}"', self.html)
 
     def test_a_hidden_tab_does_not_strand_the_refresh_label(self):
         """A label reading 'Paused' outlived the pause and looked like a fault."""
@@ -531,15 +538,9 @@ class TestTheNavBarActuallyFits(unittest.TestCase):
         """
         self.assertIn(".sidebar.more-open .side-secondary{order:-1", self.phone)
 
-    def test_everything_unreachable_from_the_bar_is_in_the_sheet(self):
-        """Ten destinations behind More (the Market Simulator joined them so six tabs fit the bar), none orphaned."""
-        import re
-
-        secondary = re.findall(r'class="side-item side-secondary"[^>]*data-tab="(\w+)"',
-                               health._HTML)
-        self.assertEqual(set(secondary),
-                         {"predict", "historic", "watchlist", "moves", "v2", "journal",
-                          "audit", "diag", "settings", "simulator"})
+    def test_the_standalone_pages_carry_the_group_strip_too(self):
+        """A group strip only on the dashboard would strand you on /chart or /pipeline."""
+        self.assertIn("renderHub", health._THEME_SNIPPET)
 
 
 class TestPricesAreFormatted(unittest.TestCase):

@@ -756,4 +756,5 @@ loadData();
 </script>
 </body>
 </html>"""
-    return web.Response(text=html, content_type="text/html")
+    from scheduler.health import _THEME_SNIPPET
+    return web.Response(text=html.replace("</head>", _THEME_SNIPPET + "</head>"), content_type="text/html")
