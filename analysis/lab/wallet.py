@@ -36,6 +36,9 @@ class WalletConfig:
     risk_mode: str = "fixed"           # fixed | adaptive: cut risk in drawdowns and after losing streaks
     dd_brake: tuple = ((0.10, 0.75), (0.20, 0.5))
     streak_brake: int = 3
+    # Crypto signals arrive in same-direction clusters, so several open trades are one bet on one move.
+    max_open_risk: float | None = None  # total risk of all open positions, as a share of the balance
+    max_same_side: int | None = None    # most positions open in one direction at once
 
     def label(self) -> str:
         if self.sizing == "risk_pct":
@@ -152,6 +155,8 @@ def run_wallet(trades: pd.DataFrame, cfg: WalletConfig) -> WalletResult:
             skip("max_concurrent"); continue
         if any(p["symbol"] == row.symbol for p in open_pos):
             skip("symbol_busy"); continue
+        if cfg.max_same_side and sum(p["side"] == int(row.side) for p in open_pos) >= cfg.max_same_side:
+            skip("same_side_cap"); continue
         used = sum(p["margin"] for p in open_pos)
         free = bal - used
         if free < cfg.bust_below:
@@ -171,6 +176,11 @@ def run_wallet(trades: pd.DataFrame, cfg: WalletConfig) -> WalletResult:
         cap = free * cfg.max_margin_use * cfg.leverage
         capped = notional > cap
         notional = min(notional, cap)
+        if cfg.max_open_risk is not None:
+            room = cfg.max_open_risk * bal - sum(p["risk_usd"] for p in open_pos)
+            if room <= 0:
+                skip("open_risk_cap"); continue
+            notional = min(notional, room / sf)
         if notional < cfg.min_notional:
             skip("below_min_notional"); continue
         margin = notional / cfg.leverage
@@ -179,7 +189,7 @@ def run_wallet(trades: pd.DataFrame, cfg: WalletConfig) -> WalletResult:
         pnl = -margin if liquidated else notional * float(row.net_ret)
         fee_usd = notional * (float(getattr(row, "fee_frac", 0.0)))
         open_pos.append({"symbol": row.symbol, "exit_t": int(row.exit_t), "margin": margin, "pnl": pnl,
-                         "fee_usd": fee_usd,
+                         "fee_usd": fee_usd, "side": int(row.side), "risk_usd": notional * sf,
                          "row": {"entry_t": t, "symbol": row.symbol, "side": int(row.side), "notional": notional,
                                  "margin": margin, "capped": capped, "liquidated": liquidated,
                                  "strategy": getattr(row, "strategy", "") if strat_col else "",

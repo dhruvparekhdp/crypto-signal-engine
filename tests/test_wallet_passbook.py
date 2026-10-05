@@ -56,3 +56,29 @@ class TestDashboardStrategySummary(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestCorrelationCaps(unittest.TestCase):
+    """Four longs opened together on four coins are one bet on one market move; the caps treat them so."""
+
+    def cluster(self):
+        rows = [{"symbol": s, "side": 1, "entry_t": i * 60_000, "exit_t": 10 * H, "entry": 100.0, "exit": 94.0,
+                 "stop_frac": 0.05, "net_ret": -0.05, "r_net": -1.0, "mae": 0.05, "fee_frac": 0.0, "reason": "stop",
+                 "strategy": "donchian", "tf": "4h"} for i, s in enumerate(["BTCUSDT", "ETHUSDT", "SOLUSDT", "XRPUSDT"])]
+        return pd.DataFrame(rows)
+
+    def test_without_caps_all_four_open(self):
+        res = run_wallet(self.cluster(), WalletConfig(start=1000, target=10_000, risk_pct=0.05, leverage=5, max_concurrent=4, reset=False))
+        self.assertEqual(len(res.ledger), 4)
+
+    def test_same_side_cap_limits_the_cluster(self):
+        res = run_wallet(self.cluster(), WalletConfig(start=1000, target=10_000, risk_pct=0.05, leverage=5, max_concurrent=4,
+                                                      max_same_side=2, reset=False))
+        self.assertEqual(len(res.ledger), 2)
+        self.assertEqual(res.skipped["same_side_cap"], 2)
+
+    def test_open_risk_cap_bounds_the_total_loss(self):
+        res = run_wallet(self.cluster(), WalletConfig(start=1000, target=10_000, risk_pct=0.05, leverage=5, max_concurrent=4,
+                                                      max_open_risk=0.08, reset=False))
+        lost = 1000 - res.cycles[0]["end"]
+        self.assertLessEqual(lost, 80 + 1e-6)          # 8% cap, not 4 x 5% = 20%
