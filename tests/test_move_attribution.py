@@ -74,7 +74,7 @@ class TestPrompt(unittest.TestCase):
 class TestPage(unittest.TestCase):
     def test_the_page_is_linked_and_themed(self):
         import scheduler.health as h
-        self.assertIn('href="/moves"', h._HTML)
+        self.assertIn('["Market moves","/moves"]', h._THEME_SNIPPET)   # reached through the Market page group
         self.assertIn("fmtStamp", h._MOVES_HTML)
         self.assertIn("<title>Market Moves</title>", h._MOVES_HTML)
 
