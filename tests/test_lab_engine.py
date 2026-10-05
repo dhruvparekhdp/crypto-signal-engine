@@ -314,3 +314,42 @@ class TestOddTimeframes(unittest.TestCase):
             self.assertEqual(len(b8), 8)                # 9 slots, the partial one is dropped
             self.assertTrue(((b8.t - t0) % (8 * 3_600_000) == 0).all())
             self.assertEqual(len(load_bars("ZZZUSDT", "12h", root=d)), 5)
+
+
+class TestMirrorsAndVotes(unittest.TestCase):
+    def test_every_strategy_has_an_exact_mirror(self):
+        from analysis.lab.strategies import REGISTRY
+        base = [k for k in REGISTRY if not k.startswith(("mirror_", "vote", "first_")) and k != "random"]
+        self.assertGreaterEqual(len(base), 30)
+        for k in base:
+            self.assertIn(f"mirror_{k}", REGISTRY)
+
+    def test_a_mirror_is_the_exact_negation_of_its_strategy(self):
+        from analysis.lab.data import Bars
+        from analysis.lab.strategies import REGISTRY
+        rng = np.random.default_rng(0)
+        n = 800
+        c = 100 + np.cumsum(rng.normal(0, 1, n))
+        b = Bars("TESTUSDT", "15m", np.arange(n, dtype=np.int64) * 900_000, c - 0.1, c + 1, c - 1, c, np.abs(rng.normal(100, 20, n)), np.abs(rng.normal(50, 10, n)))
+        for sid in ("donchian", "rsi2", "bb_reversion", "ema_cross", "supertrend"):
+            a = REGISTRY[sid].signals(b)
+            m = REGISTRY[f"mirror_{sid}"].signals(b)
+            self.assertTrue((a == -m).all(), sid)
+            self.assertGreater(int((a != 0).sum()), 0, sid)
+
+    def test_an_ensemble_only_fires_when_enough_members_agree(self):
+        from analysis.lab import strategies as S
+        from analysis.lab.data import Bars
+        n = 300
+        b = Bars("TESTUSDT", "4h", np.arange(n, dtype=np.int64), *(np.ones(n),) * 4, np.ones(n), np.ones(n))
+        stub = {"a": np.r_[1, 1, 0, -1, 0], "b": np.r_[1, 0, 0, -1, 1], "c": np.r_[0, 1, 0, 1, 0]}
+        old = dict(S.REGISTRY)
+        try:
+            for k, v in stub.items():
+                S.REGISTRY[k] = S.Strategy(k, k, "x", "x", "", (lambda bb, p, _v=v: np.r_[np.zeros(100), _v, np.zeros(n - 105)].astype(np.int8)), {}, {}, "4h")
+            fn = S.combine(["a", "b", "c"], "vote", 2)
+            out = fn(b, {})[100:105]                          # after the 60-bar warm-up that zeroes early signals
+            self.assertEqual(list(out), [1, 1, 0, -1, 0])     # needs two on the same side
+        finally:
+            S.REGISTRY.clear()
+            S.REGISTRY.update(old)

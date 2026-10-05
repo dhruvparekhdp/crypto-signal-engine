@@ -37,10 +37,12 @@ def main():
     ap.add_argument("--leverage", default="5")
     ap.add_argument("--concurrent", default="1,3")
     ap.add_argument("--loss-streak", default="0")
+    ap.add_argument("--risk-mode", default="fixed", help="fixed,adaptive")
+    ap.add_argument("--trades-extra", action="append", default=[], help="more trade files to add (e.g. 8h)")
     ap.add_argument("--out", default=None)
     a = ap.parse_args()
-    tr = pd.read_parquet(a.trades)
-    tr = tr[tr.cfg.str.contains("sl3.0_rr3.0")].sort_values("entry_t").reset_index(drop=True)
+    tr = pd.concat([pd.read_parquet(f) for f in [a.trades] + a.trades_extra])
+    tr = tr[tr.cfg.str.contains("sl3.0_rr3.0") & tr.cfg.str.contains("h10080")].sort_values("entry_t").reset_index(drop=True)
     first, last = int(tr.entry_t.min()), int(tr.entry_t.max())
     starts = [int(t.timestamp() * 1000) for t in pd.date_range(pd.to_datetime(first, unit="ms").normalize().replace(day=1) + pd.offsets.MonthBegin(1),
                                                               pd.to_datetime(last - a.months * MONTH_MS, unit="ms"), freq="MS", tz="UTC")]
@@ -49,12 +51,12 @@ def main():
     for risk in map(float, a.risk.split(",")):
         for lev in map(float, a.leverage.split(",")):
             for conc in map(int, a.concurrent.split(",")):
-                for ls in map(int, a.loss_streak.split(",")):
-                    cfg = WalletConfig(risk_pct=risk, leverage=lev, max_concurrent=conc, loss_streak_pause=ls or None)
+                for ls, mode in [(int(x), m) for x in a.loss_streak.split(",") for m in a.risk_mode.split(",")]:
+                    cfg = WalletConfig(risk_pct=risk, leverage=lev, max_concurrent=conc, loss_streak_pause=ls or None, risk_mode=mode)
                     outs = [o for o in (one_start(tr, t, a.months, cfg) for t in starts) if o]
                     d = pd.DataFrame(outs)
                     hit, bust, run = (d.status == "TARGET").mean(), (d.status == "BUST").mean(), (d.status == "IN_PROGRESS").mean()
-                    rows.append({"risk": risk, "lev": lev, "concurrent": conc, "loss_streak_pause": ls, "starts": len(d),
+                    rows.append({"mode": mode, "risk": risk, "lev": lev, "concurrent": conc, "loss_streak_pause": ls, "starts": len(d),
                                  "hit_100": hit, "bust": bust, "still_running": run,
                                  "median_days_to_100": d.loc[d.status == "TARGET", "days"].median(),
                                  "worst_dd_pct": 100 * d.dd.max(), "median_end_balance": d.end.median(),

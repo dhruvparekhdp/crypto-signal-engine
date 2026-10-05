@@ -173,6 +173,15 @@ def _record_start(path: Path, window_minutes: int = 60) -> list[str]:
     return recent
 
 
+
+def _family_may_trade(sig) -> bool:
+    """Only the families named in settings.paper_open_families open paper trades; the rest are shadow
+    signals, logged for comparison. 'swing' covers swing_* signals, 'intraday' everything else."""
+    allowed = {f.strip() for f in (settings.paper_open_families or "").split(",") if f.strip()}
+    if "all" in allowed:
+        return True
+    return ("swing" if str(getattr(sig, "signal_type", "")).startswith("swing_") else "intraday") in allowed
+
 class AppRunner:
     def __init__(self) -> None:
         self.notifier = TelegramNotifier()
@@ -208,6 +217,9 @@ class AppRunner:
         self._event_bias_pending: set[str] = set()
         self.oi_collector = BinanceFuturesOICollector(self.crypto_store)
         self._pending_paper_signals: list[tuple[CryptoSignal, object]] = []
+        self._pending_swing: list[CryptoSignal] = []
+        self._swing_seen: dict[str, int] = {}
+        self._swing_last: dict[str, dict] = {}
         # Mirror review (27 Sep): primary+mirror candidate pairs held between
         # AI reviews while settings.mirror_review_enabled is on, keyed by
         # the primary candidate's round-0 crypto_signal_log id. Empty and
@@ -506,10 +518,11 @@ class AppRunner:
 
                     before = _trade_snapshot(pos)
                     self._tick_notes = []
+                    swing = getattr(pos, "trade_mode", "") == "swing"   # tested exits only: stop, target, 7 days
                     # Dynamic Runner Extension:
                     # If trade reaches >= 1.8R, extend target dynamically into runner mode (+1.5R)
                     # and lock in at least +1.2R with trailing stop before resolve_at_price evaluates.
-                    if current_price is not None and current_price > 0 and pos.extend_runner(current_price):
+                    if not swing and current_price is not None and current_price > 0 and pos.extend_runner(current_price):
                         self._tick_notes.append(
                             f"Runner extension activated at {pos.r_multiple(current_price):.1f}R: "
                             f"target extended to {pos.target_price:.6g}, stop ratcheted to {pos.stop_price:.6g}"
@@ -519,14 +532,15 @@ class AppRunner:
                                  new_target=pos.target_price, new_stop=pos.stop_price)
 
                     trade = resolve_at_price(pos, current_price, now, cfg, wallet,
-                                             lock=self._profit_lock())
+                                             lock=None if swing else self._profit_lock())
                     if trade is None:
                         from analysis.paper_cycle import fees_for
                         fees = fees_for(pos.symbol)
 
                         # Smart 60-Minute Rule: cut stagnant loser/flat, trail profitable runner
                         atr_val = getattr(st, "atr_14", None) if st is not None else None
-                        act_60m, lvl_60m = pos.smart_60m_check(current_price, now, fees, atr=atr_val)
+                        act_60m, lvl_60m = (pos.smart_60m_check(current_price, now, fees, atr=atr_val)
+                                            if settings.smart_60m_enabled and not swing else (None, None))
                         if act_60m == "exit_stagnant":
                             from analysis.paper_trading import ExitReason, close_position
                             trade = close_position(pos, current_price, ExitReason.STAGNANT_TIMEOUT, now, fees, wallet)
@@ -536,7 +550,7 @@ class AppRunner:
                             self._tick_notes.append(f"Smart 60m rule: in profit after 60 mins -> trailing stop ratcheted to {lvl_60m:.6g}")
                             log.info("paper_trade_60m_trail_active", symbol=pos.symbol, new_stop=lvl_60m)
 
-                    if trade is None:
+                    if trade is None and not swing:
                         # Smart Breakeven Ratchet: lock zero-risk stop at +0.8% move
                         if pos.apply_smart_breakeven_ratchet(current_price, fees):
                             self._tick_notes.append(f"Smart breakeven ratchet at +0.8%: stop locked at {pos.stop_price:.6g}")
@@ -600,6 +614,10 @@ class AppRunner:
                                     peak_wallet=cycle.peak_wallet,
                                     positions=live, position_ids=live_ids)
 
+                # 2a. The swing book opens first: it is the book that passed the 5-year test.
+                await self._open_swing_signals(cstate, cycle, cfg, now, pcfg, repo, states)
+                wallet = cstate.wallet
+
                 # 2. Consider new positions from queued signals.
                 pending = list(self._pending_paper_signals)
                 self._pending_paper_signals.clear()
@@ -653,6 +671,9 @@ class AppRunner:
                     for sym, s_ in states.items()})
                 for sig, st in pending:
                     log_id = sig.log_id   # captured before reprice_signal can null sig out
+                    if not _family_may_trade(sig):
+                        await self._mark_skipped(log_id, "shadow_only")
+                        continue
                     if st.current_price <= 0:
                         await self._mark_skipped(log_id, "no_live_price")
                         continue
@@ -784,6 +805,128 @@ class AppRunner:
             cache.invalidate("paper_db_snapshot", "pipeline_db_read")
         except Exception:
             log.exception("paper_trading_job_failed")
+
+    async def _swing_scan_job(self) -> None:
+        """Every few minutes: evaluate the swing strategies on each coin's last CLOSED 4h bar.
+        A fresh signal (bar closed within swing_signal_max_age_minutes) is queued for the paper job."""
+        if not settings.swing_enabled:
+            return
+        import httpx
+
+        from analysis import swing_book as sb
+        from analysis.lab.runner import CRYPTO
+        try:
+            specs = sb.parse_specs(settings.swing_strategies)
+            states = {st.symbol: st for st in await self.crypto_store.get_all()}
+            symbols = [s_ for s_ in CRYPTO if s_.lower() in states]
+            now = datetime.now(UTC)
+            now_ms = int(now.timestamp() * 1000)
+            async with httpx.AsyncClient() as client:
+                for sym in symbols:
+                    try:
+                        b = await sb.fetch_bars(client, sym, now_ms)
+                    except Exception as e:  # noqa: BLE001 - one coin failing must not stop the rest
+                        log.warning("swing_fetch_failed", symbol=sym, error=str(e)[:120])
+                        continue
+                    if b is None:
+                        continue
+                    last = int(b.t[-1])
+                    if self._swing_seen.get(sym) == last:
+                        continue
+                    self._swing_seen[sym] = last
+                    setup = sb.evaluate(b, specs)
+                    age_min = (now_ms - (last + sb.TF_MS)) / 60000
+                    self._swing_last[sym] = {"bar_close": last + sb.TF_MS, "signal": setup.strategy if setup else None,
+                                             "side": setup.side if setup else 0, "age_min": round(age_min, 1)}
+                    if setup is None:
+                        continue
+                    if age_min > settings.swing_signal_max_age_minutes:
+                        log.info("swing_signal_stale", symbol=sym, strategy=setup.strategy, age_min=round(age_min))
+                        continue
+                    st = states.get(sym.lower())
+                    price = st.current_price if st is not None and st.current_price > 0 else setup.close
+                    sig = sb.to_signal(setup, price, now)
+                    if sig is None:
+                        log.info("swing_signal_stop_too_wide", symbol=sym, strategy=setup.strategy)
+                        continue
+                    self._pending_swing.append(sig)
+                    log.info("swing_signal", symbol=sym, strategy=setup.strategy, side=sig.direction,
+                             price=price, stop=sig.stop_loss, target=sig.target_price)
+        except Exception:
+            log.exception("swing_scan_failed")
+
+    async def _open_swing_signals(self, cstate, cycle, cfg, now, pcfg, repo, states) -> None:
+        """Open queued swing signals: one position per coin, at most swing_max_open, sized so a stop-out
+        costs the adaptive risk share of the wallet at the lowest leverage the free margin allows."""
+        if not self._pending_swing:
+            return
+        from analysis import swing_book as sb
+        from analysis.paper_cycle import fees_for, spec_for, stop_out_costs
+        from analysis.paper_trading import Side, open_position
+        sigs = list(self._pending_swing)
+        self._pending_swing.clear()
+        closed = sorted([t for t in await repo.get_cycle_trades(cycle.id)
+                         if str(getattr(t, "signal_type", "")).startswith("swing_")],
+                        key=lambda t: t.closed_at)
+        dd, streak = sb.book_state(closed)
+        open_syms = {p.symbol for p in cstate.positions}
+        n_swing = sum(1 for p in cstate.positions if getattr(p, "trade_mode", "") == "swing")
+        for sig in sigs:
+            log_id = await self._log_signal(sig)
+            if sig.symbol in open_syms:
+                await self._mark_skipped(log_id, "already_open_in_symbol")
+                continue
+            if n_swing >= settings.swing_max_open:
+                await self._mark_skipped(log_id, "swing_book_full")
+                continue
+            st = states.get(sig.symbol)
+            price = st.current_price if st is not None and st.current_price > 0 else sig.current_price
+            side = 1 if sig.direction == "long" else -1
+            dist = abs(sig.current_price - sig.stop_loss)
+            stop, target = price - side * dist, price + side * sb.REWARD_RISK * dist
+            equity = cstate.wallet + sum(p.margin for p in cstate.positions)
+            risk = sb.adaptive_risk(settings.swing_risk_pct, dd, streak)
+            sized = sb.size(equity, cstate.wallet, risk, price, stop, stop_out_costs(sig.symbol, cfg),
+                            settings.swing_max_leverage)
+            if sized is None:
+                await self._mark_skipped(log_id, "no_free_margin")
+                continue
+            margin, leverage = sized
+            spec = spec_for(sig.symbol)
+            pos = open_position(
+                symbol=sig.symbol, side=Side.LONG if side > 0 else Side.SHORT, entry_price=price,
+                margin=margin, leverage=leverage, fees=fees_for(sig.symbol),
+                stop_pct_of_margin=cfg.stop_pct_of_margin, reward_risk=sb.REWARD_RISK,
+                stop_price=stop, target_price=target, opened_at=now, signal_type=sig.signal_type,
+                timeframe=sig.timeframe, confidence=sig.confidence,
+                expires_at=now + timedelta(minutes=settings.swing_hold_minutes),
+                usdt_inr=pcfg.usdt_inr, lot_step=spec.lot_step, slippage=cfg.slippage, trade_mode="swing")
+            if pos.coin_qty <= 0:
+                await self._mark_skipped(log_id, "below_one_lot")
+                continue
+            cstate.wallet -= pos.margin
+            row = await repo.open_position_atomic(cycle.id, pos, cstate.wallet)
+            risk_pct = abs(price - stop) / price * 100
+            await repo.add_trade_events([_event(
+                pos, cycle.id, now, "opened", "entry", new=f"{price:.6g}",
+                note=(f"SWING {pos.side.value} {sig.signal_type} · stop {stop:.6g} ({risk_pct:.2f}% away, 3xATR 4h) · "
+                      f"target {target:.6g} (3R) · {leverage:.1f}x · margin {pos.margin:.0f} · "
+                      f"risking {risk * 100:.2f}% of the wallet (book drawdown {dd * 100:.0f}%, losing streak {streak}) · "
+                      f"closes only at stop, target or after 7 days"))])
+            cstate.position_ids[len(cstate.positions)] = row.id
+            cstate.positions.append(pos)
+            open_syms.add(sig.symbol)
+            n_swing += 1
+            log.info("swing_trade_opened", symbol=pos.symbol, side=pos.side.value, strategy=sig.signal_type,
+                     margin=round(pos.margin, 2), leverage=round(leverage, 2), risk_pct=round(risk * 100, 2))
+            if pcfg.alert_telegram:
+                arrow = "LONG 🟢" if side > 0 else "SHORT 🔴"
+                await self.notifier.send_text(
+                    f"📝 <b>Swing Trade Opened</b> ({sig.signal_type.replace('swing_', '')})\n"
+                    f"<b>{pos.symbol.upper()}</b> · {arrow}\n"
+                    f"Entry <b>${price:,.4f}</b> · Stop <b>${stop:,.4f}</b> · Target <b>${target:,.4f}</b>\n"
+                    f"Risk {risk * 100:.2f}% of wallet · {leverage:.1f}x · closes at stop, target or 7 days",
+                    parse_mode=ParseMode.HTML)
 
     async def _log_signal(self, sig, suppressed_by: str = "", **extra) -> int:
         """
@@ -2612,6 +2755,14 @@ class AppRunner:
             id="coindcx_poll",
             max_instances=1,
             next_run_time=datetime.now(UTC),
+        )
+        self.scheduler.add_job(
+            self._swing_scan_job,
+            "interval",
+            seconds=settings.swing_scan_seconds,
+            id="swing_scan",
+            max_instances=1,
+            next_run_time=datetime.now(UTC) + timedelta(seconds=45),
         )
         self.scheduler.add_job(
             self._klines_job,

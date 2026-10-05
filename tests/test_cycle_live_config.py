@@ -132,3 +132,13 @@ async def test_the_cycles_own_wallet_and_target_are_never_overridden_by_live_con
             assert cycle.target_wallet == target_with
 
     await engine.dispose()
+
+
+@pytest.fixture(autouse=True)
+def _intraday_book_may_trade():
+    """These tests exercise the intraday paper path itself. Since the swing book became the default
+    trading book (settings.paper_open_families = "swing"), intraday signals are shadow-only unless
+    a caller opts back in, which is what these tests do."""
+    from config.settings import settings
+    with patch.object(settings, "paper_open_families", "all"), patch.object(settings, "swing_enabled", False):
+        yield

@@ -192,3 +192,13 @@ async def test_a_stale_signal_is_still_explained_even_though_reprice_signal_null
 
 if __name__ == "__main__":
     unittest.main()
+
+
+@pytest.fixture(autouse=True)
+def _intraday_book_may_trade():
+    """These tests exercise the intraday paper path itself. Since the swing book became the default
+    trading book (settings.paper_open_families = "swing"), intraday signals are shadow-only unless
+    a caller opts back in, which is what these tests do."""
+    from config.settings import settings
+    with patch.object(settings, "paper_open_families", "all"), patch.object(settings, "swing_enabled", False):
+        yield

@@ -367,6 +367,8 @@ def resolve_at_price(
     hit = resolve_candle(pos, high=price, low=price, close=price, ts=now,
                          slippage=cfg.slippage)
     if hit is None:
+        if getattr(pos, "trade_mode", "") == "swing":
+            return None      # swing positions keep their tested stop and target untouched
         fees = fees_for(pos.symbol)
         # Ladder first: it can only raise the stop, and a rung crossed on this
         # tick should protect the position from the next one onward.

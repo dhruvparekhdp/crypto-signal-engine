@@ -21,6 +21,8 @@ _cpu_prev = [None]
 
 
 def cpu_pct():
+    if not Path("/proc/stat").exists():
+        return None
     with open("/proc/stat") as f:
         v = list(map(int, f.readline().split()[1:8]))
     idle, tot = v[3] + v[4], sum(v)
@@ -31,7 +33,15 @@ def cpu_pct():
     return round(100 * (1 - di / dt), 0) if dt else None
 
 
+_mac_cache = {"t": 0.0, "v": None}
+
+
 def machine():
+    if not Path("/proc/stat").exists():          # macOS: reuse the stats code the pusher uses, cached for 10 seconds
+        if time.time() - _mac_cache["t"] > 10 or _mac_cache["v"] is None:
+            from scripts.statpush import stats
+            _mac_cache.update(t=time.time(), v=stats(os.uname().nodename.split(".")[0]))
+        return dict(_mac_cache["v"])
     mem = {l.split(":")[0]: int(l.split()[1]) for l in open("/proc/meminfo")}
     out = {"name": os.uname().nodename, "cpu_pct": cpu_pct(), "load": open("/proc/loadavg").read().split()[0],
            "ram_used_gb": round((mem["MemTotal"] - mem["MemAvailable"]) / 1048576, 1),

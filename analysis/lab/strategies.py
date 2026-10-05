@@ -412,6 +412,28 @@ def combine(ids: list[str], mode: str = "any", k: int = 2) -> Callable[[Bars, di
     return fn
 
 
+# ------------------------------------------------------- mirrors and ensembles
+def _register_mirrors_and_votes():
+    """Every strategy also runs backwards ("mirror"), and a few ensembles trade only when several agree.
+    A strategy and its mirror share costs exactly, so any difference between them is the signal itself."""
+    for sid in [k for k in list(REGISTRY) if k != "random"]:
+        base = REGISTRY[sid]
+        REGISTRY[f"mirror_{sid}"] = Strategy(
+            f"mirror_{sid}", f"Mirror: {base.name}", base.family, "custom",
+            f"{base.name} traded in the opposite direction (the live engine's 'mirror' idea).",
+            (lambda b, p, _f=base.fn: -_f(b, p)), dict(base.defaults), dict(base.grid), base.tf)
+    trend = ["donchian", "keltner_break", "vol_breakout", "ichimoku", "ema_cross"]
+    for sid, name, ids, mode, k in (
+            ("vote2_trend", "Two of five trend strategies agree", trend, "vote", 2),
+            ("vote3_trend", "Three of five trend strategies agree", trend, "vote", 3),
+            ("first_trend", "First trend strategy to fire", trend, "any", 1)):
+        REGISTRY[sid] = Strategy(sid, name, "meta", "custom", f"{name}; each member uses its default settings.",
+                                 combine(ids, mode, k), {}, {}, "4h")
+
+
 def catalog() -> list[dict]:
     return [{"id": s.id, "name": s.name, "family": s.family, "source": s.source, "desc": s.desc,
              "tf": s.tf, "params": s.defaults, "grid": s.grid} for s in REGISTRY.values()]
+
+
+_register_mirrors_and_votes()

@@ -33,10 +33,13 @@ class WalletConfig:
     pause_hours: float = 2.0
     symbol_cooldown_min: int = 0
     reset: bool = True
+    risk_mode: str = "fixed"           # fixed | adaptive: cut risk in drawdowns and after losing streaks
+    dd_brake: tuple = ((0.10, 0.75), (0.20, 0.5))
+    streak_brake: int = 3
 
     def label(self) -> str:
         if self.sizing == "risk_pct":
-            return f"risk{self.risk_pct:.3f}_lev{self.leverage:g}_c{self.max_concurrent}"
+            return f"risk{self.risk_pct:.3f}{'a' if self.risk_mode == 'adaptive' else ''}_lev{self.leverage:g}_c{self.max_concurrent}"
         return f"{self.sizing}_lev{self.leverage:g}_c{self.max_concurrent}"
 
 
@@ -154,8 +157,13 @@ def run_wallet(trades: pd.DataFrame, cfg: WalletConfig) -> WalletResult:
         if free < cfg.bust_below:
             skip("no_free_margin"); continue
         sf = float(row.stop_frac)
+        risk = cfg.risk_pct
+        if cfg.risk_mode == "adaptive":
+            dd = 1 - bal / max(cycle["peak"], 1e-9)
+            f_dd = min([m for l, m in cfg.dd_brake if dd >= l] or [1.0])
+            risk = cfg.risk_pct * f_dd * (0.5 if streak >= cfg.streak_brake else 1.0)
         if cfg.sizing == "risk_pct":
-            notional = bal * cfg.risk_pct / sf
+            notional = bal * risk / sf
         elif cfg.sizing == "margin_pct":
             notional = bal * cfg.margin_pct * cfg.leverage
         else:

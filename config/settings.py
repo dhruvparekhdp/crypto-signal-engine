@@ -161,6 +161,20 @@ class Settings(BaseSettings):
     # Profit lock (the owner's exit): once price moves this % in favour, the
     # stop jumps to lock_to % beyond entry (never less than costs), then
     # trails trail % behind the best price. analysis.paper_trading.ProfitLock.
+    # Swing book (analysis/swing_book.py): the 4h strategies that survived the 5-year test, traded with
+    # exactly the tested exits (3xATR stop, 3R target, 7 days). paper_open_families decides which signal
+    # families may open paper trades; the rest are logged as shadow signals only.
+    swing_enabled: bool = True
+    swing_strategies: str = "vol_breakout:z=3.0,keltner_break:k=2.5,donchian:n=100,ichimoku"
+    swing_scan_seconds: int = 300
+    swing_risk_pct: float = 0.01
+    swing_max_open: int = 4
+    swing_max_leverage: float = 3.0
+    swing_hold_minutes: int = 10080
+    swing_signal_max_age_minutes: int = 60
+    paper_open_families: str = "swing"
+    # The 60-minute "flat or losing -> close" rule cut trades at small losses; off unless asked for.
+    smart_60m_enabled: bool = False
     profit_lock_enabled: bool = True
     profit_lock_at_pct: float = 0.5
     profit_lock_to_pct: float = 0.35
