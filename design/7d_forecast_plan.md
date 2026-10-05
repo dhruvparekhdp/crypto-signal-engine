@@ -158,3 +158,22 @@ It is informational only: the swing book does not use it. Using it as a trade fi
 2. API spend: free tiers only, or a small paid budget for the reviewer?
 3. Is the leakage approach (post-cutoff window plus anonymisation) OK?
 4. Start phase 1 now (no AI needed), with AI prompt work when the ThinkPad is connected?
+
+## Decisions (2026-10-05)
+
+- **Coins: BTC, ETH, SOL, XRP, DOGE.** These are the top 5 by futures volume over the last 12 months, and all are volatile (45–73% a year). SOL and DOGE also have the best results per trade in the live strategies. SUI is next in line if we want more volatility.
+- **APIs:** free tiers until the proof of concept works; paid when we start trading. No extra keys from family accounts: Groq, OpenRouter and Gemini forbid using several accounts to get round rate limits, and they ban all linked keys together. Instead:
+  - spread the calls across providers;
+  - cache results and make fewer calls;
+  - use the ThinkPad's local models.
+- **Leakage approach: approved.** Examples:
+  - *Memory:* given "BTC, 2022-11-07, price 20,900", a model may "predict" a crash because it remembers the FTX collapse. That would be recall, not skill.
+    - Fix 1: anonymise the input to "Coin A, day 0, price rebased to 100", with returns, volatility, funding and so on as plain numbers.
+    - Fix 2: only score forecast dates after the model's training cutoff.
+  - *Search sees the future:* a backtest at 2025-03-01 with web search on could read a 2025-03-05 article.
+    - Fix: no search in backtests. News comes only from headlines we archived at the time, filtered so that `published_at` is before the forecast time.
+  - *Hindsight in our own data:* an indicator that uses the current, unfinished daily bar, or volatility estimated on the whole sample.
+    - Fix: every input is computed from bars that had closed before the forecast time and frozen in a snapshot. A test rebuilds a snapshot from a truncated lake and checks it matches.
+  - *Prompt overfitting:* tuning a prompt until it scores well on the same period it is tested on.
+    - Fix: tune on a dev window (2025 H1); the frozen test window (2025 H2 – 2026) is scored once per prompt version.
+- **Order of work:** phase 1 (maths forecast and its 5-year backtest) now. The AI prompt rework also starts now, because the current AI calls benefit from it too.
