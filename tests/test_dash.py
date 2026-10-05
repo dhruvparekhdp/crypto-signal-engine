@@ -55,3 +55,35 @@ class TestDashRobustness(unittest.TestCase):
                 self.assertEqual(dash.banner_view()["title"], "x")
             finally:
                 dash.ROOT = old
+
+
+class TestBacktestProgress(unittest.TestCase):
+    LOG = ["lab: 66 strategies x 12 symbols, exec=1m, cost=india_gst",
+           "  BTCUSDT done (300s)", "  ETHUSDT done (300s)", "  SOLUSDT done (600s)"]
+
+    def test_a_running_grid_reports_coins_done_of_total_and_an_eta(self):
+        from scripts import dash
+        p = dash.run_progress(self.LOG, "running", 650)
+        self.assertEqual((p["done"], p["total"], p["strategies"]), (3, 12, 66))
+        self.assertEqual(p["pct"], 25.0)
+        self.assertAlmostEqual(p["eta_s"], 600 / 3 * 12 - 650)
+        self.assertEqual([c["symbol"] for c in p["coins"]], ["BTC", "ETH", "SOL"])
+
+    def test_a_finished_run_is_100_percent_with_its_trade_count(self):
+        from scripts import dash
+        p = dash.run_progress(self.LOG + ["1,119,177 trades in 1196s -> data/lab/runs/x"], "done", 1196)
+        self.assertEqual((p["pct"], p["trades"]), (100.0, 1119177))
+        self.assertNotIn("eta_s", p)
+
+    def test_overall_counts_a_running_job_by_its_own_progress(self):
+        from scripts import dash
+        jobs = [{"state": "done", "progress_pct": 100, "progress": {"trades": 10}},
+                {"state": "running", "progress_pct": 50, "progress": {"eta_s": 120}}]
+        o = dash.overall(jobs)
+        self.assertEqual((o["pct"], o["eta_s"], o["trades"], o["running"]), (75.0, 120, 10, 1))
+
+    def test_jobs_get_plain_titles(self):
+        from scripts import dash
+        self.assertEqual(dash._describe("x", "python -m scripts.run_lab --tf 8h --null-trials 30")[1],
+                         "8h null test: do the strategies beat random entries?")
+        self.assertEqual(dash._describe("x", "python -m pytest -q")[0], "tests")

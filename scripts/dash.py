@@ -71,6 +71,51 @@ def progress_from_log(lines):
     return done
 
 
+def _describe(name: str, cmd: str) -> tuple[str, str]:
+    """(kind, plain-English title) for a job, from its command line."""
+    tf = re.search(r"--tf (\w+)", cmd)
+    tf = tf.group(1) if tf else ""
+    if "pytest" in cmd:
+        return "tests", "Full test suite"
+    if "portfolio_wallet" in cmd:
+        m = re.search(r"--months (\d+)", cmd)
+        return "wallet", f"25 USDT wallet simulation, {m.group(1) if m else '?'}-month horizon"
+    if "breakdown" in cmd:
+        return "report", "Breakdown by year / coin / side"
+    if "run_lab" in cmd:
+        if "--null-trials" in cmd:
+            return "backtest", f"{tf} null test: do the strategies beat random entries?"
+        if "--cost stress" in cmd or "stress" in name:
+            return "backtest", f"{tf} stress test: 2.5x worse slippage"
+        if "--grid" in cmd:
+            return "backtest", f"{tf} grid search: every strategy x setting x exit"
+        return "backtest", f"{tf} backtest"
+    return "other", name
+
+
+def run_progress(lines: list[str], state: str, elapsed: float) -> dict:
+    """Detailed progress of a scripts.run_lab log: coins done of total, per-coin times, ETA and the result."""
+    head = next((re.search(r"lab: (\d+) strategies x (\d+) symbols", l) for l in lines if l.startswith("lab: ")), None)
+    coins = [(m.group(1), int(m.group(2))) for l in lines if (m := re.search(r"^\s+([A-Z0-9]+USDT) done \((\d+)s\)", l))]
+    total = int(head.group(2)) if head else None
+    out = {"strategies": int(head.group(1)) if head else None, "total": total, "done": len(coins),
+           "coins": [{"symbol": c.replace("USDT", ""), "at_s": t} for c, t in coins]}
+    fin = next((re.search(r"([\d,]+) trades in (\d+)s", l) for l in reversed(lines) if " trades in " in l), None)
+    if fin:
+        out["trades"] = int(fin.group(1).replace(",", ""))
+    if total:
+        frac = len(coins) / total
+        if state == "done":
+            frac = 1.0
+        out["pct"] = round(100 * frac, 1)
+        if state == "running" and coins and len(coins) < total:
+            last = coins[-1][1]
+            out["eta_s"] = max(0, last / len(coins) * total - elapsed)
+    if state == "running" and coins and len(coins) == total and not fin:
+        out["phase"] = "all coins done, scoring the results"
+    return out
+
+
 def job_view(st, logdir):
     log = Path(logdir) / f"{st['name']}.log"
     lines = tail(log, 400)
@@ -82,11 +127,34 @@ def job_view(st, logdir):
     passed = re.findall(r"(\d+) passed", raw)
     failed = re.findall(r"(\d+) failed", raw)
     failures = [l for l in lines if l.startswith("FAILED ")][-12:]
-    return {"name": st["name"], "host": st.get("host"), "state": "stalled?" if stale else st["state"],
-            "elapsed_s": round(now - st["started"]), "symbols_done": progress_from_log(lines),
-            "tail": lines[-8:], "cmd": st.get("cmd", "")[:160], "kind": "tests" if "pytest" in st.get("cmd", "") else "backtest",
+    kind, title = _describe(st["name"], st.get("cmd", ""))
+    elapsed = round(now - st["started"])
+    state = "stalled?" if stale else st["state"]
+    prog = run_progress(lines, st["state"], elapsed) if kind == "backtest" else {}
+    if kind == "tests":
+        p = 100 if st["state"] == "done" else (pct[-1] if pct else 0)
+    elif kind == "backtest":
+        p = prog.get("pct", 100 if st["state"] == "done" else 0)
+    else:
+        p = 100 if st["state"] in ("done", "failed") else None
+    errors = [l for l in lines if re.search(r"Error|Traceback|Killed", l)][-4:]
+    return {"name": st["name"], "title": title, "host": st.get("host"), "state": state,
+            "elapsed_s": elapsed, "started": st["started"], "finished": st.get("finished"),
+            "symbols_done": progress_from_log(lines), "progress": prog, "progress_pct": p,
+            "tail": lines[-8:], "cmd": st.get("cmd", "")[:160], "kind": kind,
+            "exit_code": st.get("exit_code"), "errors": errors,
             "pct": pct[-1] if pct else None, "passed": int(passed[-1]) if passed else None,
             "failed": int(failed[-1]) if failed else (0 if passed else None), "failures": failures}
+
+
+def overall(jobs: list[dict]) -> dict:
+    """One number for 'how much is finished': each job counts equally, a running job by its own progress."""
+    n = len(jobs)
+    by = {k: sum(j["state"] == k for j in jobs) for k in ("running", "done", "failed", "stalled?")}
+    frac = sum((1.0 if j["state"] in ("done", "failed") else (j.get("progress_pct") or 0) / 100) for j in jobs)
+    etas = [j["progress"].get("eta_s") for j in jobs if j["state"] == "running" and j.get("progress", {}).get("eta_s")]
+    return {"jobs": n, **by, "pct": round(100 * frac / n, 1) if n else None, "eta_s": max(etas) if etas else None,
+            "trades": sum(j.get("progress", {}).get("trades") or 0 for j in jobs)}
 
 
 def load_jobs():
@@ -328,7 +396,8 @@ def state():
         except Exception:  # noqa: BLE001 - each section fails on its own, never the whole page
             return default
 
-    return {"now": time.time(), "machines": machines, "jobs": safe(load_jobs, []),
+    jobs = safe(load_jobs, [])
+    return {"now": time.time(), "machines": machines, "jobs": jobs, "overall": safe(lambda: overall(jobs), {}),
             "ai": safe(ai_view, []) + safe(work_view, []), "results": safe(results_view, []),
             "noai": safe(noai_view, {"wallet": {}, "breakdown": {}, "timeframes": []}), "banner": safe(banner_view, None)}
 
@@ -355,7 +424,8 @@ class H(BaseHTTPRequestHandler):
         elif self.path.startswith("/worker.py"):
             body, ct = (here / "work_worker.py").read_bytes(), "text/x-python"
         else:
-            body, ct = PAGE.encode(), "text/html; charset=utf-8"
+            page = here / "dash.html"                # read per request so page edits show without a restart
+            body, ct = (page.read_bytes() if page.exists() else PAGE.encode()), "text/html; charset=utf-8"
         self.send_response(200)
         self.send_header("Content-Type", ct)
         self.send_header("Cache-Control", "no-store")

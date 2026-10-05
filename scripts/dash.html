@@ -1,53 +1,64 @@
 <!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Lab Monitor</title>
 <style>
-:root{--bg:#0f141a;--card:#18202a;--fg:#e8edf3;--mut:#8ea0b3;--line:#263241;--ok:#4cc38a;--warn:#e8b04b;--bad:#ef6f6c;--acc:#5bb6e8}
-@media (prefers-color-scheme:light){:root{--bg:#f3f5f8;--card:#fff;--fg:#17202b;--mut:#5b6776;--line:#dde1e7;--ok:#1f7a4d;--warn:#a86a00;--bad:#b4332d;--acc:#0b6fa8}}
-*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--fg);font:15px/1.45 system-ui,-apple-system,Segoe UI,sans-serif;padding:14px 16px 40px}
-h1{font-size:18px;margin:0 0 2px}h2{font-size:12px;letter-spacing:.08em;text-transform:uppercase;color:var(--mut);margin:20px 0 8px}
-.sub{color:var(--mut);font-size:12px}.card{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:12px;margin-bottom:10px;min-width:0}
+:root{--bg:#0f141a;--card:#18202a;--fg:#e8edf3;--mut:#8ea0b3;--line:#263241;--ok:#4cc38a;--warn:#e8b04b;--bad:#ef6f6c;--acc:#5bb6e8;--soft:#22303e}
+@media (prefers-color-scheme:light){:root{--bg:#f3f5f8;--card:#fff;--fg:#17202b;--mut:#5b6776;--line:#dde1e7;--ok:#1f7a4d;--warn:#a86a00;--bad:#b4332d;--acc:#0b6fa8;--soft:#eef1f5}}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--fg);font:15px/1.5 system-ui,-apple-system,Segoe UI,sans-serif;padding:14px 16px 60px;max-width:1100px;margin:0 auto}
+h1{font-size:20px;margin:0 0 2px}h2{font-size:13px;letter-spacing:.08em;text-transform:uppercase;color:var(--mut);margin:26px 0 8px;display:flex;gap:8px;align-items:center}
+h2 .num{background:var(--acc);color:var(--bg);border-radius:99px;width:20px;height:20px;display:inline-flex;align-items:center;justify-content:center;font-size:11px}
+.sub{color:var(--mut);font-size:12.5px}.card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:14px;margin-bottom:10px;min-width:0}
 .row{display:flex;gap:8px;align-items:center;justify-content:space-between;flex-wrap:wrap}.mono{font-family:ui-monospace,Menlo,monospace;font-size:12px}
-.pill{font-size:11px;font-weight:700;padding:2px 8px;border-radius:99px}.running{background:#1d3a52;color:var(--acc)}.done{background:#173a2b;color:var(--ok)}.failed,.stalled\?,.waitingforworkers{background:#40201f;color:var(--bad)}
-.bar{height:7px;background:var(--line);border-radius:5px;overflow:hidden;margin:8px 0 4px}.bar i{display:block;height:100%;background:var(--acc)}
-.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:8px}.k{color:var(--mut);font-size:11px}.v{font-size:20px;font-weight:700}
-pre{margin:6px 0 0;padding:8px;background:var(--bg);border-radius:6px;overflow-x:auto;font-size:11px;color:var(--mut);max-height:150px}
-table{width:100%;border-collapse:collapse;font-size:12px}td,th{padding:4px 6px;text-align:left;border-bottom:1px solid var(--line)}th{color:var(--mut);font-weight:600}td.n{text-align:right;font-variant-numeric:tabular-nums}
-.pos{color:var(--ok)}.neg{color:var(--bad)}.wrap{overflow-x:auto}
+.pill{font-size:11px;font-weight:700;padding:2px 9px;border-radius:99px;white-space:nowrap}.running{background:#1d3a52;color:var(--acc)}.done{background:#173a2b;color:var(--ok)}.failed,.stalled\?,.waitingforworkers{background:#40201f;color:var(--bad)}
+@media (prefers-color-scheme:light){.running{background:#dcefff}.done{background:#dff3e8}.failed,.stalled\?,.waitingforworkers{background:#fbe3e2}}
+.bar{height:8px;background:var(--line);border-radius:5px;overflow:hidden;margin:8px 0 4px}.bar i{display:block;height:100%;background:var(--acc);transition:width .6s}
+.bar.big{height:16px;border-radius:8px}.bar.big i{background:linear-gradient(90deg,var(--acc),var(--ok))}
+.segs{display:flex;gap:3px;margin:8px 0 4px}.segs span{flex:1;height:10px;border-radius:3px;background:var(--line)}
+.segs .s-done{background:var(--ok)}.segs .s-failed{background:var(--bad)}.segs .s-running{background:var(--acc);animation:pulse 1.4s infinite}
+@keyframes pulse{50%{opacity:.45}}
+.coins{display:flex;flex-wrap:wrap;gap:4px;margin-top:6px}.coin{font-size:10.5px;padding:1px 6px;border-radius:5px;background:var(--soft);color:var(--mut)}.coin.ok{background:#173a2b;color:var(--ok)}
+@media (prefers-color-scheme:light){.coin.ok{background:#dff3e8}}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px}.k{color:var(--mut);font-size:11.5px}.v{font-size:22px;font-weight:700;line-height:1.2}
+.kpi{background:var(--soft);border-radius:10px;padding:10px 12px}.kpi .sub{margin-top:2px}
+.charts{display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:10px}
+pre{margin:6px 0 0;padding:8px;background:var(--bg);border-radius:6px;overflow-x:auto;font-size:11px;color:var(--mut);max-height:170px}
+table{width:100%;border-collapse:collapse;font-size:12.5px}td,th{padding:5px 6px;text-align:left;border-bottom:1px solid var(--line)}th{color:var(--mut);font-weight:600}td.n,th.n{text-align:right;font-variant-numeric:tabular-nums}
+.pos{color:var(--ok)}.neg{color:var(--bad)}.warn{color:var(--warn)}.wrap{overflow-x:auto}
+details>summary{cursor:pointer;list-style:none}details>summary::-webkit-details-marker{display:none}
+details>summary:before{content:'▸ ';color:var(--mut)}details[open]>summary:before{content:'▾ '}
+.ledger>summary:before{display:none}
+svg text{fill:var(--mut);font-size:10px;font-family:system-ui,sans-serif}
+.legend{display:flex;gap:12px;flex-wrap:wrap;font-size:11.5px;color:var(--mut);margin-top:4px}.legend i{display:inline-block;width:10px;height:10px;border-radius:2px;margin-right:4px;vertical-align:-1px}
+.hb{display:grid;grid-template-columns:minmax(80px,34%) 1fr 64px;gap:6px;align-items:center;font-size:12px;margin:3px 0}.hb .t{height:14px;background:var(--soft);border-radius:3px;position:relative;overflow:hidden}
+.hb .t i{position:absolute;top:0;bottom:0;border-radius:3px}.hb .lbl{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.heat td{text-align:center;font-variant-numeric:tabular-nums;border:2px solid var(--card);border-radius:4px}
+.tabs{display:flex;gap:6px;flex-wrap:wrap;margin:4px 0 10px}.tabs button{background:var(--soft);color:var(--fg);border:1px solid var(--line);border-radius:99px;padding:4px 12px;font-size:12px;cursor:pointer}
+.tabs button.on{background:var(--acc);color:var(--bg);border-color:var(--acc)}
+.say{font-size:14px;margin:2px 0 8px}
 </style></head><body>
 <h1>Lab Monitor</h1><div class="sub" id="upd">loading…</div>
 <div id="banner"></div>
-<h2>Machines</h2><div id="mach"></div>
-<h2>1 · Without AI: what the rules alone did</h2><div id="noai"></div>
-<h2>2 · With AI vs without (local models, outcomes hidden from the model)</h2><div id="gate"></div>
-<h2>AI review queue (explaining finished trades)</h2><div id="ai"></div>
-<h2>Test runs</h2><div id="tests"></div>
-<h2>Backtest jobs</h2><div id="jobs"></div>
-<h2>Best results so far</h2><div id="res"></div>
+<h2><span class="num">1</span>Backtest progress</h2><div id="progress"></div>
+<h2><span class="num">2</span>What the backtests found (no AI)</h2><div id="find"></div>
+<h2><span class="num">3</span>25 → 100 USDT wallet, one start every month</h2><div id="wallet"></div>
+<h2><span class="num">4</span>Where the profit comes from</h2><div id="where"></div>
+<h2><span class="num">5</span>With AI vs without (paused)</h2><div id="gate"></div><div id="ai"></div>
+<h2><span class="num">6</span>Machines &amp; test suite</h2><div id="mach"></div><div id="tests"></div>
+<h2><span class="num">7</span>Raw results tables</h2><div id="res"></div>
 <script>
 const fmt=s=>{s=Math.round(s);const h=Math.floor(s/3600),m=Math.floor(s%3600/60);return h?`${h}h ${m}m`:`${m}m ${s%60}s`};
-const esc=t=>String(t??'').replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
+const esc=t=>String(t??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const big=n=>n==null?'–':n>=1e6?(n/1e6).toFixed(1)+'M':n>=1e3?(n/1e3).toFixed(0)+'k':String(Math.round(n));
+const clock=t=>t?new Date(t*1000).toLocaleString([], {month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'}):'';
+const css=v=>getComputedStyle(document.documentElement).getPropertyValue(v).trim();
+const STRAT={vol_breakout:'Volatility breakout',keltner_break:'Keltner breakout',donchian:'Donchian breakout',ichimoku:'Ichimoku'};
+const sname=s=>STRAT[s]||s;
 function mach(m){const warn=(m.temp_c>85)||(m.ac===false&&m.battery_pct<25);
 return `<div class="card"><div class="row"><b>${esc(m.name)}</b><span class="sub">${m.age_s!=null?'updated '+m.age_s+'s ago':'this server'}</span></div>
 <div class="grid"><div><div class="k">CPU</div><div class="v">${m.cpu_pct??'–'}%</div></div><div><div class="k">RAM</div><div class="v">${m.ram_used_gb}/${m.ram_total_gb}G</div></div>
 <div><div class="k">Temp</div><div class="v ${m.temp_c>85?'neg':''}">${m.temp_c??'–'}°C</div></div>
 <div><div class="k">Power</div><div class="v ${warn?'neg':''}">${m.ac===undefined?'–':(m.ac?'plugged':'battery')} ${m.battery_pct!=null?m.battery_pct+'%':''}</div></div></div></div>`}
-const _open=new Set(),_ledgers={};
-function wdetail(rows){if(!rows||!rows.length)return '';
-return `<div class="card"><div class="k">Full wallet history, live 4h + 8h book: every monthly start, expand a start for its trade-by-trade ledger</div>${rows.map(r=>{const id=`wd-${r.months}-${r.i}`;
-return `<details id="${id}" ${_open.has(id)?'open':''} ontoggle="_tog(this)"><summary><b>${esc(r.label)}</b> · ${r.months} months · ${r.n} starts · <span class="pos">${r.hit} hit 100</span> · <span class="neg">${r.bust} bust</span> · median end ${num(r.median_end,1)}</summary>
-<div class="wrap"><table><tr><th>start</th><th>result</th><th>end</th><th>peak</th><th>trades</th><th>days</th><th>worst DD</th></tr>${r.starts.map(x=>{const lid=`${id}-${x.start}`;
-return `<tr><td colspan="7" style="padding:0"><details id="${lid}" ${_open.has(lid)?'open':''} ontoggle="_tog(this,${r.months},${r.i},'${x.start}')"><summary style="display:grid;grid-template-columns:repeat(7,1fr);gap:6px;padding:4px 6px;font-size:12px"><span>${x.start}</span><span class="${x.status==='TARGET'?'pos':x.status==='BUST'?'neg':''}">${x.status==='TARGET'?'hit 100':x.status==='BUST'?'bust':'still going'}</span><span>${num(x.end,1)}</span><span>${num(x.peak,1)}</span><span>${x.trades}</span><span>${Math.round(x.days)}</span><span>${Math.round(x.dd*100)}%</span></summary><div class="ledger" id="L-${lid}">${_ledgers[lid]||'<div class="sub">loading…</div>'}</div></details></td></tr>`}).join('')}</table></div></details>`}).join('')}</div>`}
-async function _tog(el,m,i,start){if(el.open)_open.add(el.id);else _open.delete(el.id);
- if(el.open&&m!==undefined&&!_ledgers[el.id]){try{const L=await (await fetch(`/api/wallet_ledger?months=${m}&i=${i}&start=${start}`)).json();
- _ledgers[el.id]=L.length?`<table><tr><th>closed</th><th>coin</th><th>side</th><th>strategy</th><th>exit</th><th>size</th><th>P&amp;L</th><th>balance</th></tr>${L.map(t=>`<tr><td>${esc(t.t)}</td><td>${esc((t.symbol||'').replace('USDT',''))}</td><td>${esc(t.side)}</td><td>${esc(t.strategy)}</td><td>${esc(t.exit)}</td><td class="n">${num(t.notional,1)}</td><td class="n ${cls(t.pnl)}">${num(t.pnl,2)}</td><td class="n">${num(t.balance,2)}</td></tr>`).join('')}</table>`:'<div class="sub">no trades</div>';
- const box=document.getElementById('L-'+el.id); if(box)box.innerHTML=_ledgers[el.id];}catch(e){}}}
-function noai(n){if(!n)return '';const w=n.wallet||{},b=n.breakdown||{};
-const tbl=(rows,title)=>!rows||!rows.length?'':`<div class="card"><div class="k">${title}</div><div class="wrap"><table><tr>${rows[0].map(c=>`<th>${esc(c||'')}</th>`).join('')}</tr>${rows.slice(1).map(r=>`<tr>${r.map((c,i)=>`<td class="${i?'n '+(typeof c==='number'&&/R_per|20|0\./.test('x')?'':''):''}">${typeof c==='number'?c:esc(c)}</td>`).join('')}</tr>`).join('')}</table></div></div>`;
-const wal=Object.entries(w).map(([k,rows])=>`<div class="card"><div class="k">25 USDT wallet started at the first of every month, followed for ${k} (the four 4h strategies together, no AI). "hit 100" is the share of start dates that reached 100 USDT.</div><div class="wrap"><table><tr><th>risk</th><th>open at once</th><th>pause after 3 losses</th><th>hit 100</th><th>bust</th><th>still going</th><th>median end</th><th>worst DD</th></tr>${rows.map(r=>`<tr><td class="n">${Math.round(r.risk*100)}%</td><td class="n">${r.concurrent}</td><td class="n">${r.loss_streak_pause?'yes':'no'}</td><td class="n ${r.hit_100>0?'pos':''}">${Math.round(r.hit_100*100)}%</td><td class="n ${r.bust>0?'neg':''}">${Math.round(r.bust*100)}%</td><td class="n">${Math.round(r.still_running*100)}%</td><td class="n ${r.median_end_balance>25?'pos':'neg'}">${num(r.median_end_balance,1)}</td><td class="n">${Math.round(r.worst_dd_pct)}%</td></tr>`).join('')}</table></div></div>`).join('');
-return `${tfs(n.timeframes)}${wdetail(n.wallet_detail)}${wal}${tbl(b.strategy_by_year,'R per trade by strategy and year (negative in red would mean a losing year)')}${tbl(b.by_symbol,'by coin')}${tbl(b.by_side,'longs vs shorts')}${tbl(b.by_strategy,'by strategy')}`}
 function banner(b){if(!b)return '';const icon=s=>({done:'✔',running:'●',paused:'❚❚',waiting:'○',failed:'✖'}[s]||'•');const col=s=>({done:'pos',running:'',paused:'warn',failed:'neg'}[s]||'');
 return `<div class="card"><div class="row"><b>${esc(b.title||'Status')}</b><span class="sub">updated ${esc(b.updated||'')}</span></div>${(b.items||[]).map(i=>`<div class="row" style="padding:5px 0;border-top:1px solid var(--line)"><span><b class="${col(i.state)}">${icon(i.state)} ${esc(i.label)}</b><div class="sub">${esc(i.detail||'')}</div></span><span class="pill ${i.state==='done'?'done':i.state==='running'?'running':'stalled?'}">${esc(i.state)}</span></div>`).join('')}</div>`}
-function tfs(rows){if(!rows||!rows.length)return '';return `<div class="card"><div class="k">Rules-only results by timeframe, every run (all strategies and settings together). Longer bars = costs shrink against the stop = the edge appears.</div><div class="wrap"><table><tr><th>bars</th><th>trades</th><th>settings tested</th><th>positive</th><th>clearly significant*</th><th>gross R</th><th>cost R</th><th>net R</th><th>passed walk-forward**</th></tr>${rows.map(r=>`<tr><td>${esc(r.tf)}</td><td class="n">${(r.trades/1000).toFixed(0)}k</td><td class="n">${r.configs}</td><td class="n ${r.positive/r.configs>.5?'pos':''}">${r.positive}</td><td class="n ${r.bonf_sig?'pos':''}">${r.bonf_sig}</td><td class="n">${num(r.mean_gross,3)}</td><td class="n">${num(r.cost_r,3)}</td><td class="n ${cls(r.mean_net)}"><b>${num(r.mean_net,3)}</b></td><td class="n ${r.wf_positive_strategies?'pos':''}">${r.wf_positive_strategies}/${r.wf_strategies}</td></tr>`).join('')}</table></div><div class="sub">* still significant after correcting for how many settings were tried · ** strategies whose settings, chosen on 12 months, still made money on the next 3 unseen months</div></div>`}
 function pct(x){return x==null?'–':Math.round(x*100)+'%'}
 function num(x,d=2){return x==null?'–':(+x).toFixed(d)}
 function cls(x){return x==null?'':(x>0?'pos':'neg')}
@@ -81,27 +92,159 @@ return `<div class="card"><div class="row"><b>${esc(j.name)}</b><span class="pil
 <div class="sub">${esc(j.host)} · ${fmt(j.elapsed_s)}${j.passed!=null?` · <span class="pos">${j.passed} passed</span>`:''}${j.failed?` · <span class="neg">${j.failed} failed</span>`:''}</div>
 <div class="bar"><i style="width:${pc}%"></i></div><div class="sub">${pc}%</div>
 ${(j.failures||[]).length?`<pre>${esc(j.failures.join('\n'))}</pre>`:''}</div>`}
-function job(j){const n=j.symbols_done;return `<div class="card"><div class="row"><b>${esc(j.name)}</b><span class="pill ${j.state}">${esc(j.state)}</span></div>
-<div class="sub">${esc(j.host)} · elapsed ${fmt(j.elapsed_s)}${n?` · ${n}/12 symbols done`:''}</div>${n?`<div class="bar"><i style="width:${Math.min(100,n/12*100)}%"></i></div>`:''}
-<pre>${esc(j.tail.join('\n'))}</pre></div>`}
-function res(r){const cols=['strategy','params','exit','n','win_rate','expectancy_r','ci_lo','profit_factor','max_dd_r','null_p'];const nl=r.top[0]&&'null_p' in r.top[0];
-const row=x=>`<tr><td>${esc(x.strategy)}<div class="k">${esc((x.params||'').slice(0,26))} ${esc((x.exit||'').slice(0,22))}</div></td><td class="n">${x.n}</td><td class="n">${Math.round(x.win_rate*100)}%</td><td class="n ${x.expectancy_r>0?'pos':'neg'}">${x.expectancy_r}</td><td class="n">${x.ci_lo??''}</td><td class="n">${x.profit_factor}</td><td class="n">${x.max_dd_r??''}</td>${nl?`<td class="n">${x.null_p??''}</td>`:''}</tr>`;
-const head=`<tr><th>strategy</th><th>n</th><th>win</th><th>R/trade</th><th>CI lo</th><th>PF</th><th>max DD (R)</th>${nl?'<th>null p</th>':''}</tr>`;
-return `<div class="card"><div class="row"><b>${esc(r.run)}</b><span class="sub">${r.positive}/${r.configs} configs positive</span></div><div class="wrap"><table>${head}${r.top.slice(0,6).map(row).join('')}</table></div>
-${r.top.length>6?`<details><summary class="sub">all ${r.top.length} shown</summary><div class="wrap"><table>${head}${r.top.slice(6).map(row).join('')}</table></div></details>`:''}</div>`}
+
+
+/* ---------- charts (plain SVG, no libraries, scale to any width) ---------- */
+// vertical bars, negatives supported. items: [{label,value,color,tip}]; refs: [{y,label,color}]
+function vbars(items,{h=170,fmtv=v=>v.toFixed(2),refs=[],every=1,lo=null,hi=null}={}){if(!items.length)return '';
+ const W=Math.max(300,items.length*8),pl=34,pb=26,pt=10,iw=W-pl-6,ih=h-pb-pt;
+ const vals=items.map(i=>i.value).concat(refs.map(r=>r.y));let mn=lo??Math.min(0,...vals),mx=hi??Math.max(0,...vals);if(mx===mn)mx=mn+1;const pad=(mx-mn)*.06;mx+=pad;if(mn<0)mn-=pad;
+ const y=v=>pt+ih*(1-(v-mn)/(mx-mn)),bw=iw/items.length;
+ const ticks=[mn,(mn+mx)/2,mx].map(v=>`<text x="${pl-4}" y="${y(v)+3}" text-anchor="end">${fmtv(Math.abs(v)<1e-9?0:v).replace(/^-0(\.0+)?$/,'0')}</text><line x1="${pl}" x2="${W-6}" y1="${y(v)}" y2="${y(v)}" stroke="${css('--line')}" stroke-dasharray="2 3"/>`).join('');
+ const bars=items.map((it,i)=>{const x=pl+i*bw+bw*.12,y0=y(Math.max(0,it.value)),y1=y(Math.min(0,it.value));
+  return `<rect x="${x}" y="${y0}" width="${bw*.76}" height="${Math.max(1,y1-y0)}" rx="2" fill="${it.color||css('--acc')}"><title>${esc(it.tip||it.label+': '+fmtv(it.value))}</title></rect>`+
+  (i%every===0?`<text x="${x+bw*.38}" y="${h-pb+13}" text-anchor="middle">${esc(it.label)}</text>`:'')}).join('');
+ const rl=refs.map(r=>`<line x1="${pl}" x2="${W-6}" y1="${y(r.y)}" y2="${y(r.y)}" stroke="${r.color}" stroke-width="1.5"/><text x="${W-8}" y="${y(r.y)-3}" text-anchor="end" style="fill:${r.color}">${esc(r.label)}</text>`).join('');
+ return `<svg viewBox="0 0 ${W} ${h}" width="100%" preserveAspectRatio="xMidYMid meet">${ticks}<line x1="${pl}" x2="${W-6}" y1="${y(0)}" y2="${y(0)}" stroke="${css('--mut')}"/>${bars}${rl}</svg>`}
+// line chart. pts: [{x:Date|number,y}], refs as above
+function line(pts,{h=160,refs=[],fmtv=v=>v.toFixed(0)}={}){if(pts.length<2)return '<div class="sub">not enough points</div>';
+ const W=600,pl=34,pb=22,pt=10,iw=W-pl-8,ih=h-pb-pt,xs=pts.map(p=>+p.x),ys=pts.map(p=>p.y).concat(refs.map(r=>r.y));
+ const x0=Math.min(...xs),x1=Math.max(...xs);let mn=Math.min(...ys),mx=Math.max(...ys);const pad=(mx-mn)*.08||1;mn-=pad;mx+=pad;
+ const X=v=>pl+iw*(v-x0)/((x1-x0)||1),Y=v=>pt+ih*(1-(v-mn)/(mx-mn));
+ const path=pts.map((p,i)=>`${i?'L':'M'}${X(+p.x).toFixed(1)},${Y(p.y).toFixed(1)}`).join('');
+ const area=path+`L${X(x1)},${pt+ih}L${X(x0)},${pt+ih}Z`;const last=pts[pts.length-1].y,col=last>=pts[0].y?css('--ok'):css('--bad');
+ const lab=[x0,(x0+x1)/2,x1].map((v,i)=>`<text x="${X(v)}" y="${h-6}" text-anchor="${['start','middle','end'][i]}">${new Date(v).toLocaleDateString([], {month:'short',year:'2-digit'})}</text>`).join('');
+ const ticks=[mn,(mn+mx)/2,mx].map(v=>`<text x="${pl-4}" y="${Y(v)+3}" text-anchor="end">${fmtv(v)}</text>`).join('');
+ const rl=refs.map(r=>`<line x1="${pl}" x2="${W-8}" y1="${Y(r.y)}" y2="${Y(r.y)}" stroke="${r.color}" stroke-dasharray="4 3"/><text x="${W-10}" y="${Y(r.y)-3}" text-anchor="end" style="fill:${r.color}">${esc(r.label)}</text>`).join('');
+ return `<svg viewBox="0 0 ${W} ${h}" width="100%">${ticks}${lab}${rl}<path d="${area}" fill="${col}" opacity=".12"/><path d="${path}" fill="none" stroke="${col}" stroke-width="2"/></svg>`}
+// horizontal bars as HTML (labels stay readable on a phone). rows: [{label,value,sub}]
+function hbars(rows,{fmtv=v=>v.toFixed(2)}={}){if(!rows.length)return '';const m=Math.max(...rows.map(r=>Math.abs(r.value)))||1,neg=rows.some(r=>r.value<0);
+ return rows.map(r=>{const w=Math.abs(r.value)/m*(neg?50:100),left=neg?(r.value<0?50-w:50):0;
+  return `<div class="hb" title="${esc(r.sub||'')}"><span class="lbl">${esc(r.label)}</span><span class="t">${neg?'<i style="left:50%;width:1px;background:var(--mut)"></i>':''}<i style="left:${left}%;width:${w}%;background:${r.value>=0?'var(--ok)':'var(--bad)'}"></i></span><span class="n ${cls(r.value)}" style="text-align:right">${fmtv(r.value)}</span></div>`}).join('')}
+// heatmap table: rows[0] header
+function heat(rows,{fmtv=v=>(Math.abs(v)<.005?0:v).toFixed(2),span=.3}={}){if(!rows||rows.length<2)return '';
+ const col=v=>{if(typeof v!=='number')return '';const a=Math.min(1,Math.abs(v)/span);return `background:${v>=0?`rgba(76,195,138,${.15+.6*a})`:`rgba(239,111,108,${.15+.6*a})`}`};
+ return `<div class="wrap"><table class="heat"><tr>${rows[0].map(c=>`<th>${esc(typeof c==='number'?Math.round(c):c)}</th>`).join('')}</tr>${rows.slice(1).map(r=>`<tr>${r.map((c,i)=>i?`<td style="${col(c)}">${typeof c==='number'?fmtv(c):'–'}</td>`:`<td style="text-align:left">${esc(sname(c))}</td>`).join('')}</tr>`).join('')}</table></div>`}
+
+/* ---------- 1 · progress ---------- */
+const WORD={done:'finished',running:'running',failed:'stopped','stalled?':'no heartbeat'};
+function progress(s){const o=s.overall||{},J=(s.jobs||[]).filter(j=>j.kind!=='tests');if(!J.length)return '<div class="card sub">no backtest jobs yet</div>';
+ const order=j=>({running:0,'stalled?':1,failed:2,done:3}[j.state]??4);
+ J.sort((a,b)=>order(a)-order(b)||(b.finished||b.started)-(a.finished||a.started));
+ const run=J.filter(j=>j.state==='running'),fin=J.filter(j=>j.state==='done').length,bad=J.filter(j=>j.state==='failed'||j.state==='stalled?').length;
+ const pc=J.length?J.reduce((t,j)=>t+(j.state==='running'?(j.progress_pct||0):100),0)/J.length:0;
+ const head=`<div class="card"><div class="row"><b style="font-size:16px">${run.length?`${run.length} backtest${run.length>1?'s':''} running`:'All backtests finished'}</b><span class="v">${Math.round(pc)}%</span></div>
+ <div class="bar big"><i style="width:${pc}%"></i></div>
+ <div class="segs">${J.map(j=>`<span class="s-${j.state==='stalled?'?'failed':j.state}" title="${esc(j.title)} · ${WORD[j.state]||j.state}"></span>`).join('')}</div>
+ <div class="grid" style="margin-top:10px"><div class="kpi"><div class="k">jobs finished</div><div class="v pos">${fin}<span class="sub"> / ${J.length}</span></div></div>
+ <div class="kpi"><div class="k">running now</div><div class="v">${run.length}</div><div class="sub">${o.eta_s?'about '+fmt(o.eta_s)+' left':run.length?'estimating…':'nothing queued'}</div></div>
+ <div class="kpi"><div class="k">stopped / failed</div><div class="v ${bad?'neg':''}">${bad}</div><div class="sub">${bad?'see the red rows below':'none'}</div></div>
+ <div class="kpi"><div class="k">trades simulated</div><div class="v">${big(o.trades)}</div><div class="sub">5 years, 12 coins, 1-minute fills</div></div></div>
+ <div class="legend"><span><i style="background:var(--ok)"></i>finished</span><span><i style="background:var(--acc)"></i>running</span><span><i style="background:var(--bad)"></i>stopped</span><span>one block = one job</span></div></div>`;
+ const D=J.filter(j=>j.state==='done'),A=J.filter(j=>j.state!=='done');
+ const done=D.length?`<div class="card"><details id="donejobs"><summary><b>${D.length} finished jobs</b> <span class="sub">tap to list · newest first</span></summary><div class="wrap"><table><tr><th>job</th><th class="n">coins</th><th class="n">settings</th><th class="n">trades</th><th class="n">took</th><th class="n">finished</th></tr>${D.map(j=>{const p=j.progress||{};
+  return `<tr title="${esc(j.cmd)}"><td>${esc(j.title)}</td><td class="n">${p.total?p.done+'/'+p.total:'–'}</td><td class="n">${p.strategies??'–'}</td><td class="n">${p.trades?big(p.trades):'–'}</td><td class="n">${fmt(j.elapsed_s)}</td><td class="n">${clock(j.finished)}</td></tr>`}).join('')}</table></div></details></div>`:'';
+ return head+A.map(jobcard).join('')+done}
+function jobcard(j){const p=j.progress||{},pc=j.progress_pct??0,st=j.state==='stalled?'?'failed':j.state;
+ const coins=p.total?`<div class="coins">${(p.coins||[]).map(c=>`<span class="coin ok" title="done after ${fmt(c.at_s)}">✓ ${esc(c.symbol)}</span>`).join('')}${Array.from({length:Math.max(0,p.total-(p.coins||[]).length)}).map(()=>`<span class="coin">waiting</span>`).join('')}</div>`:'';
+ const facts=[p.total?`${p.done}/${p.total} coins`:'',p.strategies?`${p.strategies} strategy settings`:'',p.trades?`${big(p.trades)} trades`:'',
+  j.state==='running'?`running ${fmt(j.elapsed_s)}`:j.finished?`took ${fmt(j.elapsed_s)}`:'',j.finished?`finished ${clock(j.finished)}`:`started ${clock(j.started)}`,p.eta_s?`<b>~${fmt(p.eta_s)} left</b>`:'',p.phase||''].filter(Boolean).join(' · ');
+ const why=j.state==='failed'?`<div class="sub neg">${typeof j.exit_code==='string'?'stopped: '+esc(j.exit_code):'stopped with exit code '+(j.exit_code??'?')}${j.errors&&j.errors.length?' · '+esc(j.errors[j.errors.length-1]):''}</div>`:'';
+ const body=`<div class="row"><b>${esc(j.title)}</b><span class="pill ${st}">${esc(WORD[j.state]||j.state)}</span></div>
+ <div class="bar"><i style="width:${pc}%;${st==='failed'?'background:var(--bad)':st==='done'?'background:var(--ok)':''}"></i></div>
+ <div class="sub">${Math.round(pc)}% · ${facts}</div>${why}${j.state==='running'?coins:''}`;
+ return j.state==='done'?`<div class="card" style="padding:10px 14px"><details id="job-${esc(j.name)}"><summary style="display:block">${body}</summary>${coins}<div class="sub mono" style="margin-top:6px">${esc(j.name)} on ${esc(j.host)}: ${esc(j.cmd)}</div><pre>${esc((j.tail||[]).join('\n'))}</pre></details></div>`
+  :`<div class="card">${body}<details id="log-${esc(j.name)}"><summary class="sub">log</summary><div class="sub mono">${esc(j.cmd)}</div><pre>${esc((j.tail||[]).join('\n'))}</pre></details></div>`}
+
+/* ---------- 2 · findings ---------- */
+function findings(n){const T=n.timeframes||[],b=n.breakdown||{};if(!T.length)return '<div class="card sub">no results yet</div>';
+ const best=T.reduce((a,c)=>c.mean_net>a.mean_net?c:a,T[0]);
+ const bs=(b.by_strategy||[]).slice(1),tot=bs.reduce((t,r)=>t+r[4],0),nn=bs.reduce((t,r)=>t+r[1],0);
+ const yrs=(b.by_year||[]).slice(1),posY=yrs.filter(r=>r[2]>0).length;
+ const W=(n.wallet_detail||[]).filter(r=>r.months===12),bw=W.length?W.reduce((a,c)=>c.hit/c.n>a.hit/a.n?c:a,W[0]):null;
+ const kpis=`<div class="card"><div class="say">In plain words: <b>short bars lose, long bars win.</b> On 15-minute bars fees and slippage eat every strategy. From 4-hour bars up the stop is wide enough that costs stop mattering and four breakout strategies make money after all costs. That is what the paper book trades now.</div>
+ <div class="grid"><div class="kpi"><div class="k">best bar size</div><div class="v pos">${esc(best.tf)}</div><div class="sub">${num(best.mean_net,3)} R per trade on average, after costs</div></div>
+ <div class="kpi"><div class="k">live strategies, profit per trade</div><div class="v ${cls(tot)}">${nn?num(tot/nn,2):'–'} R</div><div class="sub">${big(nn)} trades over 5 years · 1 R = the amount risked</div></div>
+ <div class="kpi"><div class="k">profitable years</div><div class="v ${posY===yrs.length?'pos':'warn'}">${posY} / ${yrs.length}</div><div class="sub">${yrs.map(r=>`${r[0]}: <span class="${cls(r[2])}">${num(r[2],2)}</span>`).join(' · ')}</div></div>
+ <div class="kpi"><div class="k">at 1% risk, 1 R ≈</div><div class="v">1%</div><div class="sub">so ${nn?num(tot/nn,2):'–'} R per trade ≈ ${nn?num(tot/nn,2):'–'}% of the wallet per trade before compounding</div></div></div></div>`;
+ const tfc=`<div class="card"><b>Profit per trade by bar size</b><div class="sub">average over every strategy and setting tried, after fees + 18% GST + slippage. Above the line = makes money.</div>
+ ${vbars(T.map(t=>({label:t.tf.replace(' (wider grid)','w'),value:t.mean_net,color:t.mean_net>=0?css('--ok'):css('--bad'),tip:`${t.tf}: ${num(t.mean_net,3)} R net, ${num(t.mean_gross,3)} R before costs, costs ${num(t.cost_r,3)} R, ${big(t.trades)} trades`})),{fmtv:v=>v.toFixed(2)})}
+ <div class="sub">${T.map(t=>`${esc(t.tf)}: costs take <b>${num(t.cost_r,3)} R</b> per trade (stop ≈ ${num(t.mean_stop_pct,1)}% of price)`).join(' · ')}</div></div>`;
+ const wf=`<div class="card"><b>Settings that held up on unseen data</b><div class="sub">walk-forward: pick the best setting on 12 months, then trade the next 3 months blind. Share of strategies still profitable.</div>
+ ${hbars(T.map(t=>({label:t.tf,value:t.wf_strategies?100*t.wf_positive_strategies/t.wf_strategies:0,sub:`${t.wf_positive_strategies} of ${t.wf_strategies}`})),{fmtv:v=>Math.round(v)+'%'})}
+ <div class="sub">${T.map(t=>`${esc(t.tf)} ${t.wf_positive_strategies}/${t.wf_strategies}`).join(' · ')}</div></div>`;
+ const bestc=T.filter(t=>t.best&&t.best.length).map(t=>`<button onclick="_tf='${esc(t.tf)}';tick()" class="${(_tf||best.tf)===t.tf?'on':''}">${esc(t.tf)}</button>`).join('');
+ const sel=T.find(t=>t.tf===(_tf||best.tf))||best;
+ const tops=`<div class="card"><b>Best strategies on each bar size</b><div class="tabs">${bestc}</div>${hbars((sel.best||[]).slice(0,8).map(x=>({label:sname(x.strategy)+' '+(x.params||''),value:x.net,sub:`${x.n} trades, win ${pct(x.win)}`})),{fmtv:v=>v.toFixed(3)+' R'})}
+ <div class="sub">R per trade after costs, top 8 settings on ${esc(sel.tf)} bars</div></div>`;
+ return kpis+`<div class="charts">${tfc}${wf}</div>${tops}`}
+let _tf=null;
+
+/* ---------- 3 · wallet ---------- */
+const _open=new Set(),_ledgers={};let _wsel=null;
+function wallet(n){const rows=n.wallet_detail||[];if(!rows.length)return '<div class="card sub">no wallet history yet</div>';
+ const key=r=>`${r.months}-${r.i}`;if(!_wsel||!rows.find(r=>key(r)===_wsel))_wsel=key(rows[0]);const r=rows.find(x=>key(x)===_wsel);
+ const tabs=`<div class="k">pick a setting (all: up to 4 trades open, leverage ≤ 5x)</div><div class="tabs">${rows.map(x=>`<button class="${key(x)===_wsel?'on':''}" onclick="_wsel='${key(x)}';tick()">${esc(((x.label.match(/(\d+(?:\.\d+)?)%/)||[])[1]||'?')+'% risk')} · ${x.months} months</button>`).join('')}</div>`;
+ const S=r.starts,up=S.filter(x=>x.end>25).length,best=S.reduce((a,c)=>c.end>a.end?c:a,S[0]),worst=S.reduce((a,c)=>c.end<a.end?c:a,S[0]);
+ const say=`Started <b>${r.n}</b> separate 25 USDT wallets, one on the 1st of every month, each followed for ${r.months} months with the live 4h + 8h strategies. <b class="pos">${r.hit}</b> reached 100, <b class="neg">${r.bust}</b> went bust, <b>${up}</b> of ${r.n} ended above 25. Half ended above <b>${num(r.median_end,1)}</b> USDT. Best start ${esc(best.start)} → ${num(best.end,1)}, worst ${esc(worst.start)} → ${num(worst.end,1)}.`;
+ const chart=vbars(S.map(x=>({label:x.start.slice(2),value:x.end,color:x.status==='TARGET'?css('--ok'):x.status==='BUST'?css('--bad'):x.end>=25?css('--acc'):css('--warn'),tip:`${x.start}: ended ${num(x.end,1)} USDT, peak ${num(x.peak,1)}, ${x.trades} trades, worst drawdown ${Math.round(x.dd*100)}%`})),
+   {h:190,fmtv:v=>v.toFixed(0),refs:[{y:25,label:'start 25',color:css('--mut')},{y:100,label:'target 100',color:css('--ok')}],every:Math.ceil(S.length/6),lo:0});
+ const kp=`<div class="grid" style="margin:10px 0"><div class="kpi"><div class="k">hit 100</div><div class="v ${r.hit?'pos':''}">${r.hit}<span class="sub"> / ${r.n}</span></div></div>
+ <div class="kpi"><div class="k">ended in profit</div><div class="v ${up>r.n/2?'pos':'warn'}">${Math.round(100*up/r.n)}%</div></div>
+ <div class="kpi"><div class="k">median end balance</div><div class="v ${cls(r.median_end-25)}">${num(r.median_end,1)}</div><div class="sub">from 25 USDT</div></div>
+ <div class="kpi"><div class="k">worst drawdown seen</div><div class="v neg">${Math.round(Math.max(...S.map(x=>x.dd))*100)}%</div></div></div>`;
+ const id=`wd-${key(r)}`;
+ const tbl=`<details id="${id}" ${_open.has(id)?'open':''} ontoggle="_tog(this)"><summary class="sub">every start date (tap one for its balance chart and every trade)</summary><div class="wrap"><table><tr><th>start</th><th>result</th><th class="n">end</th><th class="n">peak</th><th class="n">trades</th><th class="n">days</th><th class="n">worst DD</th></tr>${S.map(x=>{const lid=`${id}-${x.start}`;
+  return `<tr><td colspan="7" style="padding:0"><details class="ledger" id="${lid}" ${_open.has(lid)?'open':''} ontoggle="_tog(this,${r.months},${r.i},'${x.start}')"><summary style="display:grid;grid-template-columns:repeat(7,1fr);gap:6px;padding:5px 6px;font-size:12.5px"><span>▸ ${x.start}</span><span class="${x.status==='TARGET'?'pos':x.status==='BUST'?'neg':''}">${x.status==='TARGET'?'hit 100':x.status==='BUST'?'bust':'still going'}</span><span style="text-align:right" class="${cls(x.end-25)}">${num(x.end,1)}</span><span style="text-align:right">${num(x.peak,1)}</span><span style="text-align:right">${x.trades}</span><span style="text-align:right">${Math.round(x.days)}</span><span style="text-align:right">${Math.round(x.dd*100)}%</span></summary><div id="L-${lid}" style="padding:4px 6px 10px">${_ledgers[lid]||'<div class="sub">loading…</div>'}</div></details></td></tr>`}).join('')}</table></div></details>`;
+ return `<div class="card">${tabs}<div class="say">${say}</div>${kp}<b>End balance of each monthly start</b>${chart}
+ <div class="legend"><span><i style="background:var(--ok)"></i>hit 100</span><span><i style="background:var(--acc)"></i>above 25</span><span><i style="background:var(--warn)"></i>below 25</span><span><i style="background:var(--bad)"></i>bust</span></div>${tbl}</div>`+walletGrid(n)}
+async function _tog(el,m,i,start){if(el.open)_open.add(el.id);else _open.delete(el.id);
+ if(el.open&&m!==undefined&&!_ledgers[el.id]){try{const L=await (await fetch(`/api/wallet_ledger?months=${m}&i=${i}&start=${start}`)).json();
+  const pts=[{x:new Date(start+'-01'),y:25}].concat(L.map(t=>({x:new Date(String(t.t).replace(' ','T')),y:t.balance})).filter(p=>!isNaN(+p.x)));
+  const wins=L.filter(t=>t.pnl>0).length;
+  _ledgers[el.id]=L.length?`<div class="sub">${L.length} trades · ${wins} won (${Math.round(100*wins/L.length)}%) · balance after each closed trade</div>${line(pts,{refs:[{y:25,label:'25',color:css('--mut')},{y:100,label:'100',color:css('--ok')}].filter(r=>r.y<=Math.max(...pts.map(p=>p.y))*1.3)})}
+  <details id="tr-${el.id}"><summary class="sub">all ${L.length} trades</summary><div class="wrap"><table><tr><th>closed</th><th>coin</th><th>side</th><th>strategy</th><th>exit</th><th class="n">size</th><th class="n">P&amp;L</th><th class="n">balance</th></tr>${L.map(t=>`<tr><td>${esc(t.t)}</td><td>${esc((t.symbol||'').replace('USDT',''))}</td><td>${esc(t.side)}</td><td>${esc(sname(t.strategy))}</td><td>${esc(t.exit)}</td><td class="n">${num(t.notional,1)}</td><td class="n ${cls(t.pnl)}">${num(t.pnl,2)}</td><td class="n">${num(t.balance,2)}</td></tr>`).join('')}</table></div></details>`:'<div class="sub">no trades</div>';
+  const box=document.getElementById('L-'+el.id);if(box)box.innerHTML=_ledgers[el.id];}catch(e){}}}
+function walletGrid(n){const w=n.wallet||{};const E=Object.entries(w);if(!E.length)return '';
+ return `<div class="card"><details id="wgrid"><summary><b>Risk settings compared</b> <span class="sub">(older 4h-only runs: how often each risk level reached 100)</span></summary>${E.map(([k,rows])=>`<div class="k" style="margin-top:10px">followed for ${esc(k)}</div>
+ ${hbars(rows.slice(0,10).map(r=>({label:`${Math.round(r.risk*100)}% · ${r.concurrent} open`,value:100*r.hit_100,sub:`bust ${Math.round(r.bust*100)}%, median end ${num(r.median_end_balance,1)}, worst DD ${Math.round(r.worst_dd_pct)}%`})),{fmtv:v=>Math.round(v)+'%'})}
+ <div class="wrap"><table><tr><th>risk</th><th class="n">open at once</th><th class="n">hit 100</th><th class="n">bust</th><th class="n">median end</th><th class="n">worst DD</th></tr>${rows.map(r=>`<tr><td>${Math.round(r.risk*100)}%</td><td class="n">${r.concurrent}</td><td class="n ${r.hit_100>0?'pos':''}">${Math.round(r.hit_100*100)}%</td><td class="n ${r.bust>0?'neg':''}">${Math.round(r.bust*100)}%</td><td class="n ${cls(r.median_end_balance-25)}">${num(r.median_end_balance,1)}</td><td class="n">${Math.round(r.worst_dd_pct)}%</td></tr>`).join('')}</table></div>`).join('')}
+ <div class="sub">More risk reaches 100 more often but drawdowns of 80-90% come with it. The live book uses 1%.</div></details></div>`}
+
+/* ---------- 4 · where the profit comes from ---------- */
+function where(n){const b=n.breakdown||{};if(!b.by_strategy)return '<div class="card sub">no breakdown yet</div>';
+ const rows=(k)=>(b[k]||[]).slice(1);
+ const st=`<div class="card"><b>Each strategy, year by year</b><div class="sub">R per trade after costs. Green = made money that year.</div>${heat(b.strategy_by_year)}</div>`;
+ const strat=`<div class="card"><b>Total profit by strategy</b><div class="sub">total R over 5 years (1 R = one stop-loss)</div>${hbars(rows('by_strategy').map(r=>({label:sname(r[0]),value:r[4],sub:`${r[1]} trades, ${num(r[2],3)} R each, win ${pct(r[3])}`})),{fmtv:v=>v.toFixed(0)+' R'})}</div>`;
+ const coin=`<div class="card"><b>Total profit by coin</b>${hbars(rows('by_symbol').sort((a,c)=>c[4]-a[4]).map(r=>({label:r[0].replace('USDT',''),value:r[4],sub:`${r[1]} trades, ${num(r[2],3)} R each`})),{fmtv:v=>v.toFixed(0)+' R'})}</div>`;
+ const side=`<div class="card"><b>Longs vs shorts</b>${hbars(rows('by_side').map(r=>({label:r[0],value:r[4],sub:`${r[1]} trades`})),{fmtv:v=>v.toFixed(0)+' R'})}
+ <div class="sub">${rows('by_side').map(r=>`${esc(r[0])}: ${r[1]} trades, ${num(r[2],3)} R each, win ${pct(r[3])}`).join(' · ')}</div>
+ <b style="display:block;margin-top:12px">By year</b>${vbars(rows('by_year').map(r=>({label:r[0],value:r[4],color:r[4]>=0?css('--ok'):css('--bad'),tip:`${r[0]}: ${r[1]} trades, total ${num(r[4],1)} R`})),{h:140,fmtv:v=>v.toFixed(0)})}</div>`;
+ return st+`<div class="charts">${strat}${coin}${side}</div>`}
+
+/* ---------- 7 · raw results ---------- */
+function res(r){const row=x=>`<tr><td>${esc(sname(x.strategy))}<div class="k">${esc((x.params||'').slice(0,26))} ${esc((x.exit||'').slice(0,22))}</div></td><td class="n">${x.n}</td><td class="n">${Math.round(x.win_rate*100)}%</td><td class="n ${x.expectancy_r>0?'pos':'neg'}">${x.expectancy_r}</td><td class="n">${x.ci_lo??''}</td><td class="n">${x.profit_factor}</td><td class="n">${x.max_dd_r??''}</td><td class="n">${x.null_p??''}</td></tr>`;
+ const head=`<tr><th>strategy</th><th class="n">trades</th><th class="n">win</th><th class="n">R/trade</th><th class="n">CI low</th><th class="n">PF</th><th class="n">max DD (R)</th><th class="n">null p</th></tr>`;
+ return `<div class="card"><details id="res-${esc(r.run.split('/').pop())}"><summary><b>${esc(r.run.split('/').pop())}</b> <span class="sub">${r.positive}/${r.configs} settings profitable</span></summary><div class="wrap"><table>${head}${r.top.map(row).join('')}</table></div>
+ <div class="sub">CI low = worst plausible R/trade (95%) · PF = gross wins / gross losses · null p = chance random entries do as well (under 0.05 = real edge)</div></details></div>`}
+
+const _last={};
 async function tick(){let s;try{s=await (await fetch('/api/state',{cache:'no-store'})).json();}catch(e){document.getElementById('upd').textContent='cannot reach the server · retrying';return}
-try{
-document.getElementById('upd').textContent='live · '+new Date().toLocaleTimeString()+' · refreshes every 6s';
-document.getElementById('mach').innerHTML=s.machines.map(mach).join('');
-const G=s.ai.filter(x=>x.kind==='gate'),Q=s.ai.filter(x=>x.kind!=='gate');
-document.getElementById('gate').innerHTML=G.length?G.map(gate).join(''):'<div class="card sub">AI gate experiment not started yet</div>';
-document.getElementById('ai').innerHTML=Q.length?Q.map(ai).join(''):'<div class="card sub">no review queue running</div>';
-const T=s.jobs.filter(j=>j.kind==='tests'),B=s.jobs.filter(j=>j.kind!=='tests');
-document.getElementById('tests').innerHTML=T.length?T.map(testrun).join(''):'<div class="card sub">no test runs yet</div>';
-document.getElementById('jobs').innerHTML=B.length?B.map(job).join(''):'<div class="card sub">no jobs</div>';
-document.getElementById('banner').innerHTML=banner(s.banner);
-document.getElementById('noai').innerHTML=noai(s.noai)||'<div class="card sub">no rules-only findings yet</div>';
-document.getElementById('res').innerHTML=s.results.length?s.results.map(res).join(''):'<div class="card sub">no finished runs yet</div>';}
-catch(e){document.getElementById('upd').textContent='display error: '+e.message}}
+ const set=(id,h)=>{const el=document.getElementById(id);if(!el||_last[id]===h)return;_last[id]=h;
+  const open=[...el.querySelectorAll('details[open][id]')].map(d=>d.id);el.innerHTML=h;
+  open.forEach(i=>{const d=document.getElementById(i);if(d)d.open=true})};
+ try{
+ set('upd','live · '+new Date().toLocaleTimeString()+' · refreshes every 6s');
+ set('banner',banner(s.banner));
+ set('progress',progress(s));
+ const n=s.noai||{};
+ set('find',findings(n));set('wallet',wallet(n));set('where',where(n));
+ const G=s.ai.filter(x=>x.kind==='gate'),Q=s.ai.filter(x=>x.kind!=='gate');
+ set('gate',G.length?G.map(gate).join(''):'<div class="card sub">AI test paused until the ThinkPad is connected</div>');
+ set('ai',Q.map(ai).join(''));
+ set('mach',s.machines.map(mach).join(''));
+ const T=s.jobs.filter(j=>j.kind==='tests');set('tests',T.map(testrun).join(''));
+ set('res',s.results.length?s.results.map(res).join(''):'<div class="card sub">no finished runs yet</div>');}
+ catch(e){document.getElementById('upd').textContent='display error: '+e.message}}
 tick();setInterval(tick,6000);
 </script></body></html>
