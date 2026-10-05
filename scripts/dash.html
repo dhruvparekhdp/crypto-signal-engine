@@ -21,7 +21,7 @@ h2 .num{background:var(--acc);color:var(--bg);border-radius:99px;width:20px;heig
 .kpi{background:var(--soft);border-radius:10px;padding:10px 12px}.kpi .sub{margin-top:2px}
 .charts{display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:10px}
 pre{margin:6px 0 0;padding:8px;background:var(--bg);border-radius:6px;overflow-x:auto;font-size:11px;color:var(--mut);max-height:170px}
-table{width:100%;border-collapse:collapse;font-size:12.5px}td,th{padding:5px 6px;text-align:left;border-bottom:1px solid var(--line)}th{color:var(--mut);font-weight:600}td.n,th.n{text-align:right;font-variant-numeric:tabular-nums}
+table{width:100%;border-collapse:collapse;font-size:12.5px}td,th{padding:5px 6px;text-align:left;border-bottom:1px solid var(--line)}th{color:var(--mut);font-weight:600}td.n,th.n{text-align:right;white-space:nowrap;font-variant-numeric:tabular-nums}
 .pos{color:var(--ok)}.neg{color:var(--bad)}.warn{color:var(--warn)}.wrap{overflow-x:auto}
 details>summary{cursor:pointer;list-style:none}details>summary::-webkit-details-marker{display:none}
 details>summary:before{content:'▸ ';color:var(--mut)}details[open]>summary:before{content:'▾ '}
@@ -34,12 +34,13 @@ svg text{fill:var(--mut);font-size:10px;font-family:system-ui,sans-serif}
 .tabs{display:flex;gap:6px;flex-wrap:wrap;margin:4px 0 10px}.tabs button{background:var(--soft);color:var(--fg);border:1px solid var(--line);border-radius:99px;padding:4px 12px;font-size:12px;cursor:pointer}
 .tabs button.on{background:var(--acc);color:var(--bg);border-color:var(--acc)}
 .say{font-size:14px;margin:2px 0 8px}
+.inp{background:var(--soft);color:var(--fg);border:1px solid var(--line);border-radius:8px;padding:4px 8px;font:inherit;font-size:12px;cursor:pointer}
 </style></head><body>
 <h1>Lab Monitor</h1><div class="sub" id="upd">loading…</div>
 <div id="banner"></div>
 <h2><span class="num">1</span>Backtest progress</h2><div id="progress"></div>
 <h2><span class="num">2</span>What the backtests found (no AI)</h2><div id="find"></div>
-<h2><span class="num">3</span>25 → 100 USDT wallet, one start every month</h2><div id="wallet"></div>
+<h2><span class="num">3</span>25 → 100 USDT wallet: passbooks, strategies, every trade</h2><div id="wallet"></div>
 <h2><span class="num">4</span>Where the profit comes from</h2><div id="where"></div>
 <h2><span class="num">5</span>With AI vs without (paused)</h2><div id="gate"></div><div id="ai"></div>
 <h2><span class="num">6</span>Machines &amp; test suite</h2><div id="mach"></div><div id="tests"></div>
@@ -52,6 +53,7 @@ const clock=t=>t?new Date(t*1000).toLocaleString([], {month:'short',day:'numeric
 const css=v=>getComputedStyle(document.documentElement).getPropertyValue(v).trim();
 const STRAT={vol_breakout:'Volatility breakout',keltner_break:'Keltner breakout',donchian:'Donchian breakout',ichimoku:'Ichimoku'};
 const sname=s=>STRAT[s]||s;
+const HALF=()=>innerWidth<760?Math.max(260,innerWidth-70):Math.min(500,(Math.min(innerWidth,1100)-80)/2);
 function mach(m){const warn=(m.temp_c>85)||(m.ac===false&&m.battery_pct<25);
 return `<div class="card"><div class="row"><b>${esc(m.name)}</b><span class="sub">${m.age_s!=null?'updated '+m.age_s+'s ago':'this server'}</span></div>
 <div class="grid"><div><div class="k">CPU</div><div class="v">${m.cpu_pct??'–'}%</div></div><div><div class="k">RAM</div><div class="v">${m.ram_used_gb}/${m.ram_total_gb}G</div></div>
@@ -96,8 +98,8 @@ ${(j.failures||[]).length?`<pre>${esc(j.failures.join('\n'))}</pre>`:''}</div>`}
 
 /* ---------- charts (plain SVG, no libraries, scale to any width) ---------- */
 // vertical bars, negatives supported. items: [{label,value,color,tip}]; refs: [{y,label,color}]
-function vbars(items,{h=170,fmtv=v=>v.toFixed(2),refs=[],every=1,lo=null,hi=null}={}){if(!items.length)return '';
- const W=Math.max(300,items.length*8),pl=34,pb=26,pt=10,iw=W-pl-6,ih=h-pb-pt;
+function vbars(items,{w=null,h=170,fmtv=v=>v.toFixed(2),refs=[],every=1,lo=null,hi=null}={}){if(!items.length)return '';
+ const W=w||Math.max(280,Math.min(innerWidth-70,1040)),pl=34,pb=26,pt=10,iw=W-pl-6,ih=h-pb-pt;
  const vals=items.map(i=>i.value).concat(refs.map(r=>r.y));let mn=lo??Math.min(0,...vals),mx=hi??Math.max(0,...vals);if(mx===mn)mx=mn+1;const pad=(mx-mn)*.06;mx+=pad;if(mn<0)mn-=pad;
  const y=v=>pt+ih*(1-(v-mn)/(mx-mn)),bw=iw/items.length;
  const ticks=[mn,(mn+mx)/2,mx].map(v=>`<text x="${pl-4}" y="${y(v)+3}" text-anchor="end">${fmtv(Math.abs(v)<1e-9?0:v).replace(/^-0(\.0+)?$/,'0')}</text><line x1="${pl}" x2="${W-6}" y1="${y(v)}" y2="${y(v)}" stroke="${css('--line')}" stroke-dasharray="2 3"/>`).join('');
@@ -108,7 +110,7 @@ function vbars(items,{h=170,fmtv=v=>v.toFixed(2),refs=[],every=1,lo=null,hi=null
  return `<svg viewBox="0 0 ${W} ${h}" width="100%" preserveAspectRatio="xMidYMid meet">${ticks}<line x1="${pl}" x2="${W-6}" y1="${y(0)}" y2="${y(0)}" stroke="${css('--mut')}"/>${bars}${rl}</svg>`}
 // line chart. pts: [{x:Date|number,y}], refs as above
 function line(pts,{h=160,refs=[],fmtv=v=>v.toFixed(0)}={}){if(pts.length<2)return '<div class="sub">not enough points</div>';
- const W=600,pl=34,pb=22,pt=10,iw=W-pl-8,ih=h-pb-pt,xs=pts.map(p=>+p.x),ys=pts.map(p=>p.y).concat(refs.map(r=>r.y));
+ const W=Math.max(280,Math.min(innerWidth-80,1040)),pl=34,pb=22,pt=10,iw=W-pl-8,ih=h-pb-pt,xs=pts.map(p=>+p.x),ys=pts.map(p=>p.y).concat(refs.map(r=>r.y));
  const x0=Math.min(...xs),x1=Math.max(...xs);let mn=Math.min(...ys),mx=Math.max(...ys);const pad=(mx-mn)*.08||1;mn-=pad;mx+=pad;
  const X=v=>pl+iw*(v-x0)/((x1-x0)||1),Y=v=>pt+ih*(1-(v-mn)/(mx-mn));
  const path=pts.map((p,i)=>`${i?'L':'M'}${X(+p.x).toFixed(1)},${Y(p.y).toFixed(1)}`).join('');
@@ -168,7 +170,7 @@ function findings(n){const T=n.timeframes||[],b=n.breakdown||{};if(!T.length)ret
  <div class="kpi"><div class="k">profitable years</div><div class="v ${posY===yrs.length?'pos':'warn'}">${posY} / ${yrs.length}</div><div class="sub">${yrs.map(r=>`${r[0]}: <span class="${cls(r[2])}">${num(r[2],2)}</span>`).join(' · ')}</div></div>
  <div class="kpi"><div class="k">at 1% risk, 1 R ≈</div><div class="v">1%</div><div class="sub">so ${nn?num(tot/nn,2):'–'} R per trade ≈ ${nn?num(tot/nn,2):'–'}% of the wallet per trade before compounding</div></div></div></div>`;
  const tfc=`<div class="card"><b>Profit per trade by bar size</b><div class="sub">average over every strategy and setting tried, after fees + 18% GST + slippage. Above the line = makes money.</div>
- ${vbars(T.map(t=>({label:t.tf.replace(' (wider grid)','w'),value:t.mean_net,color:t.mean_net>=0?css('--ok'):css('--bad'),tip:`${t.tf}: ${num(t.mean_net,3)} R net, ${num(t.mean_gross,3)} R before costs, costs ${num(t.cost_r,3)} R, ${big(t.trades)} trades`})),{fmtv:v=>v.toFixed(2)})}
+ ${vbars(T.map(t=>({label:t.tf.replace(' (wider grid)','w'),value:t.mean_net,color:t.mean_net>=0?css('--ok'):css('--bad'),tip:`${t.tf}: ${num(t.mean_net,3)} R net, ${num(t.mean_gross,3)} R before costs, costs ${num(t.cost_r,3)} R, ${big(t.trades)} trades`})),{w:HALF(),fmtv:v=>v.toFixed(2)})}
  <div class="sub">${T.map(t=>`${esc(t.tf)}: costs take <b>${num(t.cost_r,3)} R</b> per trade (stop ≈ ${num(t.mean_stop_pct,1)}% of price)`).join(' · ')}</div></div>`;
  const wf=`<div class="card"><b>Settings that held up on unseen data</b><div class="sub">walk-forward: pick the best setting on 12 months, then trade the next 3 months blind. Share of strategies still profitable.</div>
  ${hbars(T.map(t=>({label:t.tf,value:t.wf_strategies?100*t.wf_positive_strategies/t.wf_strategies:0,sub:`${t.wf_positive_strategies} of ${t.wf_strategies}`})),{fmtv:v=>Math.round(v)+'%'})}
@@ -180,31 +182,99 @@ function findings(n){const T=n.timeframes||[],b=n.breakdown||{};if(!T.length)ret
  return kpis+`<div class="charts">${tfc}${wf}</div>${tops}`}
 let _tf=null;
 
-/* ---------- 3 · wallet ---------- */
-const _open=new Set(),_ledgers={};let _wsel=null;
+/* ---------- 3 · wallet passbooks ---------- */
+const W=(()=>{const d={sel:null,from:'',to:'',strats:[],coin:'',side:'',res:'',open:null,showAll:200};try{return Object.assign(d,JSON.parse(localStorage.getItem('wpb')||'{}'),{open:null})}catch(e){return d}})();
+const _L={},_N={};let _U=null,_S=null;
+function wsave(){try{localStorage.setItem('wpb',JSON.stringify({...W,open:null}))}catch(e){}}
+function wset(k,v){W[k]=v;W.showAll=200;wsave();rw()}
+function wtoggleStrat(k){const i=W.strats.indexOf(k);i<0?W.strats.push(k):W.strats.splice(i,1);wsave();rw()}
+function wopen(key,start){W.open=W.open===start?null:start;rw();if(W.open&&!_L[key+start]){const [m,i]=key.split('-');
+ fetch(`/api/wallet_ledger?months=${m}&i=${i}&start=${start}`).then(r=>r.json()).then(L=>{_L[key+start]=L;rw()}).catch(()=>{})}}
+function rw(){if(_S){_last.wallet=null;set('wallet',wallet(_S.noai||{}))}}
+const px=v=>v==null?'–':v>=1000?v.toLocaleString(undefined,{maximumFractionDigits:1}):v>=1?v.toFixed(3):v.toPrecision(4);
+const EXITW={target:'target hit',stop:'stop-loss hit',time:'7-day limit reached, closed at market',liq:'liquidated'};
+const skey=(st,tf)=>`${st}|${tf||''}`,slabel=k=>{const [s,t]=k.split('|');return sname(s)+(t?' '+t:'')};
+const inRange=ym=>(!W.from||ym>=W.from)&&(!W.to||ym<=W.to);
+function tradeOk(t){return (!W.strats.length||W.strats.includes(skey(t.strategy,t.tf)))&&(!W.coin||t.symbol.replace('USDT','')===W.coin)&&(!W.side||t.side===W.side)&&(!W.res||(W.res==='win'?t.pnl>0:t.pnl<=0))}
+function uniOk(t){return inRange(t.o.slice(0,7))&&(!W.strats.length||W.strats.includes(skey(t.st,t.tf)))&&(!W.coin||t.s===W.coin)&&(!W.side||(W.side==='long')===(t.d>0))&&(!W.res||(W.res==='win'?t.r>0:t.r<=0))}
+
 function wallet(n){const rows=n.wallet_detail||[];if(!rows.length)return '<div class="card sub">no wallet history yet</div>';
- const key=r=>`${r.months}-${r.i}`;if(!_wsel||!rows.find(r=>key(r)===_wsel))_wsel=key(rows[0]);const r=rows.find(x=>key(x)===_wsel);
- const tabs=`<div class="k">pick a setting (all: up to 4 trades open, leverage ≤ 5x)</div><div class="tabs">${rows.map(x=>`<button class="${key(x)===_wsel?'on':''}" onclick="_wsel='${key(x)}';tick()">${esc(((x.label.match(/(\d+(?:\.\d+)?)%/)||[])[1]||'?')+'% risk')} · ${x.months} months</button>`).join('')}</div>`;
- const S=r.starts,up=S.filter(x=>x.end>25).length,best=S.reduce((a,c)=>c.end>a.end?c:a,S[0]),worst=S.reduce((a,c)=>c.end<a.end?c:a,S[0]);
- const say=`Started <b>${r.n}</b> separate 25 USDT wallets, one on the 1st of every month, each followed for ${r.months} months with the live 4h + 8h strategies. <b class="pos">${r.hit}</b> reached 100, <b class="neg">${r.bust}</b> went bust, <b>${up}</b> of ${r.n} ended above 25. Half ended above <b>${num(r.median_end,1)}</b> USDT. Best start ${esc(best.start)} → ${num(best.end,1)}, worst ${esc(worst.start)} → ${num(worst.end,1)}.`;
+ const key=r=>`${r.months}-${r.i}`;if(!W.sel||!rows.find(r=>key(r)===W.sel))W.sel=key(rows[0]);const r=rows.find(x=>key(x)===W.sel);
+ const yrs=[...new Set((_U||[]).map(t=>t.o.slice(0,4)).concat(r.starts.map(x=>x.start.slice(0,4))))].sort();
+ const now=new Date(),ym=d=>d.toISOString().slice(0,7),last12=ym(new Date(now.getFullYear()-1,now.getMonth(),2));
+ const presets=[['All time','',''],...yrs.map(y=>[y,y+'-01',y+'-12']),['Last 12 months',last12,'']];
+ const strats=[...new Set((_U||[]).map(t=>skey(t.st,t.tf)))].sort(),coins=[...new Set((_U||[]).map(t=>t.s))].sort();
+ const chip=(on,label,fn)=>`<button class="${on?'on':''}" onclick="${fn}">${esc(label)}</button>`;
+ const controls=`<div class="card"><div class="k">wallet setting (all: up to 4 trades open, leverage ≤ 5x)</div><div class="tabs">${rows.map(x=>chip(key(x)===W.sel,`${((x.label.match(/(\d+(?:\.\d+)?)%/)||[])[1]||'?')}% risk · ${x.months} months`,`wset('sel','${key(x)}')`)).join('')}</div>
+ <div class="k">date range (start month)</div><div class="tabs">${presets.map(([l,f,t])=>chip(W.from===f&&W.to===t,l,`W.from='${f}';W.to='${t}';wsave();rw()`)).join('')}
+  <span class="sub" style="display:flex;gap:6px;align-items:center">from <input type="month" value="${W.from}" onchange="wset('from',this.value)" class="inp"> to <input type="month" value="${W.to}" onchange="wset('to',this.value)" class="inp"></span></div>
+ <div class="k">strategies (tap to filter; none selected = all)</div><div class="tabs">${strats.map(k=>chip(W.strats.includes(k),slabel(k),`wtoggleStrat('${k}')`)).join('')}${W.strats.length?chip(false,'✕ clear',`W.strats=[];wsave();rw()`):''}</div>
+ <div class="row" style="justify-content:flex-start;gap:12px"><span class="sub">coin <select class="inp" onchange="wset('coin',this.value)"><option value="">all</option>${coins.map(c=>`<option ${W.coin===c?'selected':''}>${c}</option>`).join('')}</select></span>
+ <span class="sub">side <select class="inp" onchange="wset('side',this.value)">${[['','all'],['long','long'],['short','short']].map(([v,l])=>`<option value="${v}" ${W.side===v?'selected':''}>${l}</option>`).join('')}</select></span>
+ <span class="sub">result <select class="inp" onchange="wset('res',this.value)">${[['','all'],['win','winners'],['loss','losers']].map(([v,l])=>`<option value="${v}" ${W.res===v?'selected':''}>${l}</option>`).join('')}</select></span></div></div>`;
+ const S=r.starts.filter(x=>inRange(x.start));
+ if(!S.length)return controls+'<div class="card sub">no start months in this date range</div>';
+ const hit=S.filter(x=>x.status==='TARGET').length,bust=S.filter(x=>x.status==='BUST').length,up=S.filter(x=>x.end>25).length;
+ const ends=S.map(x=>x.end).sort((a,b)=>a-b),med=ends[Math.floor(ends.length/2)],best=S.reduce((a,c)=>c.end>a.end?c:a,S[0]),worst=S.reduce((a,c)=>c.end<a.end?c:a,S[0]);
+ const say=`<div class="say">${S.length} wallets of 25 USDT, one started on the 1st of each month from <b>${S[0].start}</b> to <b>${S[S.length-1].start}</b>, each followed for ${r.months} months. <b class="pos">${hit}</b> reached 100, <b class="neg">${bust}</b> went bust, <b>${up}</b> ended above 25. Half ended above <b>${num(med,1)}</b>. Best: ${best.start} → ${num(best.end,1)} · worst: ${worst.start} → ${num(worst.end,1)}.</div>`;
+ const kp=`<div class="grid" style="margin:10px 0"><div class="kpi"><div class="k">hit 100</div><div class="v ${hit?'pos':''}">${hit}<span class="sub"> / ${S.length}</span></div></div>
+ <div class="kpi"><div class="k">ended in profit</div><div class="v ${up>S.length/2?'pos':'warn'}">${Math.round(100*up/S.length)}%</div></div>
+ <div class="kpi"><div class="k">median end balance</div><div class="v ${cls(med-25)}">${num(med,1)}</div><div class="sub">from 25 USDT</div></div>
+ <div class="kpi"><div class="k">worst drawdown</div><div class="v neg">${Math.round(Math.max(...S.map(x=>x.dd))*100)}%</div></div></div>`;
  const chart=vbars(S.map(x=>({label:x.start.slice(2),value:x.end,color:x.status==='TARGET'?css('--ok'):x.status==='BUST'?css('--bad'):x.end>=25?css('--acc'):css('--warn'),tip:`${x.start}: ended ${num(x.end,1)} USDT, peak ${num(x.peak,1)}, ${x.trades} trades, worst drawdown ${Math.round(x.dd*100)}%`})),
-   {h:190,fmtv:v=>v.toFixed(0),refs:[{y:25,label:'start 25',color:css('--mut')},{y:100,label:'target 100',color:css('--ok')}],every:Math.ceil(S.length/6),lo:0});
- const kp=`<div class="grid" style="margin:10px 0"><div class="kpi"><div class="k">hit 100</div><div class="v ${r.hit?'pos':''}">${r.hit}<span class="sub"> / ${r.n}</span></div></div>
- <div class="kpi"><div class="k">ended in profit</div><div class="v ${up>r.n/2?'pos':'warn'}">${Math.round(100*up/r.n)}%</div></div>
- <div class="kpi"><div class="k">median end balance</div><div class="v ${cls(r.median_end-25)}">${num(r.median_end,1)}</div><div class="sub">from 25 USDT</div></div>
- <div class="kpi"><div class="k">worst drawdown seen</div><div class="v neg">${Math.round(Math.max(...S.map(x=>x.dd))*100)}%</div></div></div>`;
- const id=`wd-${key(r)}`;
- const tbl=`<details id="${id}" ${_open.has(id)?'open':''} ontoggle="_tog(this)"><summary class="sub">every start date (tap one for its balance chart and every trade)</summary><div class="wrap"><table><tr><th>start</th><th>result</th><th class="n">end</th><th class="n">peak</th><th class="n">trades</th><th class="n">days</th><th class="n">worst DD</th></tr>${S.map(x=>{const lid=`${id}-${x.start}`;
-  return `<tr><td colspan="7" style="padding:0"><details class="ledger" id="${lid}" ${_open.has(lid)?'open':''} ontoggle="_tog(this,${r.months},${r.i},'${x.start}')"><summary style="display:grid;grid-template-columns:repeat(7,1fr);gap:6px;padding:5px 6px;font-size:12.5px"><span>▸ ${x.start}</span><span class="${x.status==='TARGET'?'pos':x.status==='BUST'?'neg':''}">${x.status==='TARGET'?'hit 100':x.status==='BUST'?'bust':'still going'}</span><span style="text-align:right" class="${cls(x.end-25)}">${num(x.end,1)}</span><span style="text-align:right">${num(x.peak,1)}</span><span style="text-align:right">${x.trades}</span><span style="text-align:right">${Math.round(x.days)}</span><span style="text-align:right">${Math.round(x.dd*100)}%</span></summary><div id="L-${lid}" style="padding:4px 6px 10px">${_ledgers[lid]||'<div class="sub">loading…</div>'}</div></details></td></tr>`}).join('')}</table></div></details>`;
- return `<div class="card">${tabs}<div class="say">${say}</div>${kp}<b>End balance of each monthly start</b>${chart}
- <div class="legend"><span><i style="background:var(--ok)"></i>hit 100</span><span><i style="background:var(--acc)"></i>above 25</span><span><i style="background:var(--warn)"></i>below 25</span><span><i style="background:var(--bad)"></i>bust</span></div>${tbl}</div>`+walletGrid(n)}
-async function _tog(el,m,i,start){if(el.open)_open.add(el.id);else _open.delete(el.id);
- if(el.open&&m!==undefined&&!_ledgers[el.id]){try{const L=await (await fetch(`/api/wallet_ledger?months=${m}&i=${i}&start=${start}`)).json();
-  const pts=[{x:new Date(start+'-01'),y:25}].concat(L.map(t=>({x:new Date(String(t.t).replace(' ','T')),y:t.balance})).filter(p=>!isNaN(+p.x)));
-  const wins=L.filter(t=>t.pnl>0).length;
-  _ledgers[el.id]=L.length?`<div class="sub">${L.length} trades · ${wins} won (${Math.round(100*wins/L.length)}%) · balance after each closed trade</div>${line(pts,{refs:[{y:25,label:'25',color:css('--mut')},{y:100,label:'100',color:css('--ok')}].filter(r=>r.y<=Math.max(...pts.map(p=>p.y))*1.3)})}
-  <details id="tr-${el.id}"><summary class="sub">all ${L.length} trades</summary><div class="wrap"><table><tr><th>closed</th><th>coin</th><th>side</th><th>strategy</th><th>exit</th><th class="n">size</th><th class="n">P&amp;L</th><th class="n">balance</th></tr>${L.map(t=>`<tr><td>${esc(t.t)}</td><td>${esc((t.symbol||'').replace('USDT',''))}</td><td>${esc(t.side)}</td><td>${esc(sname(t.strategy))}</td><td>${esc(t.exit)}</td><td class="n">${num(t.notional,1)}</td><td class="n ${cls(t.pnl)}">${num(t.pnl,2)}</td><td class="n">${num(t.balance,2)}</td></tr>`).join('')}</table></div></details>`:'<div class="sub">no trades</div>';
-  const box=document.getElementById('L-'+el.id);if(box)box.innerHTML=_ledgers[el.id];}catch(e){}}}
+   {h:180,fmtv:v=>v.toFixed(0),refs:[{y:25,label:'start 25',color:css('--mut')},{y:100,label:'target 100',color:css('--ok')}],every:Math.max(1,Math.ceil(S.length/8)),lo:0});
+ const overview=`<div class="card">${say}${kp}<b>End balance of each monthly start</b>${chart}<div class="legend"><span><i style="background:var(--ok)"></i>hit 100</span><span><i style="background:var(--acc)"></i>above 25</span><span><i style="background:var(--warn)"></i>below 25</span><span><i style="background:var(--bad)"></i>bust</span></div></div>`;
+ return controls+overview+scoreboard()+yearsList(r,S,key(r))+allTrades()+walletGrid(n)}
+
+// which strategies worked, on distinct trades (no double counting between overlapping wallets), in R
+function scoreboard(){if(!_U)return '<div class="card sub">loading strategy trades…</div>';
+ const T=_U.filter(uniOk);const g={};
+ for(const t of T){const k=skey(t.st,t.tf),o=g[k]||(g[k]={n:0,w:0,R:0,gw:0,gl:0,best:-1e9,worst:1e9,cum:[]});o.n++;o.w+=t.r>0;o.R+=t.r;t.r>0?o.gw+=t.r:o.gl-=t.r;o.best=Math.max(o.best,t.r);o.worst=Math.min(o.worst,t.r);o.cum.push(o.R)}
+ const E=Object.entries(g).sort((a,b)=>b[1].R-a[1].R);if(!E.length)return '<div class="card sub">no trades match these filters</div>';
+ const spark=c=>{if(c.length<2)return '';const mn=Math.min(0,...c),mx=Math.max(0,...c),k=c.length>80?Math.ceil(c.length/80):1,pts=c.filter((_,i)=>i%k===0);
+  return `<svg viewBox="0 0 100 24" width="90" height="22" preserveAspectRatio="none"><line x1="0" x2="100" y1="${24-24*(0-mn)/((mx-mn)||1)}" y2="${24-24*(0-mn)/((mx-mn)||1)}" stroke="${css('--line')}"/><polyline fill="none" stroke="${c[c.length-1]>=0?css('--ok'):css('--bad')}" stroke-width="1.5" points="${pts.map((v,i)=>`${(100*i/(pts.length-1)).toFixed(1)},${(24-24*(v-mn)/((mx-mn)||1)).toFixed(1)}`).join(' ')}"/></svg>`};
+ const worked=E.filter(([,o])=>o.R>0).length,tot=T.reduce((a,t)=>a+t.r,0);
+ return `<div class="card"><b>Which strategies worked</b> <span class="sub">${W.from||'start'} → ${W.to||'now'} · ${T.length} distinct trades · ${worked} of ${E.length} strategies made money · all together ${tot>=0?'+':''}${num(tot,1)} R</span>
+ <div class="sub">counted once per trade (not per wallet). R = profit in units of the amount risked: +3 R is a full target, −1 R a full stop. Tap a row to filter the passbooks to that strategy.</div>
+ <div class="wrap"><table><tr><th>strategy</th><th></th><th class="n">trades</th><th class="n">win</th><th class="n">avg R</th><th class="n">total R</th><th class="n">PF</th><th class="n">best</th><th class="n">worst</th><th>cumulative</th></tr>${E.map(([k,o])=>`<tr style="cursor:pointer;${W.strats.includes(k)?'background:var(--soft)':''}" onclick="wtoggleStrat('${k}')"><td><b>${esc(slabel(k))}</b></td><td>${o.R>0?'<span class="pill done">worked</span>':'<span class="pill failed">lost</span>'}</td><td class="n">${o.n}</td><td class="n">${Math.round(100*o.w/o.n)}%</td><td class="n ${cls(o.R)}">${num(o.R/o.n,3)}</td><td class="n ${cls(o.R)}"><b>${num(o.R,1)}</b></td><td class="n">${o.gl?num(o.gw/o.gl,2):'–'}</td><td class="n pos">${num(o.best,2)}</td><td class="n neg">${num(o.worst,2)}</td><td>${spark(o.cum)}</td></tr>`).join('')}</table></div></div>`}
+
+// start months grouped by year; each opens a passbook
+function yearsList(r,S,key){const by={};S.forEach(x=>(by[x.start.slice(0,4)]=by[x.start.slice(0,4)]||[]).push(x));
+ return `<div class="card"><b>Passbooks</b> <span class="sub">one per start month · grouped by year · tap a month to open its passbook</span>${Object.entries(by).map(([y,L])=>{const h=L.filter(x=>x.status==='TARGET').length,e=L.map(x=>x.end).sort((a,b)=>a-b)[Math.floor(L.length/2)];
+  return `<details id="yr-${key}-${y}" ${L.some(x=>x.start===W.open)?'open':''}><summary style="padding:8px 0;border-top:1px solid var(--line)"><b>${y}</b> <span class="sub">${L.length} starts · ${h} hit 100 · median end ${num(e,1)} USDT</span></summary>
+  <div class="wrap"><table><tr><th>start</th><th>result</th><th class="n">end</th><th class="n">peak</th><th class="n">trades</th><th class="n">worst DD</th><th>best strategy</th></tr>${L.map(x=>{const bs=Object.entries(x.by_strategy||{}).sort((a,b)=>b[1][2]-a[1][2])[0];const on=W.open===x.start;
+   return `<tr style="cursor:pointer;${on?'background:var(--soft)':''}" onclick="wopen('${key}','${x.start}')"><td><b>${on?'▾':'▸'} ${x.start}</b></td><td class="${x.status==='TARGET'?'pos':x.status==='BUST'?'neg':''}">${x.status==='TARGET'?'hit 100':x.status==='BUST'?'bust':'still going'}</td><td class="n ${cls(x.end-25)}">${num(x.end,2)}</td><td class="n">${num(x.peak,1)}</td><td class="n">${x.trades}</td><td class="n">${Math.round(x.dd*100)}%</td><td>${bs?`${esc(slabel(bs[0]))} <span class="${cls(bs[1][2])}">${bs[1][2]>=0?'+':''}${num(bs[1][2],2)}</span>`:'–'}</td></tr>${on?`<tr><td colspan="7" style="padding:0">${passbook(key,x)}</td></tr>`:''}`}).join('')}</table></div></details>`}).join('')}</div>`}
+
+function passbook(key,x){const L=_L[key+x.start];if(!L)return '<div class="sub" style="padding:10px">loading passbook…</div>';
+ const F=L.filter(tradeOk),wins=F.filter(t=>t.pnl>0).length,fees=F.reduce((a,t)=>a+(t.fee||0),0),net=F.reduce((a,t)=>a+t.pnl,0);
+ const pts=[{x:new Date(x.start+'-01'),y:25}].concat(L.map(t=>({x:new Date(t.t.replace(' ','T')),y:t.balance})));
+ const bs=Object.entries(x.by_strategy||{}).sort((a,b)=>b[1][2]-a[1][2]);
+ const strat=`<div class="wrap"><table><tr><th>strategy in this wallet</th><th class="n">trades</th><th class="n">won</th><th class="n">net USDT</th></tr>${bs.map(([k,[n,w,p]])=>`<tr><td>${esc(slabel(k))}</td><td class="n">${n}</td><td class="n">${w} (${Math.round(100*w/n)}%)</td><td class="n ${cls(p)}"><b>${p>=0?'+':''}${num(p,2)}</b></td></tr>`).join('')}</table></div>`;
+ const months={};F.forEach(t=>(months[t.t.slice(0,7)]=months[t.t.slice(0,7)]||[]).push(t));
+ const filt=F.length!==L.length?`<div class="sub warn">filters active: showing ${F.length} of ${L.length} trades (balance column is the real wallet balance)</div>`:'';
+ const rowsH=Object.entries(months).map(([m,T])=>{const mp=T.reduce((a,t)=>a+t.pnl,0),mw=T.filter(t=>t.pnl>0).length;
+  return `<tr style="background:var(--soft)"><td colspan="6"><b>${new Date(m+'-01').toLocaleDateString([], {month:'long',year:'numeric'})}</b> <span class="sub">· ${T.length} trades · ${mw} won · opening ${num(T[0].before,2)} → closing ${num(T[T.length-1].balance,2)}</span></td><td class="n ${cls(mp)}"><b>${mp>=0?'+':''}${num(mp,2)}</b></td></tr>`+
+  T.map(t=>{const ex=t.liquidated?EXITW.liq:(EXITW[t.exit]||t.exit);return `<tr><td class="mono">${esc(t.t.slice(5))}</td>
+  <td><b>${t.side==='long'?'Long':'Short'} ${esc(t.symbol.replace('USDT',''))}</b> · ${esc(sname(t.strategy))}${t.tf?' '+esc(t.tf):''}<div class="k">opened ${esc((t.opened||'').slice(5))} at ${px(t.entry)} → closed at ${px(t.exit_px)} · ${esc(ex)}${t.stop_pct!=null?` · stop ${t.stop_pct}% away`:''}</div></td>
+  <td class="n">${num(t.notional,2)}<div class="k">margin ${num(t.margin,2)}</div></td><td class="n ${cls(t.r)}">${t.r==null?'–':(t.r>0?'+':'')+num(t.r,2)+' R'}</td><td class="n">${num(t.fee,3)}</td>
+  <td class="n ${cls(t.pnl)}">${t.pnl>=0?'+':''}${num(t.pnl,3)}</td><td class="n"><b>${num(t.balance,2)}</b></td></tr>`}).join('')}).join('');
+ return `<div style="padding:10px 6px 14px;border-left:3px solid var(--acc);margin:4px 0 8px">
+ <div class="row"><b>Passbook · wallet started ${x.start}</b><button class="inp" onclick="wcsv('${key}','${x.start}')">⬇ CSV</button></div>
+ <div class="grid" style="margin:8px 0"><div class="kpi"><div class="k">opening → closing</div><div class="v ${cls(x.end-25)}">25 → ${num(x.end,2)}</div></div><div class="kpi"><div class="k">trades shown</div><div class="v">${F.length}</div><div class="sub">${wins} won (${F.length?Math.round(100*wins/F.length):0}%)</div></div>
+ <div class="kpi"><div class="k">net of shown trades</div><div class="v ${cls(net)}">${net>=0?'+':''}${num(net,2)}</div><div class="sub">fees paid ${num(fees,2)} USDT</div></div><div class="kpi"><div class="k">peak / worst DD</div><div class="v">${num(x.peak,1)}</div><div class="sub">drawdown ${Math.round(x.dd*100)}%</div></div></div>
+ ${line(pts,{refs:[{y:25,label:'25',color:css('--mut')}].concat(x.peak>70?[{y:100,label:'100',color:css('--ok')}]:[])})}${strat}${filt}
+ <div class="wrap"><table><tr><th>closed</th><th>trade</th><th class="n">size</th><th class="n">result</th><th class="n">fee</th><th class="n">P&amp;L</th><th class="n">balance</th></tr>${rowsH||'<tr><td colspan="7" class="sub">no trades match the filters</td></tr>'}</table></div></div>`}
+
+function wcsv(key,start){const L=_L[key+start]||[];const cols=['opened','t','symbol','side','strategy','tf','entry','exit_px','exit','stop_pct','r','notional','margin','fee','pnl','before','balance'];
+ const csv=[cols.join(',')].concat(L.filter(tradeOk).map(t=>cols.map(c=>JSON.stringify(t[c]??'')).join(','))).join('\n');
+ const a=document.createElement('a');a.href=URL.createObjectURL(new Blob([csv],{type:'text/csv'}));a.download=`passbook_${start}.csv`;a.click()}
+
+// every distinct trade, filterable, newest first
+function allTrades(){if(!_U)return '';const T=_U.filter(uniOk).slice().reverse();if(!T.length)return '';const N=W.showAll;
+ return `<div class="card"><details id="alltr"><summary><b>Every trade by strategy</b> <span class="sub">${T.length} trades match · newest first · same filters as above</span></summary>
+ <div class="wrap"><table><tr><th>opened</th><th>closed</th><th>coin</th><th>side</th><th>strategy</th><th>exit</th><th class="n">R</th></tr>${T.slice(0,N).map(t=>`<tr><td class="mono">${esc(t.o)}</td><td class="mono">${esc(t.c)}</td><td>${esc(t.s)}</td><td>${t.d>0?'long':'short'}</td><td>${esc(slabel(skey(t.st,t.tf)))}</td><td>${esc(EXITW[t.x]||t.x)}</td><td class="n ${cls(t.r)}">${t.r>0?'+':''}${num(t.r,2)}</td></tr>`).join('')}</table></div>
+ ${T.length>N?`<button class="inp" style="margin-top:8px" onclick="W.showAll+=500;rw()">show 500 more (${T.length-N} left)</button>`:''}</details></div>`}
+
 function walletGrid(n){const w=n.wallet||{};const E=Object.entries(w);if(!E.length)return '';
  return `<div class="card"><details id="wgrid"><summary><b>Risk settings compared</b> <span class="sub">(older 4h-only runs: how often each risk level reached 100)</span></summary>${E.map(([k,rows])=>`<div class="k" style="margin-top:10px">followed for ${esc(k)}</div>
  ${hbars(rows.slice(0,10).map(r=>({label:`${Math.round(r.risk*100)}% · ${r.concurrent} open`,value:100*r.hit_100,sub:`bust ${Math.round(r.bust*100)}%, median end ${num(r.median_end_balance,1)}, worst DD ${Math.round(r.worst_dd_pct)}%`})),{fmtv:v=>Math.round(v)+'%'})}
@@ -219,7 +289,7 @@ function where(n){const b=n.breakdown||{};if(!b.by_strategy)return '<div class="
  const coin=`<div class="card"><b>Total profit by coin</b>${hbars(rows('by_symbol').sort((a,c)=>c[4]-a[4]).map(r=>({label:r[0].replace('USDT',''),value:r[4],sub:`${r[1]} trades, ${num(r[2],3)} R each`})),{fmtv:v=>v.toFixed(0)+' R'})}</div>`;
  const side=`<div class="card"><b>Longs vs shorts</b>${hbars(rows('by_side').map(r=>({label:r[0],value:r[4],sub:`${r[1]} trades`})),{fmtv:v=>v.toFixed(0)+' R'})}
  <div class="sub">${rows('by_side').map(r=>`${esc(r[0])}: ${r[1]} trades, ${num(r[2],3)} R each, win ${pct(r[3])}`).join(' · ')}</div>
- <b style="display:block;margin-top:12px">By year</b>${vbars(rows('by_year').map(r=>({label:r[0],value:r[4],color:r[4]>=0?css('--ok'):css('--bad'),tip:`${r[0]}: ${r[1]} trades, total ${num(r[4],1)} R`})),{h:140,fmtv:v=>v.toFixed(0)})}</div>`;
+ <b style="display:block;margin-top:12px">By year</b>${vbars(rows('by_year').map(r=>({label:r[0],value:r[4],color:r[4]>=0?css('--ok'):css('--bad'),tip:`${r[0]}: ${r[1]} trades, total ${num(r[4],1)} R`})),{w:Math.max(260,Math.min(innerWidth-70,330)),h:140,fmtv:v=>v.toFixed(0)})}</div>`;
  return st+`<div class="charts">${strat}${coin}${side}</div>`}
 
 /* ---------- 7 · raw results ---------- */
@@ -229,15 +299,17 @@ function res(r){const row=x=>`<tr><td>${esc(sname(x.strategy))}<div class="k">${
  <div class="sub">CI low = worst plausible R/trade (95%) · PF = gross wins / gross losses · null p = chance random entries do as well (under 0.05 = real edge)</div></details></div>`}
 
 const _last={};
-async function tick(){let s;try{s=await (await fetch('/api/state',{cache:'no-store'})).json();}catch(e){document.getElementById('upd').textContent='cannot reach the server · retrying';return}
- const set=(id,h)=>{const el=document.getElementById(id);if(!el||_last[id]===h)return;_last[id]=h;
+const set=(id,h)=>{const el=document.getElementById(id);if(!el||_last[id]===h)return;_last[id]=h;
   const open=[...el.querySelectorAll('details[open][id]')].map(d=>d.id);el.innerHTML=h;
   open.forEach(i=>{const d=document.getElementById(i);if(d)d.open=true})};
+async function tick(){let s;try{s=await (await fetch('/api/state',{cache:'no-store'})).json();}catch(e){document.getElementById('upd').textContent='cannot reach the server · retrying';return}
+
  try{
  set('upd','live · '+new Date().toLocaleTimeString()+' · refreshes every 6s');
  set('banner',banner(s.banner));
  set('progress',progress(s));
- const n=s.noai||{};
+ _S=s;const n=s.noai||{};
+ if(!_U&&!_N.u){_N.u=1;fetch('/api/trades').then(r=>r.json()).then(u=>{_U=u;rw()}).catch(()=>{_N.u=0})}
  set('find',findings(n));set('wallet',wallet(n));set('where',where(n));
  const G=s.ai.filter(x=>x.kind==='gate'),Q=s.ai.filter(x=>x.kind!=='gate');
  set('gate',G.length?G.map(gate).join(''):'<div class="card sub">AI test paused until the ThinkPad is connected</div>');

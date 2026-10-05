@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import argparse
 import dataclasses
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
@@ -19,19 +20,62 @@ from analysis.lab.wallet import WalletConfig, run_wallet
 MONTH_MS = 30 * 86_400_000
 
 
+def _num(x, d):
+    try:
+        x = float(x)
+    except (TypeError, ValueError):
+        return None
+    return round(x, d) if np.isfinite(x) else None
+
+
+def _stamp(ms) -> str:
+    return pd.to_datetime(int(ms), unit="ms").strftime("%Y-%m-%d %H:%M")
+
+
+def ledger_row(r: dict) -> dict:
+    """One passbook line: when the trade opened and closed, what, why, how big, fees, result, balance."""
+    return {"t": _stamp(r["t"]), "opened": _stamp(r["entry_t"]), "symbol": r["symbol"],
+            "side": "long" if r["side"] > 0 else "short", "strategy": r.get("strategy", ""), "tf": r.get("tf") or "",
+            "entry": _num(r.get("entry"), 6), "exit_px": _num(r.get("exit"), 6), "r": _num(r.get("r_net"), 3),
+            "ret_pct": _num(100 * r["net_ret"], 3) if r.get("net_ret") is not None else None,
+            "stop_pct": _num(100 * r["stop_frac"], 2) if r.get("stop_frac") is not None else None,
+            "notional": round(r["notional"], 2), "margin": round(r["margin"], 2), "fee": _num(r.get("fee_usd"), 4),
+            "pnl": round(r["pnl"], 3), "before": round(r["balance_before"], 2), "balance": round(r["balance_after"], 2),
+            "exit": r.get("reason", ""), "liquidated": bool(r.get("liquidated"))}
+
+
+def universe(tr: pd.DataFrame) -> list[dict]:
+    """Every distinct trade the strategies took (no wallet, no overlap), for per-strategy stats on any date range."""
+    return [{"o": _stamp(r.entry_t), "c": _stamp(r.exit_t), "s": r.symbol.replace("USDT", ""), "d": int(r.side),
+             "st": r.strategy, "tf": r.tf, "r": _num(r.r_net, 3), "x": r.reason} for r in tr.itertuples(index=False)]
+
+
 def one_start(trades: pd.DataFrame, t0: int, months: int, cfg: WalletConfig):
     win = trades[(trades.entry_t >= t0) & (trades.entry_t < t0 + months * MONTH_MS)]
     if len(win) < 5:
         return None
     res = run_wallet(win, dataclasses.replace(cfg, reset=False))
     c = res.cycles[0]
-    ledger = [{"t": pd.to_datetime(r["t"], unit="ms").strftime("%Y-%m-%d %H:%M"), "symbol": r["symbol"],
-               "side": "long" if r["side"] > 0 else "short", "strategy": r.get("strategy", ""),
-               "notional": round(r["notional"], 2), "pnl": round(r["pnl"], 3), "balance": round(r["balance_after"], 2),
-               "exit": r.get("reason", "")} for r in res.ledger if r.get("cycle", 1) == 1]
+    ledger = [ledger_row(r) for r in res.ledger if r.get("cycle", 1) == 1]
     return {"start": pd.to_datetime(t0, unit="ms").strftime("%Y-%m"), "status": c["status"], "end": c["end"],
             "trades": c["trades"], "days": (c["t1"] - c["t0"]) / 86_400_000, "dd": c["dd"], "peak": c["peak"],
             "ledger": ledger, "skipped": dict(res.skipped)}
+
+
+def _tf_of(path: str) -> str:
+    """Bar size of a lab run, from the run's spec.json (sig_tf), else from the folder name."""
+    import json
+    import re
+    from pathlib import Path
+    spec = Path(path).parent / "spec.json"
+    try:
+        tf = json.loads(spec.read_text()).get("sig_tf")
+        if tf:
+            return tf
+    except (OSError, ValueError):
+        pass
+    m = re.search(r"(\d+[mhd])\b", Path(path).parent.name)
+    return m.group(1) if m else ""
 
 
 def main():
@@ -49,7 +93,7 @@ def main():
     ap.add_argument("--detail-concurrent", default="4")
     ap.add_argument("--out", default=None)
     a = ap.parse_args()
-    tr = pd.concat([pd.read_parquet(f) for f in [a.trades] + a.trades_extra])
+    tr = pd.concat([pd.read_parquet(f).assign(tf=_tf_of(f)) for f in [a.trades] + a.trades_extra])
     tr = tr[tr.cfg.str.contains("sl3.0_rr3.0") & tr.cfg.str.contains("h10080")].sort_values("entry_t").reset_index(drop=True)
     first, last = int(tr.entry_t.min()), int(tr.entry_t.max())
     starts = [int(t.timestamp() * 1000) for t in pd.date_range(pd.to_datetime(first, unit="ms").normalize().replace(day=1) + pd.offsets.MonthBegin(1),
@@ -85,6 +129,9 @@ def main():
         with open(a.detail_out, "w") as f:
             json.dump({"months": a.months, "trades_file": a.trades, "settings": details}, f, default=float)
         print("saved", a.detail_out, f"({len(details)} settings with full histories)")
+        uni = Path(a.detail_out).with_name("wallet_trades.json")
+        uni.write_text(json.dumps({"trades": universe(tr)}, default=float))
+        print("saved", uni, f"({len(tr)} distinct trades)")
 
 
 if __name__ == "__main__":

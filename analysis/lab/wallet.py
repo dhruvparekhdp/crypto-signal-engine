@@ -183,7 +183,11 @@ def run_wallet(trades: pd.DataFrame, cfg: WalletConfig) -> WalletResult:
                          "row": {"entry_t": t, "symbol": row.symbol, "side": int(row.side), "notional": notional,
                                  "margin": margin, "capped": capped, "liquidated": liquidated,
                                  "strategy": getattr(row, "strategy", "") if strat_col else "",
-                                 "reason": getattr(row, "reason", "")}})
+                                 "reason": getattr(row, "reason", ""), "fee_usd": fee_usd,
+                                 # passbook detail: prices, R and bar size, when the trade file has them
+                                 "entry": getattr(row, "entry", None), "exit": getattr(row, "exit", None),
+                                 "r_net": getattr(row, "r_net", None), "net_ret": float(row.net_ret),
+                                 "stop_frac": sf, "tf": getattr(row, "tf", None)}})
     settle(10**18)
     if cycle["trades"] or not res.cycles:
         cycle.update(status="IN_PROGRESS", end=bal, t1=int(tr.exit_t.iloc[-1]),

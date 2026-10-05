@@ -315,15 +315,42 @@ def noai_view():
     return out
 
 
-def _wallet_detail(months: int):
+_json_cache: dict = {}
+
+
+def _cached_json(f: Path):
+    """Parse a big JSON file once per change, not on every 6-second refresh."""
+    key, mt = str(f), f.stat().st_mtime
+    hit = _json_cache.get(key)
+    if hit and hit[0] == mt:
+        return hit[1]
+    v = json.loads(f.read_text())
+    _json_cache[key] = (mt, v)
+    return v
+
+
+def _lab_file(name: str) -> Path | None:
     for base in [ROOT] + list((ROOT / "remote").glob("*")):
-        f = base / "data" / "lab" / f"wallet_detail_{months}m.json"
+        f = base / "data" / "lab" / name
         if f.exists():
-            try:
-                return json.loads(f.read_text())
-            except (OSError, json.JSONDecodeError):
-                return None
+            return f
     return None
+
+
+def _wallet_detail(months: int):
+    f = _lab_file(f"wallet_detail_{months}m.json")
+    if f is None:
+        return None
+    try:
+        return _cached_json(f)
+    except (OSError, json.JSONDecodeError):
+        return None
+
+
+def strategy_trades():
+    """Every distinct trade of the live strategies (written by scripts.portfolio_wallet)."""
+    f = _lab_file("wallet_trades.json")
+    return _cached_json(f)["trades"] if f else []
 
 
 def wallet_detail_summary():
@@ -334,11 +361,23 @@ def wallet_detail_summary():
         if not d:
             continue
         for i, st in enumerate(d["settings"]):
-            starts = [{k: v for k, v in x.items() if k not in ("ledger",)} for x in st["starts"]]
+            starts = [{**{k: v for k, v in x.items() if k not in ("ledger",)}, "by_strategy": _by_strategy(x.get("ledger", []))}
+                      for x in st["starts"]]
             n = len(starts)
             out.append({"months": months, "i": i, "label": st["label"], "n": n,
                         "hit": sum(x["status"] == "TARGET" for x in starts), "bust": sum(x["status"] == "BUST" for x in starts),
                         "median_end": sorted(x["end"] for x in starts)[n // 2] if n else None, "starts": starts})
+    return out
+
+
+def _by_strategy(ledger: list) -> dict:
+    out: dict = {}
+    for t in ledger:
+        k = f"{t.get('strategy', '')}|{t.get('tf', '')}"
+        o = out.setdefault(k, [0, 0, 0.0])          # trades, wins, net USDT
+        o[0] += 1
+        o[1] += t["pnl"] > 0
+        o[2] = round(o[2] + t["pnl"], 3)
     return out
 
 
@@ -419,6 +458,8 @@ class H(BaseHTTPRequestHandler):
             body = json.dumps(scrub(wallet_ledger(int(q.get("months", ["12"])[0]), int(q.get("i", ["0"])[0]),
                                                   q.get("start", [""])[0])), allow_nan=False).encode()
             ct = "application/json"
+        elif self.path.startswith("/api/trades"):
+            body, ct = json.dumps(scrub(strategy_trades()), allow_nan=False).encode(), "application/json"
         elif self.path.startswith("/setup.sh"):
             body, ct = (here / "worker_setup.sh").read_bytes(), "text/x-shellscript"
         elif self.path.startswith("/worker.py"):
