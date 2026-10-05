@@ -168,6 +168,9 @@ class Settings(BaseSettings):
     swing_strategies: str = "vol_breakout:z=3.0,keltner_break:k=2.5,donchian:n=100,ichimoku"
     swing_scan_seconds: int = 300
     swing_risk_pct: float = 0.01
+    # Backtest (scripts/portfolio_wallet, fixed vs adaptive): cutting risk in drawdowns barely reduced the
+    # worst drawdown but halved the profit, so fixed risk is the default.
+    swing_adaptive_risk: bool = False
     swing_max_open: int = 4
     swing_max_leverage: float = 3.0
     swing_hold_minutes: int = 10080

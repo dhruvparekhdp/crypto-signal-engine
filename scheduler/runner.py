@@ -885,7 +885,8 @@ class AppRunner:
             dist = abs(sig.current_price - sig.stop_loss)
             stop, target = price - side * dist, price + side * sb.REWARD_RISK * dist
             equity = cstate.wallet + sum(p.margin for p in cstate.positions)
-            risk = sb.adaptive_risk(settings.swing_risk_pct, dd, streak)
+            risk = (sb.adaptive_risk(settings.swing_risk_pct, dd, streak) if settings.swing_adaptive_risk
+                    else settings.swing_risk_pct)
             sized = sb.size(equity, cstate.wallet, risk, price, stop, stop_out_costs(sig.symbol, cfg),
                             settings.swing_max_leverage)
             if sized is None:
