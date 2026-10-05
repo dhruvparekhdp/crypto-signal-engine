@@ -183,3 +183,80 @@ async def test_swing_signals_are_not_crowded_out_by_intraday_ones():
         assert all(r.trade_mode != "swing" for r in await repo.crypto_signals_between(90, 0))
         rows = await repo.swing_signals_since(120)
         assert [r.signal_type for r in rows] == ["swing_donchian"]
+
+
+H = 3_600_000
+
+
+class TestVirtualOutcome:
+    def bars(self, highs, lows, closes, t0=0):
+        return [t0 + i * H for i in range(len(highs))], highs, lows, closes
+
+    def test_target_first(self):
+        t, h, l, c = self.bars([101, 104, 113], [99, 98, 103], [100, 103, 112])
+        out, r = rg.virtual_outcome("long", 100, 96, 112, t, h, l, c, 0, 7 * 24 * H, 10 * H)
+        assert out == "won" and r == pytest.approx(3 - 0.17 / 4)
+
+    def test_stop_wins_a_same_bar_tie(self):
+        t, h, l, c = self.bars([113], [95], [100])
+        assert rg.virtual_outcome("long", 100, 96, 112, t, h, l, c, 0, 7 * 24 * H, 10 * H)[0] == "lost"
+
+    def test_short_side_and_seven_day_expiry(self):
+        n = 7 * 24 + 3
+        t, h, l, c = self.bars([101] * n, [99] * n, [98] * n)
+        out, r = rg.virtual_outcome("short", 100, 104, 88, t, h, l, c, 0, 7 * 24 * H, n * H)
+        assert out == "expired" and r == pytest.approx(2 / 4 - 0.17 / 4)
+
+    def test_still_running(self):
+        t, h, l, c = self.bars([101, 102], [99, 99], [100, 101])
+        assert rg.virtual_outcome("long", 100, 96, 112, t, h, l, c, 0, 7 * 24 * H, 2 * H) is None
+
+
+def test_signal_scoreboard_groups_by_verdict_and_counts_running():
+    take, skip = rg.Verdict(0.2, 10.0, []).tag(), rg.Verdict(0.9, 10.0, ["wild_market"]).tag()
+    rows = [{"indicators_summary": take, "outcome": "won", "pnl_pct": 12.0, "current_price": 100, "stop_loss": 96},
+            {"indicators_summary": skip, "outcome": "lost", "pnl_pct": -4.17, "current_price": 100, "stop_loss": 96},
+            {"indicators_summary": skip, "outcome": "pending", "pnl_pct": 0, "current_price": 100, "stop_loss": 96},
+            {"indicators_summary": "", "outcome": "won", "pnl_pct": 5, "current_price": 100, "stop_loss": 96}]
+    out = rg.signal_scoreboard(rows)
+    assert out["take"]["n"] == 1 and out["take"]["avg_r"] == pytest.approx(3.0)
+    assert out["skip"]["n"] == 1 and out["skip"]["running"] == 1 and out["skip"]["avg_r"] == pytest.approx(-4.17 / 4)
+
+
+def test_filter_and_risk_defaults():
+    from config.settings import Settings
+    assert Settings.model_fields["swing_regime_filter"].default == "on"
+    assert Settings.model_fields["swing_risk_pct"].default == 0.03
+
+
+@pytest.mark.asyncio
+async def test_the_intraday_resolver_leaves_swing_signals_to_the_swing_replay():
+    """It keeps 6 hours of 1m candles and expires at the intraday hold, which would grade a 7-day trade wrongly."""
+    from analysis.crypto_state import OHLCVCandle
+    from scheduler.runner import AppRunner
+    from storage.repository import Repository
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+    session_maker = async_sessionmaker(engine, expire_on_commit=False)
+    common = dict(direction="long", trigger_description="x", confidence=0.5, current_price=100.0, edge_pct=0,
+                  stake_pct=0, sentiment_score=0, target_price=112.0, stop_loss=96.0, indicators_summary="")
+    async with session_maker() as s:
+        repo = Repository(s)
+        await repo.log_crypto_signal(symbol="solusdt", signal_type="swing_donchian", timeframe="4h", trade_mode="swing", **common)
+        await repo.log_crypto_signal(symbol="solusdt", signal_type="confluence", timeframe="15m", trade_mode="intraday", **common)
+        from sqlalchemy import update
+
+        from storage.models import CryptoSignalLog
+        await s.execute(update(CryptoSignalLog).values(timestamp=datetime.now(UTC).replace(tzinfo=None) - timedelta(minutes=30)))
+        await s.commit()
+    runner = AppRunner()
+    st = CryptoState(symbol="solusdt", base_asset="SOL")
+    later = datetime.now(UTC) - timedelta(minutes=20)
+    st.candles_1m = [OHLCVCandle(open=100, high=113, low=99, close=112, volume=1, timestamp=later)]
+    runner.crypto_store._states["solusdt"] = st
+    with patch("scheduler.runner.AsyncSessionFactory", session_maker):
+        await runner._resolve_signal_outcomes_job()
+    async with session_maker() as s:
+        rows = {r.signal_type: r.outcome for r in await Repository(s).crypto_signals_between(1, 0)}
+    assert rows == {"swing_donchian": "pending", "confluence": "won"}

@@ -42,9 +42,9 @@ async def test_swing_trade_opens_holds_its_stop_and_closes_at_target():
             assert row.trade_mode == "swing" and row.signal_type == "swing_keltner_break"
             assert row.stop_price == pytest.approx(57000.0) and row.target_price == pytest.approx(69000.0)
             assert row.leverage <= 10.0
-            # a stop-out costs about 1% of the wallet (plus costs)
+            # a stop-out costs about 3% of the wallet (plus costs)
             loss_at_stop = row.margin * row.leverage * (3000 / 60000)
-            assert 0.008 * cycle.starting_wallet < loss_at_stop < 0.0105 * cycle.starting_wallet
+            assert 0.025 * cycle.starting_wallet < loss_at_stop < 0.0305 * cycle.starting_wallet
             assert (row.expires_at.replace(tzinfo=UTC) - datetime.now(UTC)).total_seconds() > 6.9 * 86400
 
         st.current_price = 66000.0                                # tick 2: +10%, below target

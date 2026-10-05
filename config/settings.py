@@ -170,7 +170,7 @@ class Settings(BaseSettings):
     swing_strategies: str = ("4h@vol_breakout:z=3.0,4h@keltner_break:k=2.5,4h@donchian:n=100,4h@ichimoku,"
                              "8h@keltner_break:k=2.0,8h@vol_breakout:z=3.0,8h@donchian:n=100,8h@ichimoku")
     swing_scan_seconds: int = 300
-    swing_risk_pct: float = 0.01
+    swing_risk_pct: float = 0.03
     # Backtest (scripts/portfolio_wallet, fixed vs adaptive): cutting risk in drawdowns barely reduced the
     # worst drawdown but halved the profit, so fixed risk is the default.
     swing_adaptive_risk: bool = False
@@ -181,7 +181,7 @@ class Settings(BaseSettings):
     # Regime check (analysis/regime_gate.py): skip swing signals when Bitcoin's 30-day volatility is in the top
     # third of its past year, or the coin's daily ADX is above 30. "shadow" tags every signal and still trades it,
     # so the live book can confirm the backtest before the filter is allowed to block anything; "on" skips.
-    swing_regime_filter: str = "shadow"
+    swing_regime_filter: str = "on"
     swing_regime_vol_rank_max: float = 0.67
     swing_regime_adx_max: float = 30.0
     # Crypto signals arrive in same-direction clusters (97% of multi-signal bars), so several open trades are one

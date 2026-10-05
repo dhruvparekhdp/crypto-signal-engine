@@ -1579,6 +1579,8 @@ class AppRunner:
                 states = {st.symbol: st for st in await self.crypto_store.get_all()}
                 resolved = 0
                 for sig in pending:
+                    if getattr(sig, "trade_mode", "") == "swing":
+                        continue                  # swing signals run for days: _swing_outcomes_job replays them
                     if sig.current_price <= 0.001 or sig.target_price <= 0 or sig.stop_loss <= 0:
                         await repo.resolve_crypto_signal(sig.id, "expired", 0.0)
                         resolved += 1
@@ -1651,6 +1653,41 @@ class AppRunner:
                              still_pending=len(pending) - resolved)
         except Exception:
             log.exception("resolve_signal_outcomes_failed")
+
+    async def _swing_outcomes_job(self) -> None:
+        """Replay every pending swing signal on 1h bars (stop first on a tie, 7-day limit) and record its outcome,
+        whether it was traded or skipped. This is what scores the market filter while it is switched on."""
+        import httpx
+
+        from analysis import regime_gate
+        try:
+            async with AsyncSessionFactory() as session:
+                rows = [r for r in await Repository(session).swing_signals_since(14) if r.outcome == "pending"]
+            if not rows:
+                return
+            now_ms = int(datetime.now(UTC).timestamp() * 1000)
+            hold_ms = settings.swing_hold_minutes * 60_000
+            async with httpx.AsyncClient() as client:
+                for r in rows:
+                    ts = r.timestamp if r.timestamp.tzinfo else r.timestamp.replace(tzinfo=UTC)
+                    start = int(ts.timestamp() * 1000)
+                    if now_ms - start < 3_600_000 or not (r.current_price > 0 and r.stop_loss > 0 and r.target_price > 0):
+                        continue
+                    resp = await client.get("https://fapi.binance.com/fapi/v1/klines", timeout=15, params={
+                        "symbol": r.symbol.upper(), "interval": "1h", "startTime": start - 3_600_000, "limit": 200})
+                    k = [x for x in resp.json() if int(x[0]) + 3_600_000 <= now_ms]      # closed bars only
+                    res = regime_gate.virtual_outcome(
+                        r.direction, r.current_price, r.stop_loss, r.target_price, [int(x[0]) for x in k],
+                        [float(x[2]) for x in k], [float(x[3]) for x in k], [float(x[4]) for x in k], start, hold_ms, now_ms)
+                    if res is None:
+                        continue
+                    outcome, rr = res
+                    risk_pct = abs(r.current_price - r.stop_loss) / r.current_price * 100
+                    async with AsyncSessionFactory() as session:
+                        await Repository(session).resolve_crypto_signal(r.id, outcome, round(rr * risk_pct, 4))
+                    log.info("swing_signal_resolved", symbol=r.symbol, strategy=r.signal_type, outcome=outcome, r=round(rr, 2))
+        except Exception:
+            log.exception("swing_outcomes_failed")
 
     async def _cleanup_job(self) -> None:
         async with AsyncSessionFactory() as session:
@@ -2871,6 +2908,14 @@ class AppRunner:
             id="candle_refresh",
             max_instances=1,
             next_run_time=datetime.now(UTC) + timedelta(minutes=2),
+        )
+        self.scheduler.add_job(
+            self._swing_outcomes_job,
+            "interval",
+            seconds=1800,
+            id="swing_outcomes",
+            max_instances=1,
+            next_run_time=datetime.now(UTC) + timedelta(minutes=3),
         )
         self.scheduler.add_job(
             self._swing_scan_job,

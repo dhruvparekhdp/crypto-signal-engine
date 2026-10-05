@@ -130,3 +130,54 @@ def shadow_scoreboard(signals: list[dict], trades: list[dict], match_minutes: fl
             "by_reason": {k: stats(v) for k, v in by_reason.items()}, "trades": rows[-30:],
             "expected": {"take_r": 0.36, "skip_r": -0.05,
                          "note": "backtest: kept trades +0.36 R each; skipped ones about zero or worse. Judge after 30+ of each."}}
+
+
+ROUND_TRIP_COST_PCT = 0.17     # fees + GST + slippage of a round trip, as % of price (lab cost model, india_gst)
+
+
+def virtual_outcome(direction: str, entry: float, stop: float, target: float, t_ms, high, low, close,
+                    start_ms: int, hold_ms: int, now_ms: int) -> tuple[str, float] | None:
+    """Replay a signal on bars (oldest first, bar OPEN times) as if it had been traded: first touch of stop or
+    target, the stop winning a same-bar tie (the backtest's rule), else closed at the end of the hold.
+    Returns (outcome, R after costs), or None while it is still running."""
+    sgn = 1 if direction == "long" else -1
+    risk = abs(entry - stop) / entry * 100
+    if risk <= 0:
+        return None
+    cost_r = ROUND_TRIP_COST_PCT / risk
+    for t, h, lo, c in zip(t_ms, high, low, close):
+        if t < start_ms - 3_600_000 + 1:                    # the bar the signal was logged in counts from its open
+            continue
+        if t > start_ms + hold_ms:
+            return "expired", sgn * (c - entry) / entry * 100 / risk - cost_r
+        hit_stop = lo <= stop if sgn > 0 else h >= stop
+        hit_tgt = h >= target if sgn > 0 else lo <= target
+        if hit_stop:
+            return "lost", -1.0 - cost_r
+        if hit_tgt:
+            return "won", abs(target - entry) / entry * 100 / risk - cost_r
+    if now_ms >= start_ms + hold_ms and len(close):
+        return "expired", sgn * (close[-1] - entry) / entry * 100 / risk - cost_r
+    return None
+
+
+def signal_scoreboard(signals: list[dict]) -> dict:
+    """Every tagged swing signal by verdict, scored by its replayed outcome (resolved rows only).
+    signals: [{indicators_summary, outcome, pnl_pct, current_price, stop_loss, skip_reason}]"""
+    groups: dict = {"take": [], "skip": []}
+    pending = {"take": 0, "skip": 0}
+    for s in signals:
+        v = parse_tag(s.get("indicators_summary", ""))
+        if v is None:
+            continue
+        g = "skip" if v["would_skip"] else "take"
+        if s.get("outcome") in (None, "", "pending"):
+            pending[g] += 1
+            continue
+        risk = abs(s["current_price"] - s["stop_loss"]) / s["current_price"] * 100 if s.get("current_price") else 0
+        if risk > 0:
+            groups[g].append(s["pnl_pct"] / risk)                # pnl_pct already includes costs (see resolver)
+    st = lambda x: {"n": len(x), "wins": sum(1 for r in x if r > 0), "avg_r": (sum(x) / len(x)) if x else None,
+                    "total_r": sum(x)}
+    return {"take": {**st(groups["take"]), "running": pending["take"]},
+            "skip": {**st(groups["skip"]), "running": pending["skip"]}}
