@@ -94,3 +94,47 @@ async def test_swing_endpoint_works_with_no_running_cycle():
     with patch.object(health, "_paper_db_snapshot", AsyncMock(return_value={"cycle": None, "recent": []})):
         resp = await health._api_swing(SimpleNamespace(), None)
     assert json.loads(resp.text)["closed"]["n"] == 0
+
+
+def test_secret_names_are_recognised():
+    from scheduler.health import _looks_secret
+    for n in ("openrouter_api_key", "hf_api_token", "password_hash", "session_token", "salt", "DELTA_API_SECRET"):
+        assert _looks_secret(n), n
+    for n in ("key", "value", "symbol", "risk_tone", "updated_at"):
+        assert not _looks_secret(n), n
+
+
+@pytest.mark.asyncio
+async def test_the_public_table_dump_never_returns_api_keys_or_auth():
+    from aiohttp.test_utils import TestClient, TestServer
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+        from sqlalchemy import text
+        await conn.execute(text("INSERT INTO app_settings (key, value, updated_at) VALUES ('openrouter_api_key', 'sk-or-SECRET', '2026-01-01'), ('crypto_min_confidence', '0.5', '2026-01-01')"))
+        await conn.execute(text("INSERT INTO admin_auth (id, password_hash, salt, session_token, updated_at) VALUES (1, 'HASH', 'SALT', 'TOKEN', '2026-01-01')"))
+    from scheduler import health
+    from tests.test_api_security import FakeRunner
+    with patch("storage.database.engine", engine):
+        app = await health.make_app(FakeRunner())
+        async with TestClient(TestServer(app)) as client:
+            resp = await client.get("/api/tables?limit=50")
+            body = await resp.text()
+    assert resp.status == 200
+    for secret in ("sk-or-SECRET", "HASH", "SALT", "TOKEN"):
+        assert secret not in body, secret
+    assert "0.5" in body                                   # ordinary settings still visible
+
+
+@pytest.mark.asyncio
+async def test_simulator_config_works_and_returns_no_keys():
+    from aiohttp.test_utils import TestClient, TestServer
+    from scheduler import health
+    from tests.test_api_security import FakeRunner
+    with patch.dict("os.environ", {"GEMINI_API_KEY": "AIza-SECRET"}):
+        app = await health.make_app(FakeRunner())
+        async with TestClient(TestServer(app)) as client:
+            resp = await client.get("/api/simulator/config")
+            body = await resp.text()
+    assert resp.status == 200
+    assert "AIza-SECRET" not in body

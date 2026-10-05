@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import json as _stdjson
+import os
 import math
 import types as _types
 
@@ -441,7 +442,7 @@ async def _api_simulator_get_config(runner, request: web.Request) -> web.Respons
         "cycle_leverage": 10.0,
         "strategy": "all",
         "ai_provider": "none",
-        "gemini_key": os.getenv("GEMINI_API_KEY", ""),
+        "gemini_key": "",          # never echo a server-side key to the browser
         "openrouter_key": "",
         "hf_tokens": "",
     }
@@ -2270,7 +2271,7 @@ section h2{color:var(--accent-soft)}
   <a class="side-item side-secondary" data-tab="v2" href="/v2"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 17l6-6 4 4 8-8"/><path d="M14 7h7v7"/></svg><span>v2 Shadow</span></a>
   <a class="side-item side-secondary" data-tab="journal" href="/journal"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 17l6-6 4 4 8-8"/><path d="M14 7h7v7"/></svg><span>Journal</span></a>
   <a class="side-item side-secondary" data-tab="audit" href="/audit"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 3h6v5l4 9a2 2 0 01-1.8 3H6.8A2 2 0 015 16l4-9z"/><path d="M9 8h6"/></svg><span>Signal Audit</span></a>
-  <a class="side-item side-secondary" data-tab="diag" href="/api/debug/collectors"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2v4M12 18v4M4.9 4.9l2.8 2.8M16.3 16.3l2.8 2.8M2 12h4M18 12h4"/></svg><span>Diagnostics</span></a>
+  <a class="side-item side-secondary" data-tab="diag" href="/api/debug/binance"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2v4M12 18v4M4.9 4.9l2.8 2.8M16.3 16.3l2.8 2.8M2 12h4M18 12h4"/></svg><span>Diagnostics</span></a>
   <a class="side-item side-secondary" data-tab="settings" href="/settings"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19 12a7 7 0 00-.1-1l2-1.6-2-3.4-2.4 1a7 7 0 00-1.7-1L14.5 3h-4l-.4 2.6a7 7 0 00-1.7 1l-2.4-1-2 3.4L6 11a7 7 0 000 2l-2 1.6 2 3.4 2.4-1a7 7 0 001.7 1l.4 2.6h4l.4-2.6a7 7 0 001.7-1l2.4 1 2-3.4-2-1.6a7 7 0 00.1-1z"/></svg><span>Settings</span></a>
   <div class="side-item side-more" onclick="toggleMore()">
     <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round"><circle cx="5" cy="12" r="1.6"/><circle cx="12" cy="12" r="1.6"/><circle cx="19" cy="12" r="1.6"/></svg>
@@ -5081,6 +5082,15 @@ load();
 </html>"""
 
 
+_SECRET_WORDS = ("key", "token", "secret", "password", "salt", "auth", "credential")
+
+
+def _looks_secret(name: str) -> bool:
+    """A column or setting name that may hold a credential. Errs on the side of hiding."""
+    n = name.lower()
+    return any(w in n for w in _SECRET_WORDS) and n not in ("key",)
+
+
 async def _api_tables(runner, request: web.Request) -> web.Response:
     """Dump every table in the database (reflected, so it covers all tables).
 
@@ -5135,11 +5145,17 @@ async def _api_tables(runner, request: web.Request) -> web.Response:
                 # login. Secrets are blanked here rather than trusted to a
                 # caller check, so a future route change cannot re-expose them.
                 secret = SECRET_COLUMNS.get(name, frozenset())
-                if secret:
-                    hide = [i for i, c in enumerate(cols) if c in secret]
+                hide = [i for i, c in enumerate(cols) if c in secret or _looks_secret(c)]
+                for row in rows:
+                    for i in hide:
+                        row[i] = "[redacted]"
+                # Key/value tables (app_settings) keep API keys as rows, not columns: the OpenRouter
+                # key and the HF token were readable here by anyone with the server's address.
+                if "key" in cols and "value" in cols:
+                    ki, vi = cols.index("key"), cols.index("value")
                     for row in rows:
-                        for i in hide:
-                            row[i] = "[redacted]"
+                        if _looks_secret(str(row[ki])):
+                            row[vi] = "[redacted]"
             except Exception as exc:
                 error = str(exc)
 
