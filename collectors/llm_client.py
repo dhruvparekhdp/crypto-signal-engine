@@ -431,6 +431,7 @@ async def _call_hf(model: str, system: str, user: str, max_tokens: int,
     elif model.endswith(":online"):
         model = model[:-len(":online")]
 
+    original_model = model
     if model in ("analyst", "default", ""):
         model = "meta-llama/Llama-3.3-70B-Instruct"
 
@@ -448,6 +449,23 @@ async def _call_hf(model: str, system: str, user: str, max_tokens: int,
 
     token = PROVIDERS["hf"].api_key
     base_url = (getattr(settings, "hf_base_url", "") or "").strip().rstrip("/") or None
+    if model == "meta-llama/Llama-3.3-70B-Instruct" and original_model in ("analyst", "default", "") and not base_url:
+        # "analyst" means our own Space; without one it would fall through to paid serverless inference
+        raise RuntimeError("hf: no Space configured (hf_base_url is empty)")
+    if base_url and getattr(settings, "hf_space_api_key", None) is not None:
+        # Our Space: its own key, the model name it expects, JSON mode, and the time a CPU model needs
+        url = f"{base_url}/v1/chat/completions"
+        headers = {"Content-Type": "application/json",
+                   "Authorization": f"Bearer {settings.hf_space_api_key.get_secret_value()}"}
+        payload = {"model": original_model or "analyst", "temperature": temperature, "max_tokens": max_tokens,
+                   "messages": [{"role": "system", "content": system}, {"role": "user", "content": user}],
+                   "response_format": {"type": "json_object"}}
+        async with httpx.AsyncClient(timeout=max(timeout, settings.hf_space_timeout_seconds)) as client:
+            resp = await client.post(url, json=payload, headers=headers)
+        if resp.status_code != 200:
+            raise RuntimeError(f"hf space returned {resp.status_code}: {resp.text[:200]}")
+        choices = resp.json().get("choices", [])
+        return choices[0]["message"].get("content", "") if choices else ""
 
     try:
         from huggingface_hub import AsyncInferenceClient

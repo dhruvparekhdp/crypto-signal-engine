@@ -1,207 +1,120 @@
 """
-Crypto Analyst AI Microservice on Hugging Face (Gradio + FastAPI + ZeroGPU)
-Provides:
-  1. OpenAI-compatible /v1/chat/completions API with real-time DuckDuckGo web search
-  2. Interactive web browser UI for testing queries
-"""
+Crypto analyst LLM that runs ON the Space's own CPU (free tier: 2 vCPU, 16 GB RAM) with llama.cpp.
 
+No inference credits and no daily token limit: the model file is downloaded once at start-up and served from
+memory. It is slow (roughly 1-3 minutes per answer on 2 vCPU), so the trading engine uses it as the LAST fallback
+for its search roles (market briefing, move attribution), after Groq and OpenRouter.
+
+API (OpenAI-shaped, what collectors/llm_client.py's "hf" provider calls via HF_BASE_URL):
+    POST /v1/chat/completions   {"model": "analyst+search", "messages": [...], "max_tokens": 600}
+    GET  /health
+A model name ending in "+search" or ":online" first fetches DuckDuckGo results and puts them in the prompt.
+
+Space settings (Settings -> Variables and secrets):
+    SPACE_API_KEY  (secret)  callers must send  Authorization: Bearer <SPACE_API_KEY>
+    MODEL_REPO     (optional) default Qwen/Qwen2.5-3B-Instruct-GGUF
+    MODEL_FILE     (optional) default qwen2.5-3b-instruct-q4_k_m.gguf
+"""
+from __future__ import annotations
+
+import asyncio
 import os
 import re
-import sys
+import threading
 import time
-import subprocess
-from typing import List, Optional, Dict, Any
 
-# Auto-install duckduckgo-search if missing from Space environment
-try:
-    from duckduckgo_search import DDGS
-except ImportError:
-    try:
-        subprocess.check_call([sys.executable, "-m", "pip", "install", "--no-cache-dir", "duckduckgo-search"])
-        from duckduckgo_search import DDGS
-    except Exception as e:
-        print(f"Warning: Failed to install duckduckgo-search dynamically: {e}")
-        DDGS = None
-
-from fastapi import FastAPI, HTTPException, Header
-from fastapi.middleware.cors import CORSMiddleware
+from fastapi import FastAPI, Header, HTTPException
 from pydantic import BaseModel
-from huggingface_hub import InferenceClient
-import gradio as gr
 
-# Initialize FastAPI app
-api_app = FastAPI(title="Crypto Analyst API")
+MODEL_REPO = os.getenv("MODEL_REPO", "Qwen/Qwen2.5-3B-Instruct-GGUF")
+MODEL_FILE = os.getenv("MODEL_FILE", "qwen2.5-3b-instruct-q4_k_m.gguf")
+API_KEY = os.getenv("SPACE_API_KEY", "")
+CTX = int(os.getenv("CTX", "4096"))
 
-api_app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+app = FastAPI(title="Crypto Analyst LLM (CPU)")
+_llm = None
+_lock = threading.Lock()          # llama.cpp is not re-entrant: one generation at a time
+_stats = {"started": time.time(), "served": 0, "last_seconds": None, "loading": True, "error": None}
 
-HF_TOKEN = os.getenv("HF_TOKEN", "")
-DEFAULT_MODEL = os.getenv("DEFAULT_MODEL", "Qwen/Qwen2.5-72B-Instruct")
-hf_client = InferenceClient(token=HF_TOKEN if HF_TOKEN else None)
 
-class ChatMessage(BaseModel):
+def _load():
+    global _llm
+    try:
+        from huggingface_hub import hf_hub_download
+        from llama_cpp import Llama
+        path = hf_hub_download(MODEL_REPO, MODEL_FILE)
+        _llm = Llama(model_path=path, n_ctx=CTX, n_threads=os.cpu_count() or 2, verbose=False)
+    except Exception as e:  # noqa: BLE001
+        _stats["error"] = str(e)[:300]
+    finally:
+        _stats["loading"] = False
+
+
+threading.Thread(target=_load, daemon=True).start()
+
+
+def _search(query: str, n: int = 5) -> str:
+    try:
+        from duckduckgo_search import DDGS
+        with DDGS() as d:
+            rows = list(d.news(query, max_results=n)) or list(d.text(query, max_results=n))
+        return "\n".join(f"- {r.get('title', '')}: {r.get('body', '')[:240]} ({r.get('date', '')})" for r in rows)
+    except Exception:  # noqa: BLE001
+        return ""
+
+
+def _query_from(text: str) -> str:
+    words = [w for w in re.sub(r"[{}\[\]\"]", " ", text).split() if len(w) < 20][:15]
+    return "crypto news " + " ".join(words) if words else "crypto market news today"
+
+
+class Msg(BaseModel):
     role: str
     content: str
 
-class ChatCompletionRequest(BaseModel):
-    model: Optional[str] = "analyst:online"
-    messages: List[ChatMessage]
-    max_tokens: Optional[int] = 2048
-    temperature: Optional[float] = 0.2
-    response_format: Optional[Dict[str, Any]] = None
 
-def extract_search_query(user_text: str) -> str:
-    """Extract a concise query from the trading engine prompt."""
-    query = user_text[:200]
-    for noise in ["Current time:", "Brief me.", "Write JSON only", "Reply with JSON", "format:"]:
-        query = query.replace(noise, "")
-    query = re.sub(r"\s+", " ", query).strip()
-    return query or "crypto market news bitcoin ethereum"
+class ChatReq(BaseModel):
+    model: str = "analyst"
+    messages: list[Msg]
+    max_tokens: int = 600
+    temperature: float = 0.2
+    response_format: dict | None = None
 
-def search_web(query: str, max_results: int = 5) -> str:
-    """Fetch live web snippets using DuckDuckGo."""
-    if DDGS is None:
-        return f"Live search unavailable for query: {query}"
-    try:
-        with DDGS() as ddgs:
-            results = list(ddgs.text(query, max_results=max_results))
-            if not results:
-                return "No search results returned."
-            formatted = []
-            for r in results:
-                title = r.get("title", "")
-                body = r.get("body", "")
-                href = r.get("href", "")
-                formatted.append(f"• Title: {title}\n  Snippet: {body}\n  Source: {href}")
-            return "\n\n".join(formatted)
-    except Exception as exc:
-        return f"Web search note for query '{query}': {exc}"
 
-@api_app.get("/health")
-def health_check():
-    return {
-        "status": "ok",
-        "service": "hf-crypto-analyst",
-        "model": DEFAULT_MODEL,
-        "search_engine": "duckduckgo" if DDGS is not None else "unavailable",
-        "uptime": time.time(),
-    }
+@app.get("/health")
+def health():
+    return {"model": f"{MODEL_REPO}/{MODEL_FILE}", "ready": _llm is not None, **_stats,
+            "uptime_s": round(time.time() - _stats["started"])}
 
-@api_app.post("/v1/chat/completions")
-async def chat_completions(req: ChatCompletionRequest, authorization: Optional[str] = Header(None)):
-    """OpenAI-compatible chat completion endpoint for our EC2 trading engine."""
-    system_content = ""
-    user_content = ""
-    for msg in req.messages:
-        if msg.role == "system":
-            system_content = msg.content
-        elif msg.role == "user":
-            user_content = msg.content
 
-    needs_search = (
-        "online" in (req.model or "")
-        or "search" in (req.model or "")
-        or "brief" in user_content.lower()
-        or "news" in user_content.lower()
-        or "moved" in user_content.lower()
-    )
+@app.post("/v1/chat/completions")
+async def chat(req: ChatReq, authorization: str | None = Header(default=None)):
+    if API_KEY and authorization != f"Bearer {API_KEY}":
+        raise HTTPException(401, "bad or missing API key")
+    if _llm is None:
+        raise HTTPException(503, "model still loading" if _stats["loading"] else f"model failed: {_stats['error']}")
+    msgs = [{"role": m.role, "content": m.content} for m in req.messages]
+    if req.model.endswith("+search") or req.model.endswith(":online"):
+        user = next((m["content"] for m in reversed(msgs) if m["role"] == "user"), "")
+        snippets = await asyncio.to_thread(_search, _query_from(user))
+        if snippets and msgs and msgs[0]["role"] == "system":
+            msgs[0]["content"] += ("\n\nReal-time web search results (retrieved just now):\n" + snippets +
+                                   "\n\nGround your answer in these results. Output valid JSON only.")
+    t0 = time.time()
 
-    search_context = ""
-    if needs_search:
-        query = extract_search_query(user_content)
-        search_context = search_web(query, max_results=5)
+    def run():
+        with _lock:
+            kw = {"messages": msgs, "max_tokens": min(req.max_tokens, 1200), "temperature": req.temperature}
+            if req.response_format and req.response_format.get("type") == "json_object":
+                kw["response_format"] = {"type": "json_object"}
+            return _llm.create_chat_completion(**kw)
 
-    augmented_system = system_content
-    if search_context:
-        augmented_system += (
-            f"\n\n--- REAL-TIME LIVE WEB SEARCH RESULTS (Retrieved just now) ---\n"
-            f"{search_context}\n"
-            f"--- END LIVE SEARCH RESULTS ---\n"
-            f"Use the verified live search facts above to ground your market analysis and briefing."
-        )
+    out = await asyncio.to_thread(run)
+    _stats["served"] += 1
+    _stats["last_seconds"] = round(time.time() - t0, 1)
+    out["model"] = MODEL_FILE
+    return out
 
-    hf_messages = [
-        {"role": "system", "content": augmented_system},
-        {"role": "user", "content": user_content},
-    ]
-
-    chosen_model = DEFAULT_MODEL
-    if req.model and "/" in req.model and not req.model.startswith("analyst"):
-        chosen_model = req.model
-
-    try:
-        response = hf_client.chat.completions.create(
-            model=chosen_model,
-            messages=hf_messages,
-            max_tokens=req.max_tokens or 1500,
-            temperature=req.temperature or 0.2,
-        )
-        reply_content = response.choices[0].message.content or ""
-    except Exception as exc:
-        fallback = "meta-llama/Llama-3.3-70B-Instruct" if chosen_model != "meta-llama/Llama-3.3-70B-Instruct" else "Qwen/Qwen2.5-72B-Instruct"
-        try:
-            response = hf_client.chat.completions.create(
-                model=fallback,
-                messages=hf_messages,
-                max_tokens=req.max_tokens or 1500,
-                temperature=req.temperature or 0.2,
-            )
-            reply_content = response.choices[0].message.content or ""
-            chosen_model = fallback
-        except Exception as exc2:
-            raise HTTPException(status_code=502, detail=f"HF Inference failed: {exc} | Fallback: {exc2}")
-
-    return {
-        "id": f"chatcmpl-hf-{int(time.time()*1000)}",
-        "object": "chat.completion",
-        "created": int(time.time()),
-        "model": f"hf/{chosen_model}",
-        "choices": [
-            {
-                "index": 0,
-                "message": {"role": "assistant", "content": reply_content},
-                "finish_reason": "stop",
-            }
-        ],
-        "usage": {
-            "prompt_tokens": len(augmented_system) // 4 + len(user_content) // 4,
-            "completion_tokens": len(reply_content) // 4,
-            "total_tokens": (len(augmented_system) + len(user_content) + len(reply_content)) // 4,
-        },
-    }
-
-# Interactive Gradio UI for browser testing
-def web_ui_chat(prompt: str, history):
-    query = extract_search_query(prompt)
-    search_context = search_web(query, max_results=4)
-    messages = [
-        {"role": "system", "content": f"You are a crypto research analyst.\n\nLive Search Facts:\n{search_context}"},
-        {"role": "user", "content": prompt}
-    ]
-    try:
-        resp = hf_client.chat.completions.create(
-            model=DEFAULT_MODEL,
-            messages=messages,
-            max_tokens=1000,
-            temperature=0.2
-        )
-        return resp.choices[0].message.content or ""
-    except Exception as e:
-        return f"Error: {e}"
-
-demo = gr.ChatInterface(
-    fn=web_ui_chat,
-    title="📈 Crypto Analyst AI (Live Web Search)",
-    description="Backend microservice for 24/7 crypto market briefings and price move attributions.",
-)
-
-# Mount the FastAPI REST API onto Gradio
-app = gr.mount_gradio_app(api_app, demo, path="/")
 
 if __name__ == "__main__":
     import uvicorn

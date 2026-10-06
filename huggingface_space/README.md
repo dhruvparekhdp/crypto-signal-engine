@@ -1,5 +1,5 @@
 ---
-title: Crypto Market Analyst AI
+title: Crypto Analyst LLM
 emoji: 📈
 colorFrom: blue
 colorTo: indigo
@@ -8,7 +8,9 @@ app_port: 7860
 pinned: false
 ---
 
-# Crypto Market Analyst AI Microservice
+# Crypto analyst LLM on the Space's own CPU
 
-Automated web-search and LLM inference engine for crypto market briefings and hourly price move attributions.
-Integrates live DuckDuckGo real-time search with 70B/72B serverless models via an OpenAI-compatible `/v1/chat/completions` API.
+Runs a small open model (default Qwen2.5-3B-Instruct, 4-bit) with llama.cpp on the free CPU Space, with
+DuckDuckGo search in front, behind an OpenAI-shaped `/v1/chat/completions` API. No inference credits.
+Slow (about 1-3 minutes per answer), so the trading engine uses it as the last fallback for briefings and
+move explanations. Set the secret `SPACE_API_KEY`; callers send `Authorization: Bearer <key>`.

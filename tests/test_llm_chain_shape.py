@@ -48,7 +48,7 @@ class TestChainShape(unittest.TestCase):
         for role in SEARCH_ROLES:
             with self.subTest(role=role):
                 for provider, model in _chain(role):
-                    self.assertIn(provider, ("groq", "openrouter"))
+                    self.assertIn(provider, ("groq", "openrouter", "hf"))
                     self.assertTrue(model.endswith("+search"), model)
                     if provider == "openrouter":
                         self.assertTrue(model.endswith(":free+search"), model)

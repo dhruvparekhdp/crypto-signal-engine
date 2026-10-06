@@ -136,7 +136,8 @@ class Settings(BaseSettings):
     # The world-events briefing. Every entry can actually search.
     llm_chain_briefing: str = (
         "groq:openai/gpt-oss-120b+search, groq:openai/gpt-oss-20b+search, "
-        "openrouter:qwen/qwen3.8-27b:free+search")
+        "openrouter:qwen/qwen3.8-27b:free+search, "
+        "hf:analyst+search")
     market_briefing_enabled: bool = True
     market_briefing_minutes: int = 60          # Groq's free daily token quota ran out by midday at 30
     # After a briefing that found nothing, wait this long before the next one unless an event is near.
@@ -144,14 +145,16 @@ class Settings(BaseSettings):
     # Hourly: why each watchlist coin moved, and how our signals fared.
     llm_chain_attribution: str = (
         "groq:openai/gpt-oss-120b+search, groq:openai/gpt-oss-20b+search, "
-        "openrouter:qwen/qwen3.8-27b:free+search")
+        "openrouter:qwen/qwen3.8-27b:free+search, "
+        "hf:analyst+search")
     move_attribution_enabled: bool = True
     # The event monitor: adaptive, jittered web checks with a daily cap.
     event_monitor_enabled: bool = True
     event_monitor_daily_cap: int = 120
     llm_chain_briefing_calm: str = (
         "groq:openai/gpt-oss-20b+search, groq:openai/gpt-oss-120b+search, "
-        "openrouter:qwen/qwen3.8-27b:free+search")
+        "openrouter:qwen/qwen3.8-27b:free+search, "
+        "hf:analyst+search")
     # Labelling past moves from the Binance lake (scripts/review_history.py).
     # Local first: it is bulk work and the free Groq requests are shared with
     # live trading. The biggest moves use web search to find that day's news.
@@ -322,6 +325,10 @@ class Settings(BaseSettings):
     ollama_base_url: str = ""
     # Hugging Face Space endpoint (e.g. https://user-space.hf.space) and optional token.
     hf_base_url: str = ""
+    # Our own Hugging Face Space running a small model on its CPU (huggingface_space/): slow but free, so it is
+    # the last fallback for the search roles. Its key is the Space secret SPACE_API_KEY, not the HF token.
+    hf_space_api_key: SecretStr | None = None
+    hf_space_timeout_seconds: int = 240
     hf_api_token: SecretStr | None = None
 
     # Scoring a headline is a short structured classification — a number, a
