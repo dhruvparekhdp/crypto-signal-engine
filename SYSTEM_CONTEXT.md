@@ -1,8 +1,59 @@
 # System Context & Engine Memory
 
-This document is the definitive technical memory and operational architecture record for the **Crypto Signal Engine** project (`dhruvparekhdp/crypto-signal-engine`). It is written so a fresh LLM session — with no memory of prior conversations — can pick up full context without re-reading the whole commit history.
+This document is the technical memory of the **Crypto Signal Engine** (`dhruvparekhdp/crypto-signal-engine`), written so a
+fresh session can pick up full context. **Section 0 is current (6 Oct 2026). Sections 1-11 below it describe the older
+15-minute intraday system; where they disagree with section 0, section 0 wins.**
 
-Last verified against the repo on **2026-09-28**, branch `claude/debug-previous-session-4wNw3`. If you are reading this much later, re-verify the test count and the settings tables below before trusting them — they are the fields most likely to have drifted.
+---
+
+## 0. Current state (verified 6 Oct 2026)
+
+### What trades (paper)
+- **Swing book** (`analysis/swing_book.py`, `scheduler/runner.py::_swing_scan_job/_open_swing_signals`): the only family
+  that opens paper trades (`paper_open_families="swing"`). Strategies validated on 5 years of 1-minute Binance data with
+  costs (fees + 18% GST + slippage + funding), null test, walk-forward and 2.5x slippage stress (`analysis/lab`):
+  4h vol-breakout z=3, Keltner k=2.5, Donchian n=100, Ichimoku; 8h Keltner k=2, vol-breakout z=3, Donchian n=100, Ichimoku.
+  Live signals are computed by the same code as the backtest (parity test in `tests/test_swing_book.py`).
+- Exits exactly as tested: stop 3xATR (refused if wider than 8%), target 3R, 7-day limit. No profit lock, trail, ladder,
+  stagnation exit or AI close on swing positions.
+- Sizing: `swing_risk_pct` 3% of the wallet per trade, leverage ceiling 10x (each trade uses the lowest it needs),
+  no limit on open trades (`swing_max_open=0`, `swing_max_same_side=0`), BCH/LTC excluded (no edge in 5 years),
+  strongest strategy/coin first when signals arrive together (`swing_book.priority`).
+- **Market filter** (`analysis/regime_gate.py`, `swing_regime_filter="on"`): skip a swing signal when Bitcoin's 30-day
+  volatility is in the top third of its own past year (point in time). Backtest: +0.20 -> +0.32 R/trade, every year
+  better, and it held on 1h/2h/12h data and on 56 other strategies. The daily-ADX "strong trend" leg exists but is off
+  (`swing_regime_adx_max=0`): it blocked 10 of 12 coins in a trending week.
+- Every swing signal, traded or skipped, is replayed on 1h bars to stop/target/7 days (`_swing_outcomes_job`), so the
+  Paper tab can compare "taken" vs "skipped by the filter". The intraday outcome job ignores swing signals.
+- The old 15m detectors still run and log signals, **shadow only** (no paper trades, no AI review).
+
+### AI providers
+- Every call goes through `collectors/llm_client.py::ask_json` and a per-model free-tier budget
+  (`collectors/llm_budget.py`): requests/min, requests/day, tokens/min, tokens/day at 85% of the limit, Groq's
+  `x-ratelimit-*` headers honoured, a 429 cools the model down for exactly the time the provider gives. Counts persist in
+  `data/llm_budget.json`. View: `GET /api/llm/budget`.
+- Search roles (briefing, attribution, event monitor): Groq gpt-oss +search, then OpenRouter free with DuckDuckGo
+  results injected, then our own Hugging Face Space (`huggingface_space/`, llama.cpp on the free CPU, slow) once
+  `HF_BASE_URL` and `HF_SPACE_API_KEY` are set. Briefing every 60 min, attribution every 3 h, event monitor 30/day.
+- Why: on 5-6 Oct Groq's free daily token limit was hit ~240 times; demand was 4-5x what the free tier allows.
+
+### Not wired / off
+- `execution/` (Binance USD-M live book): built and unit-tested on a fake exchange, **not called by the engine**;
+  `live_trading_mode="off"`. Wiring it needs the owner's explicit permission.
+- `v2_backtest` (timed out at 90 min daily), `coindcx` (0 symbols matched): off.
+
+### Research tooling (Mac / laptop, not production)
+- `analysis/lab` backtester; `scripts/run_lab.py`, `portfolio_wallet.py`, `wallet_experiments.py`, `mirror_analysis.py`,
+  `regime_filter.py`, `wild_research.py`, `forecast7d_backtest.py`; tracked with `scripts/job.py`.
+- Lab monitor `scripts/dash.py` (port 8765): backtest progress, findings, wallet passbooks, production health
+  (`scripts/prod_health.py`, every 30 min).
+- Second machine `dhruv-ai` (Tailscale 100.71.216.94, user `dhruv`, 12 cores, Ollama): repo at
+  `~/projects/crypto-signal-engine` with its own venv and a copy of `data/lake`.
+
+### Operations
+- Production: EC2 `52.62.37.4:8080`, systemd `crypto-engine`, deploy = push to `main` (GitHub Actions restarts the
+  service). Each deploy restarts the engine, so changes go out in batches.
+- Tests: 1,473 passing (`python -m pytest -q`). `tests/conftest.py` gives every test a fresh AI budget file.
 
 ---
 

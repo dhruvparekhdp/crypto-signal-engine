@@ -150,7 +150,7 @@ class Settings(BaseSettings):
     move_attribution_enabled: bool = True
     # The event monitor: adaptive, jittered web checks with a daily cap.
     event_monitor_enabled: bool = True
-    event_monitor_daily_cap: int = 120
+    event_monitor_daily_cap: int = 30           # 104 searches/day found nothing new and spent Groq's daily quota
     llm_chain_briefing_calm: str = (
         "groq:openai/gpt-oss-20b+search, groq:openai/gpt-oss-120b+search, "
         "openrouter:qwen/qwen3.8-27b:free+search, "
@@ -249,7 +249,7 @@ class Settings(BaseSettings):
     # The server downloads the v2 test data from data.binance.vision itself
     # (it can reach Binance; the owner's laptop is not needed) and re-runs
     # the v2 backtest daily at this UTC hour. Results on /v2.
-    v2_backtest_enabled: bool = True
+    v2_backtest_enabled: bool = False           # timed out at 90 min every day; analysis/lab replaced it
     v2_backtest_years: float = 2.0
     v2_backtest_hour_utc: int = 2
     v2_lake_dir: str = "data/lake"
@@ -402,7 +402,7 @@ class Settings(BaseSettings):
     binance_ws_enabled: bool = False
     # Per-collector switches, editable on /settings (config/overrides.py).
     # binance_only_mode overrides all three to off.
-    coindcx_enabled: bool = True
+    coindcx_enabled: bool = False               # matched 0 watchlist symbols: polling for nothing
     coingecko_enabled: bool = True
     twelvedata_enabled: bool = True
     binance_klines_enabled: bool = True

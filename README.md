@@ -1,7 +1,11 @@
 # crypto-signal-engine
 
-A real-time crypto market analysis system. It watches a configurable set of
-USDT perpetual pairs, runs five independent signal detectors over live
+A real-time crypto market analysis and paper-trading system. Since October 2026 the paper book trades a
+**swing book** of 4h/8h breakout strategies validated on five years of Binance data, behind a market-volatility
+filter; the older five-detector 15-minute pipeline described below still runs, shadow only. See
+[`SYSTEM_CONTEXT.md`](SYSTEM_CONTEXT.md) section 0 for the current state.
+
+It watches a configurable set of USDT perpetual pairs, runs independent signal detectors over live
 candles, and only acts where independent evidence agrees. Signals are
 tracked through a paper-trading simulator (no real capital), scored against
 their actual outcomes, and exposed through a web dashboard and a small
@@ -164,10 +168,10 @@ toolchain as of the last commit that touched it.
 | Scheduling | APScheduler (in-process, 24/7 interval + cron jobs) |
 | Database | SQLAlchemy (async) — SQLite locally, Aiven.io PostgreSQL in production |
 | Live data | `websockets` (Binance), `httpx` (CoinDCX, CoinGecko, TwelveData, CryptoPanic REST) |
-| AI Sentinel | Groq API (Qwen 3.8 27B / Llama 3.3 70B, selectable via Admin UI) |
+| AI | Groq, OpenRouter (free), Gemini, our own Hugging Face Space; per-model free-tier budget (`collectors/llm_budget.py`) |
 | Logging | structlog |
 | Notifications | python-telegram-bot |
-| Tests | pytest (606 tests, 100% passing) |
+| Tests | pytest (about 1,470 tests) |
 | Deployment | AWS EC2 (`systemd` service: `crypto-engine`), automated via GitHub Actions CI/CD |
 
 ## Running locally
@@ -244,5 +248,6 @@ crypto-signal-engine/
 ├── storage/                      # SQLAlchemy models + repository
 ├── notifications/                # Telegram formatting and delivery
 ├── ios-port/                     # in-progress native iOS client (see above)
-└── tests/                        # ~580 tests
+├── execution/                    # Binance live book (built, not wired)
+└── tests/                        # ~1,470 tests
 ```

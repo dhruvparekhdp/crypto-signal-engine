@@ -109,3 +109,11 @@ async def test_our_space_gets_its_own_key_json_mode_and_a_long_timeout():
     assert seen["payload"]["model"] == "analyst" and seen["payload"]["response_format"] == {"type": "json_object"}
     assert "SOL jumps 3%" in seen["payload"]["messages"][0]["content"]
     assert seen["timeout"] >= 240
+
+
+def test_jobs_that_cost_more_than_they_gave_are_trimmed():
+    from config.settings import Settings
+    f = Settings.model_fields
+    assert f["event_monitor_daily_cap"].default == 30
+    assert f["v2_backtest_enabled"].default is False
+    assert f["coindcx_enabled"].default is False

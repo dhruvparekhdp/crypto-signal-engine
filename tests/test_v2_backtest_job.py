@@ -39,7 +39,8 @@ class TestServerBacktest(unittest.TestCase):
                 with patch.object(settings, "v2_lake_dir", str(lake)), \
                      patch.object(settings, "v2_reports_dir", str(reports)), \
                      patch.object(settings, "v2_backtest_years", 0.2), \
-                     patch.object(settings, "v2_backtest_download", False):
+                     patch.object(settings, "v2_backtest_download", False), \
+                     patch.object(settings, "v2_backtest_enabled", True):     # off by default since 6 Oct
                     await job()
                     self.assertFalse(runner._v2_bt_state.get("running"))
                     self.assertNotIn("error", runner._v2_bt_state)
