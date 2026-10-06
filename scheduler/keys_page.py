@@ -213,6 +213,18 @@ def register(app: web.Application, runner) -> None:
         resp.headers["Cache-Control"] = "no-store"
         return resp
 
+    async def hf_space(request):
+        """Upload huggingface_space/ to the saved Space with the saved token; private, CPU Basic, address saved."""
+        denied = await _admin(request)
+        if denied is not None:
+            return denied
+        from scripts.hf_space_deploy import deploy_from_saved_settings
+        try:
+            out = await deploy_from_saved_settings()
+        except Exception as e:  # noqa: BLE001
+            return web.json_response({"error": str(e)[:200]}, status=502)
+        return web.json_response(out, status=400 if "error" in out else 200)
+
     async def import_env(request):
         denied = await _admin(request)
         if denied is not None:
@@ -242,6 +254,7 @@ def register(app: web.Application, runner) -> None:
     app.router.add_post("/api/keys/test", test)
     app.router.add_post("/api/keys/import-env", import_env)
     app.router.add_post("/api/keys/reveal", reveal)
+    app.router.add_post("/api/keys/hf-space-deploy", hf_space)
 
 
 PAGE = """<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
@@ -279,7 +292,7 @@ async function load(){const r=await fetch('/api/keys',{headers:H()});if(r.status
  document.getElementById('list').innerHTML=d.keys.map(k=>`<div class="card" id="c-${k.key}"><div class="row"><b>${esc(k.label)}</b><span class="pill ${col(k.where)}">${esc(k.where)}</span></div>
   <div class="sub">${esc(k.help)}</div><div class="sub">${k.kind==='secret'?(k.is_set?'current: '+esc(k.hint):'no value'):(k.value?'current: '+esc(k.value):'no value')}${k.env_differs?' · <span class="warn">.env has a different value</span>':''}</div>
   <div class="acts"><input id="v-${k.key}" ${k.kind==='secret'?'type="password" autocomplete="off"':''} placeholder="${k.kind==='secret'?'Paste new value':'New value'}">
-  <button class="p" onclick="save('${k.key}')">Save</button>${k.testable?`<button onclick="test('${k.key}')">Test</button>`:''}${k.is_set?`<button onclick="show('${k.key}')" id="s-${k.key}">Show</button><button onclick="copyKey('${k.key}')">Copy</button><button onclick="clr('${k.key}')">Clear</button>`:''}</div>
+  <button class="p" onclick="save('${k.key}')">Save</button>${k.key==='hf_space_repo'&&k.value?`<button onclick="hfDeploy()">Update Space</button>`:''}${k.testable?`<button onclick="test('${k.key}')">Test</button>`:''}${k.is_set?`<button onclick="show('${k.key}')" id="s-${k.key}">Show</button><button onclick="copyKey('${k.key}')">Copy</button><button onclick="clr('${k.key}')">Clear</button>`:''}</div>
   <div class="mono" id="r-${k.key}" hidden></div><div class="sub" id="t-${k.key}"></div></div>`).join('')}
 const _shown={};
 async function reveal(key){if(_shown[key])return _shown[key];const d=await post('/api/keys/reveal',{key});if(d.error){alert(d.error);return null}_shown[key]=d.value;setTimeout(()=>{delete _shown[key];const el=document.getElementById('r-'+key);if(el){el.hidden=true;el.textContent=''}const b=document.getElementById('s-'+key);if(b)b.textContent='Show'},60000);return d.value}
@@ -293,6 +306,9 @@ async function save(key){const v=document.getElementById('v-'+key).value.trim();
 async function test(key){const el=document.getElementById('t-'+key);if(!el)return;el.textContent='Testing…';const d=await post('/api/keys/test',{key});el.innerHTML=`<span class="${d.ok?'ok':'bad'}">${d.ok?'✔ works':'✖ failed'}</span> ${esc(d.detail||d.error||'')}`}
 async function clr(key){if(!confirmBox(key))return;const d=await post('/api/keys/clear',{key});if(d.ok)load();else alert(d.error)}
 function confirmBox(key){const el=document.getElementById('t-'+key);if(el.dataset.arm==='1'){el.dataset.arm='';return true}el.dataset.arm='1';el.innerHTML='<span class="warn">Tap Clear again to stop using this key.</span>';return false}
+async function hfDeploy(){const el=document.getElementById('t-hf_space_repo');el.textContent='Uploading to your Space (about 30 s)…';
+ const d=await post('/api/keys/hf-space-deploy');el.innerHTML=d.error?`<span class="bad">✖ ${esc(d.error)}</span>`:
+ `<span class="ok">✔ uploaded ${esc((d.uploaded||[]).join(', '))}</span> · private ${esc(d.private)} · hardware ${esc(d.hardware)} · address saved: ${esc(d.url)} · build stage ${esc(d.stage)}. The model downloads on first start (a few minutes), then tap Test on the Space URL.`;load()}
 async function imp(){const d=await post('/api/keys/import-env');if(d.ok){load();document.getElementById('top').insertAdjacentHTML('beforeend',`<div class="ok">Moved: ${esc((d.moved||[]).join(', ')||'nothing')}</div>`)}else alert(d.error)}
 load();
 </script></body></html>"""

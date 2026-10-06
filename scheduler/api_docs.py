@@ -49,6 +49,7 @@ ENDPOINTS: tuple[tuple[str, str, str, str, dict], ...] = (
     ("System", "POST", "/api/keys/clear", "Admin: stop using a stored key (falls back to .env).", {}),
     ("System", "POST", "/api/keys/test", "Admin: harmless read-only call proving a key works.", {}),
     ("System", "POST", "/api/keys/reveal", "Admin: return one key's value, on request, for viewing or copying.", {}),
+    ("System", "POST", "/api/keys/hf-space-deploy", "Admin: upload the analyst app to the saved Hugging Face Space (private, CPU Basic).", {}),
     ("System", "POST", "/api/keys/import-env", "Admin: copy keys that only .env has into the database, encrypted.", {}),
     ("System", "GET", "/api/llm/budget", "Each AI model's calls and tokens today against its free-tier limits, cooldowns and skipped calls.", {}),
     ("Paper trading", "GET", "/api/swing", "Swing book vs its backtest: last 4h bar per coin, open swing positions, closed trades in R.", {}),

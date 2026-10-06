@@ -157,3 +157,19 @@ async def test_admin_password_follows_env_when_it_changes(db, monkeypatch):
         assert (await Repository(s).verify_admin_password("second-pass"))[0]
     async with AsyncSessionFactory() as s:
         assert not (await Repository(s).verify_admin_password("first-pass"))[0]
+
+
+def test_space_deploy_uploads_the_app_privately_on_cpu_and_returns_the_address(tmp_path):
+    from unittest.mock import MagicMock
+    for f in ("app.py", "requirements.txt", "README.md"):
+        (tmp_path / f).write_text("x")
+    api = MagicMock()
+    api.whoami.return_value = {"name": "dhruvdp"}
+    api.space_info.return_value = SimpleNamespace(host="https://dhruvdp-dhruv-llm.hf.space", runtime=SimpleNamespace(stage="BUILDING"))
+    with patch("huggingface_hub.HfApi", return_value=api):
+        from scripts.hf_space_deploy import deploy
+        out = deploy("hf_token", "dhruvdp/dhruv-llm", str(tmp_path))
+    api.upload_folder.assert_called_once()
+    assert api.upload_folder.call_args.kwargs["allow_patterns"] == ["app.py", "requirements.txt", "README.md"]
+    api.request_space_hardware.assert_called_once_with("dhruvdp/dhruv-llm", "cpu-basic")
+    assert out["url"] == "https://dhruvdp-dhruv-llm.hf.space" and out["private"] is True and out["stage"] == "BUILDING"
