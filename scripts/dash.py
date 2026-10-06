@@ -313,6 +313,12 @@ def prod_health_view():
         return None
 
 
+def research_view():
+    """Research verdicts in one list (data/lab/research_log.json, written as each study finishes)."""
+    f = _lab_file("research_log.json")
+    return _cached_json(f) if f else None
+
+
 def banner_view():
     """One glance: what is running, what is finished, what is paused. status/banner.json is written by hand or by a job."""
     try:
@@ -486,7 +492,7 @@ def state():
     return {"now": time.time(), "machines": machines, "jobs": jobs, "overall": safe(lambda: overall(jobs), {}),
             "ai": safe(ai_view, []) + safe(work_view, []), "results": safe(results_view, []),
             "noai": safe(noai_view, {"wallet": {}, "breakdown": {}, "timeframes": []}), "banner": safe(banner_view, None),
-            "prod": safe(prod_health_view, None)}
+            "prod": safe(prod_health_view, None), "research": safe(research_view, None)}
 
 
 PAGE = (Path(__file__).parent / "dash.html").read_text() if (Path(__file__).parent / "dash.html").exists() else "dash.html missing"

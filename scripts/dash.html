@@ -40,7 +40,7 @@ svg text{fill:var(--mut);font-size:10px;font-family:system-ui,sans-serif}
 <div id="prod"></div>
 <div id="banner"></div>
 <h2><span class="num">1</span>Backtest progress</h2><div id="progress"></div>
-<h2><span class="num">2</span>What the backtests found (no AI)</h2><div id="find"></div>
+<h2><span class="num">2</span>What the backtests found (no AI)</h2><div id="research"></div><div id="find"></div>
 <h2><span class="num">3</span>25 → 100 USDT wallet: passbooks, strategies, every trade</h2><div id="wallet"></div>
 <h2><span class="num">4</span>Where the profit comes from</h2><div id="where"></div>
 <h2><span class="num">5</span>With AI vs without (paused)</h2><div id="gate"></div><div id="ai"></div>
@@ -133,6 +133,10 @@ function heat(rows,{fmtv=v=>(Math.abs(v)<.005?0:v).toFixed(2),span=.3}={}){if(!r
 function prod(p){if(!p)return '';const col={ok:'pos',warn:'warn',problem:'neg'};const icon={ok:'✔',warn:'▲',problem:'✖'};
  return `<div class="card" style="border-color:${p.overall==='ok'?'var(--line)':p.overall==='warn'?'var(--warn)':'var(--bad)'}"><div class="row"><b>Production app ${p.overall==='ok'?'healthy':p.overall==='warn'?'needs a look':p.overall==='down'?'DOWN':'has problems'}</b><span class="sub">checked ${fmt(p.age_s)} ago · every 30 min</span></div>
  ${(p.items||[]).map(i=>`<div style="padding:4px 0;border-top:1px solid var(--line)"><b class="${col[i.state]||''}">${icon[i.state]||'•'} ${esc(i.label)}</b> <span class="sub">${esc(i.detail)}</span></div>`).join('')}</div>`}
+
+/* ---------- research verdicts ---------- */
+function research(r){if(!r||!r.items)return '';const col=v=>/reject|off|not/.test(v)?'neg':/confirm|valid|best|real|works/.test(v)?'pos':'warn';
+ return `<div class="card"><b>Research verdicts</b> <span class="sub">newest first · updated ${esc(r.updated)}</span>${r.items.map(i=>`<details id="rs-${esc(i.name).slice(0,30).replace(/\W/g,'')}" style="border-top:1px solid var(--line);padding:6px 0"><summary><b>${esc(i.name)}</b> <span class="pill ${col(i.verdict)==='pos'?'done':col(i.verdict)==='neg'?'failed':'running'}">${esc(i.verdict)}</span> <span class="sub">${esc(i.date)}</span></summary><div class="sub" style="margin:6px 0 0 14px"><b>Evidence:</b> ${esc(i.evidence)}<br><b>Decision:</b> ${esc(i.decision)}</div></details>`).join('')}</div>`}
 
 /* ---------- 1 · progress ---------- */
 const WORD={done:'finished',running:'running',failed:'stopped','stalled?':'no heartbeat'};
@@ -315,6 +319,7 @@ async function tick(){let s;try{s=await (await fetch('/api/state',{cache:'no-sto
  set('upd','live · '+new Date().toLocaleTimeString()+' · refreshes every 6s');
  set('banner',banner(s.banner));
  set('prod',prod(s.prod));
+ set('research',research(s.research));
  set('progress',progress(s));
  _S=s;const n=s.noai||{};
  if(!_U&&!_N.u){_N.u=1;fetch('/api/trades').then(r=>r.json()).then(u=>{_U=u;rw()}).catch(()=>{_N.u=0})}
