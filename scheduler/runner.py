@@ -2016,6 +2016,23 @@ class AppRunner:
             )
 
             scored_items = []
+            # Our Space scores the whole batch in one call (FinBERT + rules); Groq is only the fallback now.
+            from collectors import hf_space
+            if hf_space.configured():
+                try:
+                    from analysis.headline_rules import combine
+                    probs = await hf_space.classify([h.headline for h in new_headlines])
+                    for headline, p in zip(new_headlines, probs, strict=True):
+                        r = combine(p, headline.headline)
+                        headline.score, headline.confidence = r["score"], r["confidence"]
+                        headline.event_type, headline.symbol = r["event_type"], r["symbol"]
+                        headline.model = "hf/finbert+rules"
+                        scored_items.append(headline.as_payload())
+                    new_headlines = []
+                    log.info("headlines_scored_by_space", n=len(scored_items))
+                except Exception as exc:
+                    log.warning("hf_space_classify_failed", error=str(exc)[:160], fallback="llm")
+                    scored_items = []
             for headline in new_headlines:
                 try:
                     reply = await ask_json("news_scoring", SYSTEM_PROMPT,

@@ -8,6 +8,8 @@ and OpenRouter.
 
 API (OpenAI-shaped, what collectors/llm_client.py's "hf" provider calls via HF_BASE_URL):
     POST /v1/chat/completions   {"model": "analyst+search", "messages": [...], "max_tokens": 600}
+    POST /v1/classify           {"texts": [...]}  FinBERT positive/negative/neutral per headline (fast, batched)
+    POST /v1/embed              {"texts": [...]}  bge-small sentence vectors (dedupe, similar past events)
     GET  /health
 A model name ending in "+search" or ":online" first fetches DuckDuckGo results and puts them in the prompt.
 The Gradio page at / is a manual tester.
@@ -92,7 +94,55 @@ def answer(model_name: str, messages: list[dict], max_tokens: int, temperature: 
     return out["choices"][0]["message"]["content"] or ""
 
 
+CLASSIFIER_ID = os.getenv("CLASSIFIER_ID", "ProsusAI/finbert")
+EMBEDDER_ID = os.getenv("EMBEDDER_ID", "BAAI/bge-small-en-v1.5")
+_aux: dict = {}
+_aux_lock = threading.Lock()
+
+
+def _classifier():
+    with _aux_lock:
+        if "clf" not in _aux:
+            from transformers import pipeline
+            _aux["clf"] = pipeline("text-classification", model=CLASSIFIER_ID, top_k=None, truncation=True, device=-1)
+        return _aux["clf"]
+
+
+def _embedder():
+    with _aux_lock:
+        if "emb" not in _aux:
+            from sentence_transformers import SentenceTransformer
+            _aux["emb"] = SentenceTransformer(EMBEDDER_ID, device="cpu")
+        return _aux["emb"]
+
+
 api = FastAPI(title="Crypto Analyst LLM")
+
+
+class TextsReq(BaseModel):
+    texts: list[str]
+
+
+def _check(authorization):
+    if API_KEY and authorization != f"Bearer {API_KEY}":
+        raise HTTPException(401, "bad or missing API key")
+
+
+@api.post("/v1/classify")
+def classify(req: TextsReq, authorization: str | None = Header(default=None)):
+    _check(authorization)
+    texts = [t[:512] for t in req.texts[:200]]
+    t0 = time.time()
+    out = _classifier()(texts, batch_size=16)
+    rows = [{d["label"].lower(): round(float(d["score"]), 4) for d in r} for r in out]
+    return {"model": CLASSIFIER_ID, "results": rows, "seconds": round(time.time() - t0, 2)}
+
+
+@api.post("/v1/embed")
+def embed(req: TextsReq, authorization: str | None = Header(default=None)):
+    _check(authorization)
+    vecs = _embedder().encode([t[:512] for t in req.texts[:200]], normalize_embeddings=True)
+    return {"model": EMBEDDER_ID, "vectors": [[round(float(x), 5) for x in v] for v in vecs]}
 
 
 class Msg(BaseModel):
@@ -111,13 +161,14 @@ class ChatReq(BaseModel):
 @api.get("/health")
 def health():
     return {"model": f"{MODEL_REPO}/{MODEL_FILE}", "ready": _llm is not None, **_stats,
+            "classifier": CLASSIFIER_ID, "classifier_loaded": "clf" in _aux,
+            "embedder": EMBEDDER_ID, "embedder_loaded": "emb" in _aux,
             "uptime_s": round(time.time() - _stats["started"])}
 
 
 @api.post("/v1/chat/completions")
 def chat(req: ChatReq, authorization: str | None = Header(default=None)):
-    if API_KEY and authorization != f"Bearer {API_KEY}":
-        raise HTTPException(401, "bad or missing API key")
+    _check(authorization)
     msgs = [{"role": m.role, "content": m.content} for m in req.messages]
     json_mode = bool(req.response_format and req.response_format.get("type") == "json_object")
     try:

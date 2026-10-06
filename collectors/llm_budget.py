@@ -36,6 +36,7 @@ LIMITS: dict[str, dict] = {
     "openrouter/*": {"rpm": 20, "rpd": 50, "tpm": None, "tpd": None},
     "gemini/*": {"rpm": 10, "rpd": 250, "tpm": 250_000, "tpd": None},
     "hf/analyst": {"rpm": 2, "rpd": None, "tpm": None, "tpd": None},          # our CPU Space: one at a time
+    "hf/classify": {"rpm": 20, "rpd": None, "tpm": None, "tpd": None},        # our Space: batched headline scoring
     "hf/*": {"rpm": 5, "rpd": 100, "tpm": None, "tpd": None},
     "ollama/*": {"rpm": None, "rpd": None, "tpm": None, "tpd": None},
     "anthropic/*": {"rpm": 50, "rpd": None, "tpm": None, "tpd": None},
