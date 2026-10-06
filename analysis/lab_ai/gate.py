@@ -34,12 +34,17 @@ SYSTEM = (
     "Reply with the JSON object only.")
 
 HIDDEN = ("outcome", "next_16_closes_15m_pct_in_trade_direction")
+# Models were trained on this history: shown "SOL, 2022-11-08" one can recall the FTX crash instead of reasoning.
+# The coin and the date are hidden so a decision rests on the numbers only (design/7d_forecast_plan.md, leakage).
+IDENTIFYING = ("symbol", "entry_utc")
 
 
-def pretrade_context(trade, root: str = "data/lake") -> dict:
+def pretrade_context(trade, root: str = "data/lake", anonymize: bool = True) -> dict:
     ctx = context.build(trade, root, extended=True)
-    for k in HIDDEN:
+    for k in HIDDEN + (IDENTIFYING if anonymize else ()):
         ctx.pop(k, None)
+    if anonymize:
+        ctx = {"coin": "Coin A", **ctx}
     return ctx
 
 
