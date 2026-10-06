@@ -21,6 +21,7 @@ refetched on boot. Only fired signals, snapshots and paper trades reach the DB.
 import asyncio
 import json
 import math
+import time
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -291,12 +292,15 @@ class AppRunner:
     async def _alert_llm_outage(self, role: str, failures: list[str]) -> None:
         """Send a Telegram alert when ALL LLM providers fail for a role.
 
-        Alerts on the 1st consecutive failure, then every 3rd, so the user
-        knows but isn't spammed every 30 minutes.
+        Alerts on the 1st consecutive failure, then at most once every 6 hours per role: the old "every 3rd"
+        rule sent 14 alerts in a day while Groq's daily quota was spent.
         """
         count = self._llm_fail_counts.get(role, 0) + 1
         self._llm_fail_counts[role] = count
-        if count == 1 or count % 3 == 0:
+        alerts = self.__dict__.setdefault("_llm_alert_at", {})
+        now_s = time.monotonic()
+        if count == 1 or now_s - alerts.get(role, -1e9) >= 6 * 3600:
+            alerts[role] = now_s
             short = "\n".join(f"• {f[:120]}" for f in failures[:4])
             msg = (f"🔴 <b>ALL LLM providers failed</b> for <code>{role}</code> "
                    f"({count}x in a row)\n\n{short}\n\n"

@@ -31,7 +31,7 @@ class TestChainShape(unittest.TestCase):
             for provider, model in _chain(role):
                 if provider == "openrouter":
                     with self.subTest(role=role, model=model):
-                        self.assertTrue(model.endswith(":free"), model)
+                        self.assertTrue(model.removesuffix("+search").endswith(":free"), model)
 
     def test_no_three_consecutive_groq_entries(self):
         for role in ROLES:
@@ -43,11 +43,15 @@ class TestChainShape(unittest.TestCase):
                 self.assertLess(best, 3)
 
     def test_search_roles_keep_search_on_every_entry(self):
+        # Groq searches with its own tool; a free OpenRouter model gets DuckDuckGo results put in its prompt
+        # (collectors/llm_client.py), never OpenRouter's paid search plugin.
         for role in SEARCH_ROLES:
             with self.subTest(role=role):
                 for provider, model in _chain(role):
-                    self.assertEqual(provider, "groq")
+                    self.assertIn(provider, ("groq", "openrouter"))
                     self.assertTrue(model.endswith("+search"), model)
+                    if provider == "openrouter":
+                        self.assertTrue(model.endswith(":free+search"), model)
 
     def test_every_provider_is_known(self):
         for role in ROLES:

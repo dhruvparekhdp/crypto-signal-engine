@@ -315,7 +315,17 @@ async def _call_openai_shaped(provider: Provider, model: str, system: str,
     if search:
         model = model[:-len("+search")]
         payload["model"] = model
-        payload["tools"] = [{"type": "browser_search"}]
+        if provider.name == "groq":
+            payload["tools"] = [{"type": "browser_search"}]
+        else:
+            # No built-in search here: fetch DuckDuckGo results on this server and put them in the prompt,
+            # as _call_hf does, so a search role still has a free fallback when Groq's daily quota is spent.
+            snippets = await asyncio.to_thread(_search_ddg, _derive_search_query(user), 5)
+            if snippets:
+                payload["messages"][0]["content"] = (
+                    f"{system}\n\nReal-time web search results (retrieved just now):\n{snippets}\n\n"
+                    "Ground your answer in these results. Output valid JSON only.")
+            search = False                      # json_object mode is fine without tools
     if provider.name != "gemini" and not search:
         payload["response_format"] = {"type": "json_object"}
     # Reasoning models spend max_tokens on thinking before they write the

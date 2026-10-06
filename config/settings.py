@@ -135,20 +135,23 @@ class Settings(BaseSettings):
         "hf:meta-llama/Llama-3.1-8B-Instruct, openrouter:nvidia/nemotron-3-ultra-550b-a55b:free")
     # The world-events briefing. Every entry can actually search.
     llm_chain_briefing: str = (
-        "groq:openai/gpt-oss-120b+search, groq:openai/gpt-oss-20b+search")
+        "groq:openai/gpt-oss-120b+search, groq:openai/gpt-oss-20b+search, "
+        "openrouter:qwen/qwen3.8-27b:free+search")
     market_briefing_enabled: bool = True
-    market_briefing_minutes: int = 30
+    market_briefing_minutes: int = 60          # Groq's free daily token quota ran out by midday at 30
     # After a briefing that found nothing, wait this long before the next one unless an event is near.
     market_briefing_quiet_minutes: int = 120
     # Hourly: why each watchlist coin moved, and how our signals fared.
     llm_chain_attribution: str = (
-        "groq:openai/gpt-oss-120b+search, groq:openai/gpt-oss-20b+search")
+        "groq:openai/gpt-oss-120b+search, groq:openai/gpt-oss-20b+search, "
+        "openrouter:qwen/qwen3.8-27b:free+search")
     move_attribution_enabled: bool = True
     # The event monitor: adaptive, jittered web checks with a daily cap.
     event_monitor_enabled: bool = True
     event_monitor_daily_cap: int = 120
     llm_chain_briefing_calm: str = (
-        "groq:openai/gpt-oss-20b+search, groq:openai/gpt-oss-120b+search")
+        "groq:openai/gpt-oss-20b+search, groq:openai/gpt-oss-120b+search, "
+        "openrouter:qwen/qwen3.8-27b:free+search")
     # Labelling past moves from the Binance lake (scripts/review_history.py).
     # Local first: it is bulk work and the free Groq requests are shared with
     # live trading. The biggest moves use web search to find that day's news.
@@ -183,7 +186,7 @@ class Settings(BaseSettings):
     # so the live book can confirm the backtest before the filter is allowed to block anything; "on" skips.
     swing_regime_filter: str = "on"
     swing_regime_vol_rank_max: float = 0.67
-    swing_regime_adx_max: float = 30.0
+    swing_regime_adx_max: float = 0.0          # 0 = trend check off: it blocked 10 of 12 coins in a trending week
     # Crypto signals arrive in same-direction clusters (97% of multi-signal bars), so several open trades are one
     # bet. Capping trades per direction did more for the backtested wallet than any risk level.
     swing_max_same_side: int = 0              # 0 = no limit (2 was the best backtest setting; see design notes)
@@ -254,7 +257,7 @@ class Settings(BaseSettings):
     # under cold_storage_dir (storage/cold_storage.py), never deleted outright.
     db_retention_days: int = 365
     cold_storage_dir: str = "data/archive"
-    move_attribution_minutes: int = 60
+    move_attribution_minutes: int = 180         # hourly searching calls exhausted Groq's daily quota
     move_attribution_window_hours: int = 12
     # Reviewing what is already open.
     #

@@ -2951,7 +2951,7 @@ async function loadRegimeCard(){
   const rank = now.btc_vol_rank;
   const state = rank==null ? 'not measured yet' : rank > g.vol_rank_max ? `<b class="neg">wild</b> (${Math.round(rank*100)}th percentile of the past year)` : `<b class="pos">calm or normal</b> (${Math.round(rank*100)}th percentile of the past year)`;
   el.innerHTML = `<div class="cr-note"><b>Market filter · ${g.mode==='on'?'ON (skipping)':g.mode==='shadow'?'shadow test (trading everything, recording what it would skip)':'off'}</b><br>
-  Skips a swing signal when Bitcoin's 30-day volatility is in the top third of its past year, or the coin's daily ADX is above ${g.adx_max}. Bitcoin right now: ${state}.
+  Skips a swing signal when Bitcoin's 30-day volatility is in the top third of its past year${g.adx_max?`, or the coin's daily ADX is above ${g.adx_max}`:''}. Bitcoin right now: ${state}.
   <table class="tbl" style="margin-top:8px"><thead><tr><th>swing signals, replayed to their stop/target/7 days</th><th>n</th><th>won</th><th>avg</th><th>backtest expects</th></tr></thead><tbody>
   ${row(g.mode==='on'?'taken':'filter would take', sb.take, '+0.36 R')}${row(g.mode==='on'?'skipped by the filter':'filter would skip', sb.skip, 'about 0 or worse')}</tbody></table>
   <span class="pt-muted">${(sb.take.running||0)+(sb.skip.running||0)} still running. Every signal is scored the same way, traded or not, so "skipped" shows what the filter saved or cost. Judge after 30+ in each row.</span></div>`;

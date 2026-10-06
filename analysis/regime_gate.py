@@ -85,7 +85,7 @@ def judge(btc_closes, coin_h, coin_l, coin_c, vol_rank_max: float = VOL_RANK_MAX
     reasons = []
     if rank is not None and rank > vol_rank_max:
         reasons.append("wild_market")
-    if adx is not None and adx > adx_max:
+    if adx_max and adx is not None and adx > adx_max:
         reasons.append("strong_trend")
     return Verdict(rank, adx, reasons)
 
