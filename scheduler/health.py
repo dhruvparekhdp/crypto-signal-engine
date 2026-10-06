@@ -7043,7 +7043,7 @@ _HUB_SNIPPET = """
     {id:"signals", label:"Signals", items:[["Live signals","/#crypto"],["Mirror","/#mirror"],["Accuracy","/#accuracy"],["Audit","/audit"],["History","/#historic"]]},
     {id:"market", label:"Market", items:[["Price outlook","/predict"],["Market moves","/moves"],["Chart","/chart"]]},
     {id:"research", label:"Research", items:[["Pipeline","/pipeline"],["v2 shadow","/v2"],["Simulator","/#simulator"]]},
-    {id:"settings", label:"Settings", items:[["Settings","/settings"],["Watchlist","/#watchlist"]]},
+    {id:"settings", label:"Settings", items:[["Settings","/settings"],["Keys","/keys"],["Watchlist","/#watchlist"]]},
     {id:"admin", label:"Admin", items:[["Data","/data"],["Diagnostics","/api/debug/binance"],["API list","/api-docs"],["Journal","/journal"]]}
   ];
   window.HUB_GROUPS = G;
@@ -7644,6 +7644,8 @@ async def make_app(runner) -> web.Application:
     app.router.add_get("/settings", settings_page)
     app.router.add_get("/settings/classic", _settings_page)
     _register_settings(app, runner)
+    from scheduler.keys_page import register as _register_keys
+    _register_keys(app, runner)
     from scheduler.api_docs import register as _register_api_docs
     _register_api_docs(app)
     app.router.add_get("/api/settings", _bind(_api_collector_states))

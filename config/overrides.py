@@ -249,6 +249,14 @@ FIELDS: tuple[Field, ...] = (
           kind="secret"),
     Field("ollama_base_url", "keys", "Local model URL (Ollama)",
           "A model on your own machine, e.g. http://dhruv-ai:11434. Empty = not used.", kind="str"),
+    Field("binance_api_key", "keys", "Binance API key (live)",
+          "Futures only, withdrawals OFF, IP-restricted to the server. Not used until live trading is wired.",
+          kind="secret"),
+    Field("binance_api_secret", "keys", "Binance API secret (live)", "Pairs with the key above.", kind="secret"),
+    Field("binance_testnet_api_key", "keys", "Binance testnet key", "testnet.binancefuture.com, fake money.",
+          kind="secret"),
+    Field("binance_testnet_api_secret", "keys", "Binance testnet secret", "Pairs with the testnet key.",
+          kind="secret"),
 )
 BY_KEY = {f.key: f for f in FIELDS}
 
@@ -295,11 +303,14 @@ def apply(settings, values: dict) -> list[str]:
         field = BY_KEY.get(key)
         if field is None:
             continue
-        if field.kind == "secret" and value == "":
-            continue
+        if field.kind == "secret":
+            from config.secret_box import open_
+            value = open_(value)                      # stored encrypted ({"enc": ...}) or, older rows, plain
+            if not value:
+                continue
         try:
             coerced = coerce(field, value)
-            if field.kind == "secret" and key in SECRET_STR_KEYS:
+            if field.kind == "secret" and _is_secret_str(settings, key):
                 from pydantic import SecretStr
                 coerced = SecretStr(coerced)
             setattr(settings, key, coerced)
@@ -307,6 +318,21 @@ def apply(settings, values: dict) -> list[str]:
         except (TypeError, ValueError):
             continue
     return done
+
+
+def _is_secret_str(settings, key: str) -> bool:
+    """True if the Settings field is a SecretStr (every key added later, not only SECRET_STR_KEYS)."""
+    if key in SECRET_STR_KEYS:
+        return True
+    f = type(settings).model_fields.get(key) if hasattr(type(settings), "model_fields") else None
+    return f is not None and "SecretStr" in str(f.annotation)
+
+
+def seal_secrets(values: dict) -> dict:
+    """Encrypt every secret in a dict about to be saved (no-op without SECRETS_MASTER_KEY)."""
+    from config.secret_box import seal
+    return {k: (seal(v) if BY_KEY.get(k) is not None and BY_KEY[k].kind == "secret" and isinstance(v, str) else v)
+            for k, v in values.items()}
 
 
 def _is_set(settings, key: str) -> bool:

@@ -156,8 +156,9 @@ def settings_api(runner):
         if errors:
             return web.json_response({"error": "; ".join(errors)}, status=400)
         if values:
+            from config.overrides import seal_secrets
             async with AsyncSessionFactory() as session:
-                await Repository(session).save_app_settings(values)
+                await Repository(session).save_app_settings(seal_secrets(values))   # keys stored encrypted
             from scheduler import cache
             cache.invalidate("app_settings_db")   # a save must be visible now, not in up to 8s
         applied = apply(settings, values)
@@ -407,6 +408,7 @@ th{color:var(--muted2);font-weight:600}
 </aside>
 <div class="settings-content" style="display:grid;gap:18px">
 <section class="card raise" id="auth"></section>
+<section class="card"><b>API keys and tokens</b> now have their own page, stored encrypted: <a href="/keys">/keys</a></section>
 <section class="card raise" id="confwarn" style="display:none"></section>
 <section class="card raise" id="why"><h2>🔎 Why no trades?</h2><div id="funnel">
 <p class="small muted">Loading…</p></div></section>

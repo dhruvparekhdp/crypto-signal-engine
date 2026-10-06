@@ -320,9 +320,27 @@ class AppRunner:
             log.exception("settings_overrides_load_failed")
             return []
         applied = apply(settings, stored)
+        await self._encrypt_stored_secrets(stored)
         self.sync_collectors()
         log.info("settings_overrides_applied", keys=applied)
         return applied
+
+    async def _encrypt_stored_secrets(self, stored: dict) -> None:
+        """Keys saved before encryption existed are re-saved encrypted, once, at start-up."""
+        from config import secret_box
+        from config.overrides import BY_KEY
+        if not secret_box.available():
+            return
+        plain = {k: v for k, v in stored.items()
+                 if k in BY_KEY and BY_KEY[k].kind == "secret" and isinstance(v, str) and v}
+        if not plain:
+            return
+        try:
+            async with AsyncSessionFactory() as session:
+                await Repository(session).save_app_settings({k: secret_box.seal(v) for k, v in plain.items()})
+            log.info("stored_secrets_encrypted", keys=sorted(plain))
+        except Exception:
+            log.exception("stored_secrets_encrypt_failed")
 
     def on_settings_changed(self, keys: list[str]) -> None:
         """React to a save on /settings without a restart where possible."""

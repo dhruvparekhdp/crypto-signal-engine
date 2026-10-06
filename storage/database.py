@@ -85,16 +85,22 @@ async def init_db() -> None:
     async with engine.connect() as conn:
         await _migrate_columns(conn)
 
-    # Optional initial seed for fresh databases if ADMIN_PASSWORD is provided in env
+    # ADMIN_PASSWORD in .env is the admin password. It used to seed the database only once, so changing .env
+    # later did nothing and the login kept rejecting the new password (6 Oct). Now the database follows .env.
     admin_pwd = os.getenv("ADMIN_PASSWORD")
     if admin_pwd and admin_pwd.strip():
+        import hashlib
+        import hmac
+
         from storage.models import AdminAuth
         from storage.repository import Repository
         async with AsyncSessionFactory() as session:
             auth = await session.get(AdminAuth, 1)
-            if auth is None:
-                repo = Repository(session)
-                await repo.set_admin_password(admin_pwd.strip())
+            stale = auth is not None and not hmac.compare_digest(
+                hashlib.pbkdf2_hmac("sha256", admin_pwd.strip().encode(), bytes.fromhex(auth.salt), 100_000).hex(),
+                auth.password_hash)
+            if auth is None or stale:
+                await Repository(session).set_admin_password(admin_pwd.strip())
 
 
 # A module-level list, not a local inside _migrate_columns, so a test can
