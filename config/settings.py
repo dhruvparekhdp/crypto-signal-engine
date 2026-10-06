@@ -325,7 +325,10 @@ class Settings(BaseSettings):
     ollama_base_url: str = ""
     # Hugging Face Space endpoint (e.g. https://user-space.hf.space) and optional token.
     hf_base_url: str = ""
-    hf_space_repo: str = ""                     # e.g. "dhruvdp/dhruv-llm": where scripts/hf_space_deploy.py uploads
+    hf_space_repo: str = ""
+    kaggle_username: str = ""                   # scripts/kaggle_finetune.py: free GPU fine-tuning
+    kaggle_key: SecretStr | None = None
+    llm_call_log: bool = True                   # every AI call's prompt and answer -> data/llm_calls/ (training data)                     # e.g. "dhruvdp/dhruv-llm": where scripts/hf_space_deploy.py uploads
     # Our own Hugging Face Space (huggingface_space/, Gradio + ZeroGPU, free): the last fallback for the search
     # roles. Called with the saved HF token (a private Space needs it); hf_space_api_key only if the Space sets
     # its own SPACE_API_KEY secret.

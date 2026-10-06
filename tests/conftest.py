@@ -21,3 +21,13 @@ def _fresh_llm_budget(tmp_path, monkeypatch):
         monkeypatch.setattr(llm_budget, "_budget", None)
     except ImportError:
         pass
+
+
+@_pytest.fixture(autouse=True)
+def _no_llm_call_log(monkeypatch):
+    """AI call logging writes training data to data/llm_calls/; tests must not."""
+    try:
+        from config.settings import settings
+        monkeypatch.setattr(settings, "llm_call_log", False)
+    except Exception:  # noqa: BLE001
+        pass

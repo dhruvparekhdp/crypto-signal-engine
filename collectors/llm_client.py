@@ -523,6 +523,24 @@ async def _call_hf(model: str, system: str, user: str, max_tokens: int,
             return choices[0]["message"].get("content", "") if choices else ""
 
 
+def _log_call(role: str, system: str, user: str, text: str, provider: str, model: str, ms: int) -> None:
+    """Keep every successful AI call (prompt and answer) as future fine-tuning data: data/llm_calls/YYYY-MM-DD.jsonl.
+    Prompts carry market data and headlines, never keys. Failures to write are ignored."""
+    if not getattr(settings, "llm_call_log", False):
+        return
+    try:
+        import json as _json
+        from pathlib import Path
+        d = Path("data/llm_calls")
+        d.mkdir(parents=True, exist_ok=True)
+        rec = {"ts": datetime.now(UTC).isoformat(), "role": role, "provider": provider, "model": model, "ms": ms,
+               "ok": True, "system": system, "user": user, "response": text}
+        with open(d / f"{datetime.now(UTC):%Y-%m-%d}.jsonl", "a") as f:
+            f.write(_json.dumps(rec, ensure_ascii=False) + "\n")
+    except Exception:  # noqa: BLE001
+        pass
+
+
 async def ask_json(role: str, system: str, user: str, *, max_tokens: int = 512,
                    temperature: float = 0.2, timeout: float = 20.0) -> Reply:
     """
@@ -587,6 +605,7 @@ async def ask_json(role: str, system: str, user: str, *, max_tokens: int = 512,
                 continue
 
             elapsed = int((time.perf_counter() - started) * 1000)
+            _log_call(role, system, user, text, provider_name, model, elapsed)
             if len(attempts) > 1:
                 log.info("llm_served_by_fallback", role=role,
                          served_by=f"{provider_name}/{model}", after=attempts[:-1])
