@@ -229,6 +229,8 @@ FIELDS: tuple[Field, ...] = (
           kind="secret"),
     Field("telegram_bot_token", "keys", "Telegram bot token",
           "Deploy, crash and trade alerts. Get one from @BotFather.", kind="secret"),
+    Field("telegram_chat_id", "keys", "Telegram chat ID",
+          "Where alerts go (your chat with the bot). Not secret.", kind="str"),
     Field("twelvedata_api_key", "keys", "Twelve Data API key",
           "Gold, silver, oil prices. Ignored when Binance only is on. twelvedata.com",
           kind="secret", depends_on={"binance_only_mode": False}),

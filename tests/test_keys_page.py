@@ -173,3 +173,19 @@ def test_space_deploy_uploads_the_app_privately_on_cpu_and_returns_the_address(t
     assert api.upload_folder.call_args.kwargs["allow_patterns"] == ["app.py", "requirements.txt", "README.md"]
     api.request_space_hardware.assert_called_once_with("dhruvdp/dhruv-llm", "cpu-basic")
     assert out["url"] == "https://dhruvdp-dhruv-llm.hf.space" and out["private"] is True and out["stage"] == "BUILDING"
+
+
+def test_telegram_picks_up_a_token_saved_after_start_up(monkeypatch):
+    """Keys load from the database after the notifier is created; alerts must still work."""
+    from pydantic import SecretStr
+
+    from config.settings import settings
+    from notifications.telegram_notifier import TelegramNotifier
+    monkeypatch.setattr(settings, "telegram_bot_token", None)
+    n = TelegramNotifier()
+    assert n._bot is None
+    monkeypatch.setattr(settings, "telegram_bot_token", SecretStr("111:AAA-first-token"))
+    first = n._bot
+    assert first is not None and n._bot is first                     # built once, reused
+    monkeypatch.setattr(settings, "telegram_bot_token", SecretStr("222:BBB-second-token"))
+    assert n._bot is not first                                       # rebuilt after a change on /keys

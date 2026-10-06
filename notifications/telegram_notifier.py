@@ -8,14 +8,31 @@ log = structlog.get_logger()
 
 
 class TelegramNotifier:
+    """The bot is built from the CURRENT token on first use and rebuilt when the token changes: keys now live in
+    the database (/keys) and load after this object is created, so reading the token here at start-up would leave
+    alerts off for good once the token is no longer in .env."""
+
     def __init__(self) -> None:
+        self._built_for: str | None = None
+        self._bot_obj = None
+        if self._bot is None:
+            log.info("telegram_bot_token_not_set", hint="Telegram stays off until a token is saved on /keys")
+
+    @property
+    def _bot(self):
         token = settings.telegram_bot_token
-        if token is None or not token.get_secret_value().strip():
-            log.info("telegram_bot_token_not_set",
-                     hint="Running with Telegram notifications disabled")
-            self._bot = None
-            return
-        self._bot = Bot(token=token.get_secret_value())
+        value = token.get_secret_value().strip() if token is not None else ""
+        if not value:
+            return None
+        if value != self._built_for:
+            self._bot_obj, self._built_for = Bot(token=value), value
+        return self._bot_obj
+
+    @_bot.setter
+    def _bot(self, bot) -> None:                  # tests and callers that inject a bot
+        self._bot_obj = bot
+        token = settings.telegram_bot_token
+        self._built_for = token.get_secret_value().strip() if token is not None else None
 
     async def send_text(self, text: str, parse_mode: str | None = None) -> bool:
         """Send a message. Pass parse_mode=ParseMode.HTML for messages built with <b>/<i> tags —
