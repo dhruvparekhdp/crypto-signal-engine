@@ -197,7 +197,7 @@ def load_jobs():
         for sp in sorted((base / "status").glob("*.json")):
             try:
                 d = json.loads(sp.read_text())
-                if "stage" in d or "cmd" not in d or "name" not in d:   # an AI-queue file, the banner, or something else
+                if "stage" in d or "cmd" not in d or "name" not in d or "items" in d:   # an AI-queue file, the banner, or something else
                     continue
                 v = job_view(d, base / "logs")
                 if v["state"] in ("running", "stalled?") and base == ROOT:
@@ -301,6 +301,16 @@ def gate_compare_safe(rows):
         return gate.compare(rows)
     except Exception:  # noqa: BLE001
         return {}
+
+
+def prod_health_view():
+    """Production health written by scripts.prod_health (every 30 minutes)."""
+    try:
+        d = json.loads((ROOT / "status" / "prod_health.json").read_text())
+        d["age_s"] = round(time.time() - d.get("ts", 0))
+        return d
+    except (OSError, json.JSONDecodeError):
+        return None
 
 
 def banner_view():
@@ -475,7 +485,8 @@ def state():
     jobs = safe(load_jobs, [])
     return {"now": time.time(), "machines": machines, "jobs": jobs, "overall": safe(lambda: overall(jobs), {}),
             "ai": safe(ai_view, []) + safe(work_view, []), "results": safe(results_view, []),
-            "noai": safe(noai_view, {"wallet": {}, "breakdown": {}, "timeframes": []}), "banner": safe(banner_view, None)}
+            "noai": safe(noai_view, {"wallet": {}, "breakdown": {}, "timeframes": []}), "banner": safe(banner_view, None),
+            "prod": safe(prod_health_view, None)}
 
 
 PAGE = (Path(__file__).parent / "dash.html").read_text() if (Path(__file__).parent / "dash.html").exists() else "dash.html missing"

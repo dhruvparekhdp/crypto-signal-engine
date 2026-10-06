@@ -37,6 +37,7 @@ svg text{fill:var(--mut);font-size:10px;font-family:system-ui,sans-serif}
 .inp{background:var(--soft);color:var(--fg);border:1px solid var(--line);border-radius:8px;padding:4px 8px;font:inherit;font-size:12px;cursor:pointer}
 </style></head><body>
 <h1>Lab Monitor</h1><div class="sub" id="upd">loading…</div>
+<div id="prod"></div>
 <div id="banner"></div>
 <h2><span class="num">1</span>Backtest progress</h2><div id="progress"></div>
 <h2><span class="num">2</span>What the backtests found (no AI)</h2><div id="find"></div>
@@ -127,6 +128,11 @@ function hbars(rows,{fmtv=v=>v.toFixed(2)}={}){if(!rows.length)return '';const m
 function heat(rows,{fmtv=v=>(Math.abs(v)<.005?0:v).toFixed(2),span=.3}={}){if(!rows||rows.length<2)return '';
  const col=v=>{if(typeof v!=='number')return '';const a=Math.min(1,Math.abs(v)/span);return `background:${v>=0?`rgba(76,195,138,${.15+.6*a})`:`rgba(239,111,108,${.15+.6*a})`}`};
  return `<div class="wrap"><table class="heat"><tr>${rows[0].map(c=>`<th>${esc(typeof c==='number'?Math.round(c):c)}</th>`).join('')}</tr>${rows.slice(1).map(r=>`<tr>${r.map((c,i)=>i?`<td style="${col(c)}">${typeof c==='number'?fmtv(c):'–'}</td>`:`<td style="text-align:left">${esc(sname(c))}</td>`).join('')}</tr>`).join('')}</table></div>`}
+
+/* ---------- production health ---------- */
+function prod(p){if(!p)return '';const col={ok:'pos',warn:'warn',problem:'neg'};const icon={ok:'✔',warn:'▲',problem:'✖'};
+ return `<div class="card" style="border-color:${p.overall==='ok'?'var(--line)':p.overall==='warn'?'var(--warn)':'var(--bad)'}"><div class="row"><b>Production app ${p.overall==='ok'?'healthy':p.overall==='warn'?'needs a look':p.overall==='down'?'DOWN':'has problems'}</b><span class="sub">checked ${fmt(p.age_s)} ago · every 30 min</span></div>
+ ${(p.items||[]).map(i=>`<div style="padding:4px 0;border-top:1px solid var(--line)"><b class="${col[i.state]||''}">${icon[i.state]||'•'} ${esc(i.label)}</b> <span class="sub">${esc(i.detail)}</span></div>`).join('')}</div>`}
 
 /* ---------- 1 · progress ---------- */
 const WORD={done:'finished',running:'running',failed:'stopped','stalled?':'no heartbeat'};
@@ -308,6 +314,7 @@ async function tick(){let s;try{s=await (await fetch('/api/state',{cache:'no-sto
  try{
  set('upd','live · '+new Date().toLocaleTimeString()+' · refreshes every 6s');
  set('banner',banner(s.banner));
+ set('prod',prod(s.prod));
  set('progress',progress(s));
  _S=s;const n=s.noai||{};
  if(!_U&&!_N.u){_N.u=1;fetch('/api/trades').then(r=>r.json()).then(u=>{_U=u;rw()}).catch(()=>{_N.u=0})}
