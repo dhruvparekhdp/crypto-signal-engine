@@ -44,6 +44,7 @@ ENDPOINTS: tuple[tuple[str, str, str, str, dict], ...] = (
      {"symbol": "btcusdt"}),
     ("Health & speed", "GET", "/health", "Liveness check.", {}),
     ("Paper trading", "GET", "/api/paper", "Wallet, open positions, trade log.", {}),
+    ("System", "GET", "/api/llm/budget", "Each AI model's calls and tokens today against its free-tier limits, cooldowns and skipped calls.", {}),
     ("Paper trading", "GET", "/api/swing", "Swing book vs its backtest: last 4h bar per coin, open swing positions, closed trades in R.", {}),
     ("Charts", "GET", "/api/chart/klines", "Candles for the chart page.", {"symbol": "BTCUSDT", "tf": "4h", "limit": "600"}),
     ("Charts", "GET", "/api/chart/overlays", "Signals, trade levels and news markers to draw on the chart.", {"symbol": "BTCUSDT"}),

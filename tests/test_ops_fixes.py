@@ -32,6 +32,7 @@ async def test_openrouter_search_injects_web_results_instead_of_groq_tools():
 
     class Resp:
         status_code = 200
+        headers = {}
         def json(self):
             return {"choices": [{"message": {"content": "{\"ok\": true}"}}]}
         text = ""
@@ -85,6 +86,7 @@ async def test_our_space_gets_its_own_key_json_mode_and_a_long_timeout():
     class Resp:
         status_code = 200
         text = ""
+        headers = {}
         def json(self):
             return {"choices": [{"message": {"content": "{\"why\": \"ETF inflows\"}"}}]}
 

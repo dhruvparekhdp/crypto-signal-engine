@@ -1251,6 +1251,13 @@ async def _api_swing(runner, request: web.Request) -> web.Response:
     })
 
 
+async def _api_llm_budget(runner, request: web.Request) -> web.Response:
+    """Every AI model's use today against its free-tier limits, cooldowns after rate limits, and skipped calls."""
+    from collectors.llm_budget import SAFETY, budget
+    from collectors.llm_client import calls_today
+    return _json_response({"safety_share": SAFETY, "models": budget().snapshot(), "calls_by_role_today": calls_today()})
+
+
 async def _swing_regime_section(runner, trades, rs) -> dict:
     """Shadow test of analysis.regime_gate: closed swing trades split by the verdict their signal carried."""
     from analysis import regime_gate
@@ -7664,6 +7671,7 @@ async def make_app(runner) -> web.Application:
     app.router.add_get("/api/crypto/forecasts", _bind(_api_crypto_forecasts))
     app.router.add_get("/api/paper", _bind(_api_paper))
     app.router.add_get("/api/swing", _bind(_api_swing))
+    app.router.add_get("/api/llm/budget", _bind(_api_llm_budget))
     app.router.add_get("/api/paper/events", _bind(_api_paper_events))
     app.router.add_get("/api/debug/coindcx", _bind(_api_debug_coindcx))
     app.router.add_get("/api/research", _bind(_api_research))

@@ -329,6 +329,9 @@ class Settings(BaseSettings):
     # the last fallback for the search roles. Its key is the Space secret SPACE_API_KEY, not the HF token.
     hf_space_api_key: SecretStr | None = None
     hf_space_timeout_seconds: int = 240
+    # JSON overrides for collectors/llm_budget.py's free-tier limits, e.g.
+    # {"groq/openai/gpt-oss-120b": {"rpm": 30, "rpd": 1000, "tpm": 8000, "tpd": 200000}}
+    llm_limits: str = ""
     hf_api_token: SecretStr | None = None
 
     # Scoring a headline is a short structured classification — a number, a

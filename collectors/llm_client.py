@@ -361,9 +361,17 @@ async def _call_openai_shaped(provider: Provider, model: str, system: str,
             payload.pop("tools", None)
             payload["response_format"] = {"type": "json_object"}
             resp = await client.post(provider.url, json=payload, headers=headers)
+        from collectors.llm_budget import budget
+        resp_headers = getattr(resp, "headers", None) or {}
+        if resp.status_code == 429:
+            wait = budget().cooldown_from_error(provider.name, model, resp.text, resp_headers.get("retry-after"))
+            raise RuntimeError(f"{provider.name} returned 429 (cooling down {wait / 60:.0f} min): {resp.text[:160]}")
         if resp.status_code != 200:
             raise RuntimeError(f"{provider.name} returned {resp.status_code}: {resp.text[:200]}")
-        choices = resp.json().get("choices", [])
+        body = resp.json()
+        used = (body.get("usage") or {}).get("total_tokens") or (len(system) + len(user)) // 4 + max_tokens
+        budget().observe(provider.name, model, used, resp_headers)
+        choices = body.get("choices", [])
         if not choices:
             return ""
         return choices[0]["message"].get("content", "") or ""
@@ -462,8 +470,10 @@ async def _call_hf(model: str, system: str, user: str, max_tokens: int,
                    "response_format": {"type": "json_object"}}
         async with httpx.AsyncClient(timeout=max(timeout, settings.hf_space_timeout_seconds)) as client:
             resp = await client.post(url, json=payload, headers=headers)
+        from collectors.llm_budget import budget
         if resp.status_code != 200:
             raise RuntimeError(f"hf space returned {resp.status_code}: {resp.text[:200]}")
+        budget().observe("hf", original_model or "analyst", (resp.json().get("usage") or {}).get("total_tokens") or 0)
         choices = resp.json().get("choices", [])
         return choices[0]["message"].get("content", "") if choices else ""
 
@@ -535,6 +545,17 @@ async def ask_json(role: str, system: str, user: str, *, max_tokens: int = 512,
             failures.append(f"{provider_name}/{model}: circuit breaker open (paused)")
             continue
 
+        from collectors.llm_budget import budget
+        est = (len(system) + len(user)) // 4 + max_tokens + (4000 if model.endswith("+search") and provider_name == "groq" else 0)
+        ok, wait, why = budget().allow(provider_name, model, est)
+        if not ok and wait <= 8:
+            await asyncio.sleep(wait)                     # a few seconds of per-minute budget: worth waiting
+            ok, wait, why = budget().allow(provider_name, model, est)
+        if not ok:
+            log.info("llm_budget_skip", role=role, provider=provider_name, model=model, reason=why, ok_in_s=round(wait))
+            failures.append(f"{provider_name}/{model}: skipped, {why}; ok again in {wait / 60:.0f} min")
+            continue
+
         if len(attempts) > 1:
             # Pacing gap: at least 1.0 second delay between 1st and 2nd API attempts
             await asyncio.sleep(1.0)
@@ -567,7 +588,9 @@ async def ask_json(role: str, system: str, user: str, *, max_tokens: int = 512,
         except Exception as exc:
             err_str = str(exc).lower()
             if any(k in err_str for k in ("429", "rate limit", "quota", "too many requests", "resource_exhausted")):
-                trip_circuit_breaker(f"{provider_name}/{model}", seconds=60, reason=str(exc))
+                from collectors.llm_budget import budget
+                if "cooling down" not in err_str:          # openai-shaped calls already set it from the reply
+                    budget().cooldown_from_error(provider_name, model, str(exc))
             elif any(k in err_str for k in ("503", "service unavailable", "bad gateway")):
                 trip_circuit_breaker(provider_name, seconds=30, reason=str(exc))
             log.warning("llm_provider_failed", role=role, provider=provider_name,
