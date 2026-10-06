@@ -38,7 +38,12 @@ async def _keys() -> dict:
 
 
 def _kaggle(args: list[str], keys: dict, cwd: str | None = None) -> str:
-    env = {**os.environ, "KAGGLE_USERNAME": keys["user"], "KAGGLE_KEY": keys["key"]}
+    env = {**os.environ, "KAGGLE_USERNAME": keys["user"]}
+    k = keys["key"]
+    if len(k) == 32 and all(c in "0123456789abcdef" for c in k):
+        env["KAGGLE_KEY"] = k                     # legacy kaggle.json key
+    else:
+        env["KAGGLE_API_TOKEN"] = k               # new-style API token (Kaggle CLI 2.x needs it for uploads)
     r = subprocess.run([sys.executable, "-m", "kaggle", *args], env=env, cwd=cwd, capture_output=True, text=True,
                        timeout=600)
     out = (r.stdout + r.stderr).strip()

@@ -67,3 +67,19 @@ async def test_collect_uploads_only_a_model_that_beat_the_base(tmp_path, monkeyp
     monkeypatch.setattr(kf, "_kaggle", fake_kaggle)
     res = await kf.collect_async()
     assert res["model_file"] and "uploaded_to" not in res
+
+
+def test_kaggle_new_style_token_is_passed_as_api_token(monkeypatch):
+    from scripts import kaggle_finetune as kf
+    seen = {}
+
+    def fake_run(cmd, env=None, **k):
+        seen.update(env)
+        return type("R", (), {"returncode": 0, "stdout": "ok", "stderr": ""})()
+
+    monkeypatch.setattr(kf.subprocess, "run", fake_run)
+    kf._kaggle(["datasets", "list"], {"user": "u", "key": "KGAT_" + "a" * 32})
+    assert seen["KAGGLE_API_TOKEN"].startswith("KGAT_") and "KAGGLE_KEY" not in seen
+    seen.clear()
+    kf._kaggle(["datasets", "list"], {"user": "u", "key": "0123456789abcdef0123456789abcdef"})
+    assert seen["KAGGLE_KEY"] == "0123456789abcdef0123456789abcdef"

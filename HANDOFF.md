@@ -59,9 +59,24 @@ map; this file has the decisions, results, open work and the owner's rules.
 - SSH to EC2: key `~/.ssh/crypto-ec2` (new). GitHub secret EC2_SSH_KEY still has the old key: owner to update, then
   remove the old key from the server's authorized_keys.
 
+## Live status when this was written (6 Oct, ~14:40 UTC)
+- **Kaggle fine-tune RUNNING**: kaggle.com/code/dhruvparekhdp/crypto-desk-finetune (1,284 examples: 764 headline,
+  176 attribution, 341 event; Qwen2.5-3B LoRA, 3 epochs). When done: on the server run
+  `python -m scripts.kaggle_finetune collect` (needs `set -a && . ./.env && set +a` first). It downloads eval.json +
+  the GGUF and uploads to private HF repo dhruvdp/crypto-analyst-3b-gguf only if it beat the base model.
+  Kaggle keys on /keys work (new-style API token, passed as KAGGLE_API_TOKEN).
+- **HF Space BUILDING**: llama-cpp-python compiles from source (no cp310 wheel); requested hardware still
+  zero-a10g. If the build fails: add `python_version: "3.11"` to huggingface_space/README.md front matter or pin a
+  llama-cpp-python version that has a prebuilt CPU wheel, then `python -m scripts.hf_space_deploy` on the server.
+  Owner must switch hardware to CPU basic in Space settings (API hardware change returns 402).
+- **AI entry test** on the laptop: 32/150 decisions (~3.7 min each).
+- Server commands: `ssh -i ~/.ssh/crypto-ec2 ubuntu@52.62.37.4`, repo ~/crypto-signal-engine, scripts need the
+  .env loaded (`set -a && . ./.env && set +a`) and read keys from the database.
+
 ## Open work (in order)
-1. Verify the HF Space runs on CPU basic; check `/health`, `/v1/classify`, a fallback chat answer.
-2. Fine-tune (finetune/README.md): owner saves Kaggle username/key on /keys -> `scripts.kaggle_finetune start`.
+1. When the Space is RUNNING: check `/health`, `/v1/classify`, a fallback chat answer (keys page "Test" on the
+   Space URL does `/health`); headline scoring then moves to the Space automatically.
+2. Collect the fine-tune result (above); compare eval.json; switch the Space's MODEL_REPO/MODEL_FILE only if better.
 3. Owner: update GitHub secret EC2_SSH_KEY; decide paper wallet reset; close port 8080 to the internet (Tailscale).
 4. Read the AI entry-test result; decide whether AI may veto swing entries (only if it beats rules with a CI).
 5. Forecast phase 2 (volatility regime in band width, /predict page); AI prompt rework with logged calls.
