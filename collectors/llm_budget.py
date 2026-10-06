@@ -128,7 +128,9 @@ class Budget:
                 return self._skip(m, False, nxt - now, f"daily token budget used ({m['day_tokens']:,}/{lim['tpd']:,})")
             if lim.get("rpm") and len(m["calls"]) >= max(1, int(lim["rpm"] * SAFETY)):
                 return self._skip(m, False, 60 - (now - m["calls"][0]), "per-minute request budget used")
-            if lim.get("tpm") and sum(n for _, n in m["tokens"]) + est_tokens > lim["tpm"] * SAFETY:
+            used_tpm = sum(n for _, n in m["tokens"])
+            # one call bigger than the whole minute's allowance (a search call can be) still goes when the minute is empty
+            if lim.get("tpm") and used_tpm > 0 and used_tpm + est_tokens > lim["tpm"] * SAFETY:
                 return self._skip(m, False, 60 - (now - m["tokens"][0][0]) if m["tokens"] else 60, "per-minute token budget used")
             return True, 0.0, ""
 
@@ -175,11 +177,31 @@ class Budget:
             self._save()
         return wait
 
+    def bench(self, provider: str, model: str, seconds: float, reason: str, now: float | None = None) -> None:
+        """Take a model out of rotation for a while, e.g. OpenRouter answering 'no longer free' (404)."""
+        now = time.time() if now is None else now
+        with self._lock:
+            m = self._m(_key(provider, model), now)
+            m["cooldown_until"] = now + seconds
+            m["last_error"] = reason[:200]
+            self._save()
+
+    def alert_due(self, role: str, every_s: float = 6 * 3600, now: float | None = None) -> bool:
+        """True at most once per `every_s` per role, remembered across restarts."""
+        now = time.time() if now is None else now
+        with self._lock:
+            alerts = self.models.setdefault("_alerts", {})
+            if now - alerts.get(role, 0) < every_s:
+                return False
+            alerts[role] = now
+            self._save()
+            return True
+
     def snapshot(self, now: float | None = None) -> list[dict]:
         now = time.time() if now is None else now
         out = []
         with self._lock:
-            for key in sorted(self.models):
+            for key in sorted(k for k in self.models if not k.startswith("_")):
                 m = self._m(key, now)
                 lim = self.limits_for(key)
                 out.append({"model": key, "today_calls": m["day_calls"], "today_tokens": m["day_tokens"],

@@ -129,14 +129,14 @@ class Settings(BaseSettings):
     # model can study them later.
     llm_chain_pre_trade: str = (
         "groq:openai/gpt-oss-120b, groq:openai/gpt-oss-20b, "
-        "hf:meta-llama/Llama-3.1-8B-Instruct, openrouter:qwen/qwen3.8-27b:free")
+        "hf:meta-llama/Llama-3.1-8B-Instruct, openrouter:google/gemma-4-31b-it:free")
     llm_chain_post_trade: str = (
         "groq:openai/gpt-oss-120b+search, groq:openai/gpt-oss-120b, "
         "hf:meta-llama/Llama-3.1-8B-Instruct, openrouter:nvidia/nemotron-3-ultra-550b-a55b:free")
     # The world-events briefing. Every entry can actually search.
     llm_chain_briefing: str = (
         "groq:openai/gpt-oss-120b+search, groq:openai/gpt-oss-20b+search, "
-        "openrouter:qwen/qwen3.8-27b:free+search, "
+        "openrouter:google/gemma-4-31b-it:free+search, "
         "hf:analyst+search")
     market_briefing_enabled: bool = True
     market_briefing_minutes: int = 60          # Groq's free daily token quota ran out by midday at 30
@@ -145,7 +145,7 @@ class Settings(BaseSettings):
     # Hourly: why each watchlist coin moved, and how our signals fared.
     llm_chain_attribution: str = (
         "groq:openai/gpt-oss-120b+search, groq:openai/gpt-oss-20b+search, "
-        "openrouter:qwen/qwen3.8-27b:free+search, "
+        "openrouter:google/gemma-4-31b-it:free+search, "
         "hf:analyst+search")
     move_attribution_enabled: bool = True
     # The event monitor: adaptive, jittered web checks with a daily cap.
@@ -153,7 +153,7 @@ class Settings(BaseSettings):
     event_monitor_daily_cap: int = 30           # 104 searches/day found nothing new and spent Groq's daily quota
     llm_chain_briefing_calm: str = (
         "groq:openai/gpt-oss-20b+search, groq:openai/gpt-oss-120b+search, "
-        "openrouter:qwen/qwen3.8-27b:free+search, "
+        "openrouter:google/gemma-4-31b-it:free+search, "
         "hf:analyst+search")
     # Labelling past moves from the Binance lake (scripts/review_history.py).
     # Local first: it is bulk work and the free Groq requests are shared with
@@ -325,8 +325,9 @@ class Settings(BaseSettings):
     ollama_base_url: str = ""
     # Hugging Face Space endpoint (e.g. https://user-space.hf.space) and optional token.
     hf_base_url: str = ""
-    # Our own Hugging Face Space running a small model on its CPU (huggingface_space/): slow but free, so it is
-    # the last fallback for the search roles. Its key is the Space secret SPACE_API_KEY, not the HF token.
+    # Our own Hugging Face Space (huggingface_space/, Gradio + ZeroGPU, free): the last fallback for the search
+    # roles. Called with the saved HF token (a private Space needs it); hf_space_api_key only if the Space sets
+    # its own SPACE_API_KEY secret.
     hf_space_api_key: SecretStr | None = None
     hf_space_timeout_seconds: int = 240
     # JSON overrides for collectors/llm_budget.py's free-tier limits, e.g.
@@ -341,14 +342,14 @@ class Settings(BaseSettings):
     # most through a metered API. Local first, and the free tiers behind it.
     llm_chain_news_scoring: str = (
         "groq:qwen/qwen3.8-27b, groq:openai/gpt-oss-20b, "
-        "hf:meta-llama/Llama-3.1-8B-Instruct, openrouter:qwen/qwen3.8-27b:free")
+        "hf:meta-llama/Llama-3.1-8B-Instruct, openrouter:google/gemma-4-31b-it:free")
 
     # Groq leads, not the laptop: this call sits inside the 30-second paper
     # tick with a 12-second budget, and an 8B model on the i5 needs 10-25 s
     # just to read the prompt. gemini-2.5-* is being shut down in October.
     llm_chain_position_review: str = (
         "groq:openai/gpt-oss-20b, hf:meta-llama/Llama-3.1-8B-Instruct, "
-        "openrouter:qwen/qwen3.8-27b:free")
+        "openrouter:google/gemma-4-31b-it:free")
 
     llm_chain_research: str = (
         "anthropic:claude-opus-5-5, anthropic:claude-opus-5, gemini:gemini-3.1-pro-preview")

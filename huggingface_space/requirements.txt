@@ -1,5 +1,6 @@
-fastapi>=0.110.0
-uvicorn>=0.28.0
-pydantic>=2.6.0
-duckduckgo_search>=7.0.0
+--extra-index-url https://abetlen.github.io/llama-cpp-python/whl/cpu
+llama-cpp-python==0.3.16
 huggingface_hub>=0.28.0
+fastapi
+pydantic>=2
+duckduckgo_search>=7.0.0

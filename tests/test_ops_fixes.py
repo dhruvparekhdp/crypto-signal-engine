@@ -63,9 +63,14 @@ async def test_outage_alerts_at_most_once_per_six_hours_per_role():
     for _ in range(10):
         await r._alert_llm_outage("attribution", ["groq 429"])
     assert r.notifier.send_text.await_count == 1
-    r._llm_alert_at["attribution"] = time.monotonic() - 6 * 3600 - 1
-    await r._alert_llm_outage("attribution", ["groq 429"])
-    assert r.notifier.send_text.await_count == 2
+    r2 = AppRunner()                                   # a restart must not reset the 6-hour quiet period
+    r2.notifier = AsyncMock()
+    await r2._alert_llm_outage("attribution", ["groq 429"])
+    assert r2.notifier.send_text.await_count == 0
+    from collectors.llm_budget import budget
+    budget().models["_alerts"]["attribution"] = time.time() - 6 * 3600 - 1
+    await r2._alert_llm_outage("attribution", ["groq 429"])
+    assert r2.notifier.send_text.await_count == 1
 
 
 @pytest.mark.asyncio
@@ -117,3 +122,45 @@ def test_jobs_that_cost_more_than_they_gave_are_trimmed():
     assert f["event_monitor_daily_cap"].default == 30
     assert f["v2_backtest_enabled"].default is False
     assert f["coindcx_enabled"].default is False
+
+
+@pytest.mark.asyncio
+async def test_our_space_falls_back_to_the_saved_hf_token():
+    from collectors import llm_client as lc
+    seen = {}
+
+    class Resp:
+        status_code = 200
+        text = ""
+        headers = {}
+        def json(self):
+            return {"choices": [{"message": {"content": "{}"}}]}
+
+    class Client:
+        def __init__(self, timeout=None, **k): pass
+        async def __aenter__(self): return self
+        async def __aexit__(self, *a): return False
+        async def post(self, url, json=None, headers=None):
+            seen.update(url=url, headers=headers)
+            return Resp()
+
+    provider_key = type(lc.PROVIDERS["hf"]).api_key
+    with patch.object(lc.settings, "hf_base_url", "https://someone-analyst.hf.space"), \
+         patch.object(lc.settings, "hf_space_api_key", None), \
+         patch.object(type(lc.PROVIDERS["hf"]), "api_key", property(lambda self: "hf_saved_token")), \
+         patch.object(lc, "_search_ddg", lambda q, n: ""), patch.object(lc.httpx, "AsyncClient", Client):
+        await lc._call_hf("analyst+search", "sys", "user", 100, 0.2, 20)
+    assert seen["headers"]["Authorization"] == "Bearer hf_saved_token"
+    assert seen["url"] == "https://someone-analyst.hf.space/v1/chat/completions"
+    assert provider_key is type(lc.PROVIDERS["hf"]).api_key
+
+
+def test_every_ai_provider_key_and_address_can_be_set_from_the_settings_page():
+    """The owner edits keys from a phone; a key that only .env can set cannot be fixed away from a laptop."""
+    from collectors.llm_client import PROVIDERS
+    from config.overrides import BY_KEY
+    for p in PROVIDERS.values():
+        if p.key_attr:
+            assert p.key_attr in BY_KEY and BY_KEY[p.key_attr].kind == "secret", p.key_attr
+    for k in ("hf_base_url", "hf_space_api_key", "ollama_base_url", "telegram_bot_token"):
+        assert k in BY_KEY, k

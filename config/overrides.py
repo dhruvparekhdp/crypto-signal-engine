@@ -244,6 +244,11 @@ FIELDS: tuple[Field, ...] = (
     Field("hf_api_token", "keys", "Hugging Face API token",
           "Optional HF user token if Space is private or for higher rate limits. huggingface.co/settings/tokens",
           kind="secret"),
+    Field("hf_space_api_key", "keys", "Hugging Face Space key (optional)",
+          "Only if your Space sets its own SPACE_API_KEY secret; otherwise the HF token above is used.",
+          kind="secret"),
+    Field("ollama_base_url", "keys", "Local model URL (Ollama)",
+          "A model on your own machine, e.g. http://dhruv-ai:11434. Empty = not used.", kind="str"),
 )
 BY_KEY = {f.key: f for f in FIELDS}
 

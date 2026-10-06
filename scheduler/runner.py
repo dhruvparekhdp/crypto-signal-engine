@@ -297,10 +297,8 @@ class AppRunner:
         """
         count = self._llm_fail_counts.get(role, 0) + 1
         self._llm_fail_counts[role] = count
-        alerts = self.__dict__.setdefault("_llm_alert_at", {})
-        now_s = time.monotonic()
-        if count == 1 or now_s - alerts.get(role, -1e9) >= 6 * 3600:
-            alerts[role] = now_s
+        from collectors.llm_budget import budget
+        if budget().alert_due(role):                      # once per 6 h per role, remembered across restarts
             short = "\n".join(f"• {f[:120]}" for f in failures[:4])
             msg = (f"🔴 <b>ALL LLM providers failed</b> for <code>{role}</code> "
                    f"({count}x in a row)\n\n{short}\n\n"

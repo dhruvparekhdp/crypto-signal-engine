@@ -86,3 +86,43 @@ async def test_the_chain_skips_a_model_out_of_budget_without_calling_it(tmp_path
     r = await llm_client.ask_json("briefing", "sys", "user")
     assert called == ["openai/gpt-oss-20b"] and r.data == {"ok": True}
     assert any("skipped" in f for f in r.failures)
+
+
+def test_one_search_call_bigger_than_the_minute_allowance_still_goes_when_the_minute_is_empty(tmp_path):
+    """The first version skipped every Groq search call: its estimate alone exceeded 85% of 8,000 tokens/min."""
+    x = b(tmp_path)
+    assert x.allow("groq", "openai/gpt-oss-120b+search", est_tokens=9000, now=T0)[0]
+    x.observe("groq", "openai/gpt-oss-120b", 9000, now=T0)
+    assert not x.allow("groq", "openai/gpt-oss-120b+search", est_tokens=9000, now=T0 + 10)[0]
+    assert x.allow("groq", "openai/gpt-oss-120b+search", est_tokens=9000, now=T0 + 61)[0]
+
+
+def test_a_model_that_stopped_being_free_is_benched(tmp_path):
+    x = b(tmp_path)
+    x.bench("openrouter", "qwen/qwen3.8-27b:free+search", 6 * 3600, "404 This model is unavailable for free", now=T0)
+    ok, wait, why = x.allow("openrouter", "qwen/qwen3.8-27b:free", now=T0 + 60)
+    assert not ok and wait == pytest.approx(6 * 3600 - 60)
+
+
+def test_outage_alerts_are_remembered_across_restarts(tmp_path):
+    x = b(tmp_path)
+    assert x.alert_due("briefing", now=T0) and not x.alert_due("briefing", now=T0 + 60)
+    assert not b(tmp_path).alert_due("briefing", now=T0 + 3600)
+    assert b(tmp_path).alert_due("briefing", now=T0 + 6 * 3600 + 1)
+    assert all(not m["model"].startswith("_") for m in x.snapshot(now=T0))
+
+
+@pytest.mark.asyncio
+async def test_an_unconfigured_space_is_skipped_without_a_call_or_a_logged_failure(monkeypatch):
+    from collectors import llm_client
+    monkeypatch.setattr(llm_client.settings, "hf_base_url", "")
+    called = []
+
+    async def fake_hf(*a, **k):
+        called.append(a)
+        return "{}"
+
+    monkeypatch.setattr(llm_client, "_call_hf", fake_hf)
+    monkeypatch.setattr(llm_client, "chain_for", lambda role: [("hf", "analyst+search")])
+    r = await llm_client.ask_json("briefing", "sys", "user")
+    assert called == [] and r.failures == []

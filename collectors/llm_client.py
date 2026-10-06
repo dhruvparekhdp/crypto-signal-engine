@@ -366,6 +366,9 @@ async def _call_openai_shaped(provider: Provider, model: str, system: str,
         if resp.status_code == 429:
             wait = budget().cooldown_from_error(provider.name, model, resp.text, resp_headers.get("retry-after"))
             raise RuntimeError(f"{provider.name} returned 429 (cooling down {wait / 60:.0f} min): {resp.text[:160]}")
+        if resp.status_code == 404 and provider.name == "openrouter":
+            # "This model is unavailable for free" / "No endpoints found": retrying every few minutes only adds noise
+            budget().bench(provider.name, model, 6 * 3600, resp.text)
         if resp.status_code != 200:
             raise RuntimeError(f"{provider.name} returned {resp.status_code}: {resp.text[:200]}")
         body = resp.json()
@@ -460,11 +463,13 @@ async def _call_hf(model: str, system: str, user: str, max_tokens: int,
     if model == "meta-llama/Llama-3.3-70B-Instruct" and original_model in ("analyst", "default", "") and not base_url:
         # "analyst" means our own Space; without one it would fall through to paid serverless inference
         raise RuntimeError("hf: no Space configured (hf_base_url is empty)")
-    if base_url and getattr(settings, "hf_space_api_key", None) is not None:
-        # Our Space: its own key, the model name it expects, JSON mode, and the time a CPU model needs
+    if base_url:
+        # Our own Space (huggingface_space/): the model name it expects, JSON mode, and the time a Space call needs.
+        # Auth: the Space's own key if one is set, else the saved HF token (what a private Space requires).
+        space_key = getattr(settings, "hf_space_api_key", None)
+        key = space_key.get_secret_value() if space_key is not None else token
         url = f"{base_url}/v1/chat/completions"
-        headers = {"Content-Type": "application/json",
-                   "Authorization": f"Bearer {settings.hf_space_api_key.get_secret_value()}"}
+        headers = {"Content-Type": "application/json", **({"Authorization": f"Bearer {key}"} if key else {})}
         payload = {"model": original_model or "analyst", "temperature": temperature, "max_tokens": max_tokens,
                    "messages": [{"role": "system", "content": system}, {"role": "user", "content": user}],
                    "response_format": {"type": "json_object"}}
@@ -545,6 +550,9 @@ async def ask_json(role: str, system: str, user: str, *, max_tokens: int = 512,
             failures.append(f"{provider_name}/{model}: circuit breaker open (paused)")
             continue
 
+        if provider_name == "hf" and model.removesuffix("+search") in ("analyst", "default") \
+                and not (getattr(settings, "hf_base_url", "") or "").strip():
+            continue                                      # our Space is not set up yet: nothing to try, nothing to log
         from collectors.llm_budget import budget
         est = (len(system) + len(user)) // 4 + max_tokens + (4000 if model.endswith("+search") and provider_name == "groq" else 0)
         ok, wait, why = budget().allow(provider_name, model, est)
