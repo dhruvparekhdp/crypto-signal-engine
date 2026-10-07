@@ -1002,9 +1002,13 @@ def resolve_candle(
     ts: datetime,
     slippage: SlippageModel = NO_SLIPPAGE,
     drift_pct: float = 0.0,
+    gap_price: float | None = None,
 ) -> tuple[ExitReason, float] | None:
     """
     Decide whether a candle closes this position, and at what price.
+
+    gap_price (live ticks only): when the first price we see is already beyond the stop or liquidation level, the
+    order fills there, not at the level (plan finding L4). Backtests pass None and keep their own gap handling.
 
     Priority is deliberate and pessimistic:
       1. Liquidation — a hard exchange action that overrides any of our orders.
@@ -1046,6 +1050,8 @@ def resolve_candle(
         return None
 
     reason, level = hit
+    if gap_price is not None and reason in (ExitReason.STOP, ExitReason.LIQUIDATION) and s * gap_price < s * level:
+        level = gap_price                              # gapped through: filled at the worse price actually seen
     return reason, slippage.exit_fill(level, pos.side, reason, drift_pct)
 
 

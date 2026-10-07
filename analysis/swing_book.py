@@ -44,23 +44,60 @@ DEFAULT_SPECS = ("4h@vol_breakout:z=3.0,4h@keltner_break:k=2.5,4h@donchian:n=100
 # 12h is not live: Ichimoku failed its null test there (p = 0.17).
 
 
-def parse_specs(text: str) -> list[tuple[str, str, dict]]:
+class SpecError(ValueError):
+    """The swing strategy setting has a mistake. Raised (or reported) instead of silently dropping a strategy."""
+
+
+def _split(part: str) -> tuple[str, str, dict]:
+    tf, at, rest_ = part.partition("@")
+    if not at:
+        tf, rest_ = TF, part
+    sid, _, rest = rest_.partition(":")
+    params = {}
+    for kv in [x for x in rest.split(";") if x]:
+        k, _, v = kv.partition("=")
+        try:
+            params[k.strip()] = int(v) if v.strip().isdigit() else float(v)
+        except ValueError:
+            params[k.strip()] = v.strip()
+    return tf.strip().lower(), sid.strip(), params
+
+
+def spec_problems(text: str) -> list[str]:
+    """Every mistake in a swing strategy setting, in plain words. Empty list = valid."""
+    parts = [p.strip() for p in (text or "").split(",") if p.strip()]
+    if not parts:
+        return ["no swing strategies configured"]
+    out = []
+    for part in parts:
+        tf, sid, params = _split(part)
+        if sid not in REGISTRY:
+            out.append(f"'{part}': unknown strategy '{sid}'")
+            continue
+        if tf not in INTERVAL_MS:
+            out.append(f"'{part}': unknown timeframe '{tf}'")
+        st = REGISTRY[sid]
+        allowed = set(st.defaults) | set(st.grid) | {"warmup"}
+        for k, v in params.items():
+            if k not in allowed:
+                out.append(f"'{part}': '{sid}' has no setting '{k}' (it has: {', '.join(sorted(allowed))})")
+            elif isinstance(v, str):
+                out.append(f"'{part}': '{k}={v}' is not a number")
+    return out
+
+
+def parse_specs(text: str, strict: bool = False) -> list[tuple[str, str, dict]]:
     """'4h@vol_breakout:z=3.0,8h@ichimoku' -> [('4h', 'vol_breakout', {'z': 3.0}), ('8h', 'ichimoku', {})],
-    in priority order. A spec without '<tf>@' is 4h."""
+    in priority order. A spec without '<tf>@' is 4h; timeframes are case-insensitive.
+    strict=True raises SpecError listing every mistake; otherwise invalid entries are left out (callers that trade
+    must use strict, or check spec_problems first: a typo must never silently change a live strategy)."""
+    problems = spec_problems(text)
+    if strict and problems:
+        raise SpecError("; ".join(problems))
     out = []
     for part in [p.strip() for p in (text or "").split(",") if p.strip()]:
-        tf, at, rest_ = part.partition("@")
-        if not at:
-            tf, rest_ = TF, part
-        sid, _, rest = rest_.partition(":")
-        params = {}
-        for kv in [x for x in rest.split(";") if x]:
-            k, _, v = kv.partition("=")
-            try:
-                params[k] = int(v) if v.isdigit() else float(v)
-            except ValueError:
-                params[k] = v
-        if sid in REGISTRY and tf in INTERVAL_MS:
+        tf, sid, params = _split(part)
+        if sid in REGISTRY and tf in INTERVAL_MS and not any(f"'{part}'" in p for p in problems):
             out.append((tf, sid, params))
     return out
 

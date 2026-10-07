@@ -319,17 +319,15 @@ async def _api_simulator_start(runner, request: web.Request) -> web.Response:
     if stepped_mode:
         cmd.append("--stepped-mode")
     cmd.extend(["--step-market-hours", step_market_hours, "--step-seconds", step_seconds])
-    if gemini_key:
-        cmd.extend(["--gemini-key", gemini_key])
-    if hf_tokens:
-        cmd.extend(["--hf-tokens", hf_tokens])
-    if openrouter_key:
-        cmd.extend(["--openrouter-key", openrouter_key])
     if ai_provider:
         cmd.extend(["--ai-provider", ai_provider])
+    # keys travel in the environment, never on the command line (visible in the process list)
+    import os as _os
+    env = {**_os.environ, "SIM_GEMINI_KEY": gemini_key or "", "SIM_HF_TOKENS": hf_tokens or "",
+           "SIM_OPENROUTER_KEY": openrouter_key or ""}
 
     try:
-        _sim_process = await asyncio.create_subprocess_exec(*cmd)
+        _sim_process = await asyncio.create_subprocess_exec(*cmd, env=env)
         return web.Response(text=json.dumps({"status": "started", "pid": _sim_process.pid}), content_type="application/json")
     except Exception as exc:
         return web.Response(text=json.dumps({"status": "error", "message": str(exc)}), status=500, content_type="application/json")

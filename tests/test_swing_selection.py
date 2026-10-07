@@ -32,7 +32,10 @@ async def run(signals, cap=2):
         now = datetime.now(UTC)
         for sym, strat, side in signals:
             px = PRICES[sym]
-            runner._pending_swing.append(sb.to_signal(sb.SwingSetup(sym, strat, side, 0, px * 0.015, px), px, now))
+            _sig = sb.to_signal(sb.SwingSetup(sym, strat, side, 0, px * 0.015, px), px, now)
+            from analysis.regime_gate import Verdict
+            _sig.regime = Verdict(0.2, 15.0, [])
+            runner._pending_swing.append(_sig)
         await runner._paper_trading_job()
         from storage.repository import Repository
         async with session_maker() as s:

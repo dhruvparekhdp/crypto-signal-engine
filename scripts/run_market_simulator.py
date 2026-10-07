@@ -54,9 +54,11 @@ async def main():
     parser.add_argument("--step-market-hours", type=float, default=1.0, help="Market hours per step")
     parser.add_argument("--step-seconds", type=float, default=60.0, help="Wall-clock analysis budget per step")
     parser.add_argument("--strategy", type=str, default="all", help="all, confluence, bollinger_squeeze, volume_spike, rsi_divergence, trend_pullback, range_breakout, sweep_reclaim, breakout_retest")
-    parser.add_argument("--gemini-key", type=str, default="", help="Gemini API Key")
-    parser.add_argument("--hf-tokens", type=str, default="", help="Hugging Face free token(s)")
-    parser.add_argument("--openrouter-key", type=str, default="", help="OpenRouter API Key")
+    # Keys come from the environment (SIM_GEMINI_KEY, SIM_HF_TOKENS, SIM_OPENROUTER_KEY): command-line arguments
+    # are visible to every user in the process list (plan finding L11). The flags remain for manual runs.
+    parser.add_argument("--gemini-key", type=str, default=os.environ.get("SIM_GEMINI_KEY", ""), help="Gemini API Key")
+    parser.add_argument("--hf-tokens", type=str, default=os.environ.get("SIM_HF_TOKENS", ""), help="Hugging Face free token(s)")
+    parser.add_argument("--openrouter-key", type=str, default=os.environ.get("SIM_OPENROUTER_KEY", ""), help="OpenRouter API Key")
     parser.add_argument("--ai-provider", type=str, default="none", help="none (0 API calls), auto, gemini, groq, hf, openrouter")
     args = parser.parse_args()
 

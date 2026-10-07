@@ -187,6 +187,18 @@ class Settings(BaseSettings):
     # Regime check (analysis/regime_gate.py): skip swing signals when Bitcoin's 30-day volatility is in the top
     # third of its past year, or the coin's daily ADX is above 30. "shadow" tags every signal and still trades it,
     # so the live book can confirm the backtest before the filter is allowed to block anything; "on" skips.
+    swing_perp_prices: bool = True              # swing positions priced on Binance USD-M perps, the market they trade
+    paper_gap_fills: bool = True                # a live stop that price gapped through fills at the price seen
+    swing_config_fail_closed: bool = True
+    # Account guards for the swing book (plan L2/L3): a daily loss limit and losing-streak pause sized for 3% risk
+    # trades, the same news blackout / news-bias rule as the intraday book, and a cap on total open risk per side.
+    swing_account_guards: bool = True
+    swing_daily_loss_pct: float = 9.0
+    swing_streak_pause_after: int = 3
+    swing_streak_pause_minutes: int = 120
+    swing_news_guard: bool = True
+    swing_max_side_risk_pct: float = 0.09       # 0 = off
+    swing_regime_fail_closed: bool = True       # regime data unavailable -> skip the trade (plan L8)       # a mistake in swing_strategies pauses swing trading (and alerts)
     swing_regime_filter: str = "on"
     swing_regime_vol_rank_max: float = 0.67
     swing_regime_adx_max: float = 0.0          # 0 = trend check off: it blocked 10 of 12 coins in a trending week

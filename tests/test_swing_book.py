@@ -26,8 +26,24 @@ class TestSpecs(unittest.TestCase):
         self.assertEqual(sb.timeframes(specs), ["4h", "8h"])
         self.assertNotIn("12h", sb.timeframes(specs))          # Ichimoku failed its 12h null test
 
-    def test_unknown_strategies_are_ignored_and_bare_specs_are_4h(self):
-        self.assertEqual(sb.parse_specs("nope,donchian:n=55,9q@ichimoku"), [("4h", "donchian", {"n": 55})])
+    def test_mistakes_are_reported_not_silently_dropped(self):
+        """Plan finding L9: a typo used to remove or change a live strategy without a word."""
+        text = "nope,donchian:n=55,9q@ichimoku,4h@keltner_break:kk=2.5,4h@vol_breakout:z=abc"
+        problems = sb.spec_problems(text)
+        self.assertEqual(len(problems), 4)
+        self.assertTrue(any("unknown strategy 'nope'" in p for p in problems))
+        self.assertTrue(any("unknown timeframe '9q'" in p for p in problems))
+        self.assertTrue(any("has no setting 'kk'" in p for p in problems))
+        self.assertTrue(any("'z=abc' is not a number" in p for p in problems))
+        with self.assertRaises(sb.SpecError):
+            sb.parse_specs(text, strict=True)
+        self.assertEqual(sb.parse_specs(text), [("4h", "donchian", {"n": 55})])   # lenient mode keeps only valid ones
+
+    def test_bare_specs_are_4h_and_timeframes_are_case_insensitive(self):
+        self.assertEqual(sb.parse_specs("donchian:n=55,8H@ichimoku", strict=True),
+                         [("4h", "donchian", {"n": 55}), ("8h", "ichimoku", {})])
+        self.assertEqual(sb.spec_problems(sb.DEFAULT_SPECS), [])
+        self.assertEqual(sb.spec_problems(""), ["no swing strategies configured"])
 
     def test_settings_default_matches(self):
         from config.settings import Settings

@@ -496,6 +496,9 @@ class AppRunner:
 
                 rows = await repo.get_open_positions(cycle.id)
                 states = {st.symbol: st for st in await self.crypto_store.get_all()}
+                perp = (await self._perp_prices()
+                        if settings.swing_perp_prices and (self._pending_swing or any(
+                            getattr(r, "trade_mode", "") == "swing" for r in rows)) else {})
 
                 # 1. Resolve what is already open.
                 live: list[Position] = []
@@ -504,6 +507,12 @@ class AppRunner:
                     pos = self._restore_position(row)
                     st = states.get(row.symbol)
                     current_price = st.current_price if (st and st.current_price > 0) else None
+                    if getattr(row, "trade_mode", "") == "swing" and settings.swing_perp_prices:
+                        pp = perp.get(row.symbol.upper())
+                        if pp:
+                            current_price = pp          # swing levels come from perp klines: judge them on the perp
+                        else:
+                            log.warning("swing_perp_price_missing", symbol=row.symbol, fallback="spot")
                     if current_price is None and hasattr(self, "commodity_store"):
                         # Fallback for commodities (e.g. xau/usd, gold)
                         for cs in await self.commodity_store.get_all():
@@ -864,6 +873,58 @@ class AppRunner:
                     log.warning("candle_refresh_failed", symbol=st.symbol, interval=interval, error=str(e)[:120])
         log.info("candle_refresh_done", saved=saved)
 
+    _SWING_SEEN_FILE = "data/swing_seen.json"
+
+    def _load_swing_seen(self) -> dict:
+        try:
+            return {k: int(v) for k, v in json.loads(Path(self._SWING_SEEN_FILE).read_text()).items()}
+        except (OSError, ValueError):
+            return {}
+
+    def _save_swing_seen(self) -> None:
+        try:
+            p = Path(self._SWING_SEEN_FILE)
+            p.parent.mkdir(parents=True, exist_ok=True)
+            tmp = p.with_suffix(".tmp")
+            tmp.write_text(json.dumps(self._swing_seen))
+            tmp.replace(p)
+        except OSError:
+            pass
+
+    def _swing_account_guard(self, closed_swing_trades, now, equity: float) -> str | None:
+        """Daily-loss limit and losing-streak pause for the swing book (sized for 3% risk trades, not the intraday
+        3% daily limit, which one swing stop-out would already reach). Returns a skip reason or None."""
+        from analysis.protections import RecentTrade, losing_streak
+        today0 = now.replace(tzinfo=None, hour=0, minute=0, second=0, microsecond=0)
+        today = [RecentTrade(t.symbol, (t.closed_at.replace(tzinfo=None) if t.closed_at.tzinfo else t.closed_at),
+                             t.net_pnl, getattr(t, "side", "")) for t in closed_swing_trades
+                 if t.closed_at is not None and (t.closed_at.replace(tzinfo=None) if t.closed_at.tzinfo else t.closed_at) >= today0]
+        lost = -sum(t.net_pnl for t in today)
+        start = equity + lost
+        if start > 0 and lost >= start * settings.swing_daily_loss_pct / 100.0:
+            return "daily_loss_limit"
+        streak, last = losing_streak(today)
+        if (streak >= settings.swing_streak_pause_after and last is not None
+                and now.replace(tzinfo=None) - last < timedelta(minutes=settings.swing_streak_pause_minutes)):
+            return "losing_streak_pause"
+        return None
+
+    async def _perp_prices(self) -> dict:
+        """Binance USD-M last prices for every symbol, one call, cached 10 s. Empty dict on failure."""
+        import time as _t
+        cache = self.__dict__.setdefault("_perp_cache", {"t": 0.0, "v": {}})
+        if _t.time() - cache["t"] < 10 and cache["v"]:
+            return cache["v"]
+        try:
+            import httpx
+            async with httpx.AsyncClient(timeout=10) as c:
+                r = await c.get("https://fapi.binance.com/fapi/v1/ticker/price")
+                r.raise_for_status()
+                cache.update(t=_t.time(), v={x["symbol"]: float(x["price"]) for x in r.json() if float(x["price"]) > 0})
+        except Exception as e:  # noqa: BLE001
+            log.warning("perp_prices_failed", error=str(e)[:120])
+        return cache["v"]
+
     async def _daily_bars(self, client, symbol: str, now_ms: int):
         """Closed daily bars for the regime check, fetched once per UTC day per coin."""
         from analysis import swing_book as sb
@@ -905,6 +966,20 @@ class AppRunner:
         from analysis import swing_book as sb
         from analysis.lab.runner import CRYPTO
         try:
+            problems = sb.spec_problems(settings.swing_strategies)
+            if problems:
+                log.error("swing_config_invalid", problems=problems)
+                key = settings.swing_strategies
+                if getattr(self, "_swing_config_alerted", None) != key:
+                    self._swing_config_alerted = key
+                    try:
+                        await self.notifier.send_text("⚠️ Swing strategy setting has mistakes"
+                                                      + (", swing trading paused" if settings.swing_config_fail_closed
+                                                         else ", bad entries skipped") + ":\n- " + "\n- ".join(problems))
+                    except Exception:  # noqa: BLE001
+                        pass
+                if settings.swing_config_fail_closed:
+                    return
             specs = sb.parse_specs(settings.swing_strategies)
             states = {st.symbol: st for st in await self.crypto_store.get_all()}
             symbols = [s_ for s_ in CRYPTO if s_.lower() in states]
@@ -923,9 +998,12 @@ class AppRunner:
                         continue
                     last = int(b.t[-1])
                     key = f"{sym}@{tf}"
+                    if not self._swing_seen:
+                        self._swing_seen = self._load_swing_seen()      # plan L6: survive restarts
                     if self._swing_seen.get(key) == last:
                         continue
                     self._swing_seen[key] = last
+                    self._save_swing_seen()
                     setup = sb.evaluate(b, specs)
                     age_min = (now_ms - (last + INTERVAL_MS[tf])) / 60000
                     self._swing_last[key] = {"bar_close": last + INTERVAL_MS[tf], "signal": setup.strategy if setup else None,
@@ -946,7 +1024,9 @@ class AppRunner:
                     if verdict is not None:
                         sig.indicators_summary = f"{sig.indicators_summary} | {verdict.tag()}"
                         self._swing_last[key]["regime"] = verdict.as_dict()
-                    self._pending_swing.append(sig)
+                    if not settings.paper_trading_enabled:          # plan L7: nothing would ever open them
+                        continue
+                    self._pending_swing = self._pending_swing[-49:] + [sig]
                     log.info("swing_signal", symbol=sym, tf=tf, strategy=setup.strategy, side=sig.direction,
                              price=price, stop=sig.stop_loss, target=sig.target_price,
                              regime=verdict.tag() if verdict is not None else "off")
@@ -971,6 +1051,10 @@ class AppRunner:
         dd, streak = sb.book_state(closed)
         open_syms = {p.symbol for p in cstate.positions}
         n_swing = sum(1 for p in cstate.positions if getattr(p, "trade_mode", "") == "swing")
+        equity0 = cstate.wallet + sum(p.margin for p in cstate.positions)
+        guard_block = self._swing_account_guard(closed, now, equity0) if settings.swing_account_guards else None
+        blackout = self._blackout(now) if settings.swing_news_guard else None
+        news_bias = self._event_bias_for(blackout, states) if (blackout is not None and settings.event_bias_mode) else None
         for sig in sigs:
             log_id = await self._log_signal(sig)
             if sig.symbol in open_syms:
@@ -988,12 +1072,39 @@ class AppRunner:
             if settings.swing_max_same_side and same_side >= settings.swing_max_same_side:
                 await self._mark_skipped(log_id, f"max_{settings.swing_max_same_side}_{side_word}s_open")
                 continue
+            if guard_block:                                  # plan L2: account-level losses stop new swing trades
+                await self._mark_skipped(log_id, guard_block)
+                continue
+            if blackout is not None:                         # plan L2: the same news rule the intraday book follows
+                if not settings.event_bias_mode:
+                    await self._mark_skipped(log_id, "news_blackout")
+                    continue
+                if news_bias is not None:
+                    from analysis.event_bias import allows
+                    if not allows(sig.direction, news_bias):
+                        await self._mark_skipped(log_id, "against_news_bias")
+                        continue
+            if settings.swing_max_side_risk_pct:             # plan L3/O5: same-side trades are one market bet
+                side_risk = sum(abs(p.entry_price - p.stop_price) / p.entry_price * p.margin * p.leverage
+                                for p in cstate.positions
+                                if getattr(p, "trade_mode", "") == "swing"
+                                and getattr(p.side, "value", p.side) == sig.direction and p.entry_price > 0)
+                if equity0 > 0 and side_risk / equity0 + settings.swing_risk_pct > settings.swing_max_side_risk_pct + 1e-9:
+                    await self._mark_skipped(log_id, f"side_risk_cap_{settings.swing_max_side_risk_pct * 100:g}pct")
+                    continue
             verdict = getattr(sig, "regime", None)
+            if settings.swing_regime_filter == "on" and verdict is None and settings.swing_regime_fail_closed:
+                await self._mark_skipped(log_id, "regime_unknown")      # plan L8: no data, no trade
+                continue
             if settings.swing_regime_filter == "on" and verdict is not None and verdict.would_skip:
                 await self._mark_skipped(log_id, "regime_" + "_".join(verdict.reasons))
                 continue
             st = states.get(sig.symbol)
             price = st.current_price if st is not None and st.current_price > 0 else sig.current_price
+            if settings.swing_perp_prices:
+                pp = (await self._perp_prices()).get(sig.symbol.upper())
+                if pp:
+                    price = pp                  # enter on the perp market the signal and levels come from
             side = 1 if sig.direction == "long" else -1
             dist = abs(sig.current_price - sig.stop_loss)
             stop, target = price - side * dist, price + side * sb.REWARD_RISK * dist

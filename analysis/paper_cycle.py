@@ -364,8 +364,9 @@ def resolve_at_price(
     `lock` (analysis.paper_trading.ProfitLock) tightens the stop once the
     trade is far enough in profit.
     """
-    hit = resolve_candle(pos, high=price, low=price, close=price, ts=now,
-                         slippage=cfg.slippage)
+    from config.settings import settings as _s
+    hit = resolve_candle(pos, high=price, low=price, close=price, ts=now, slippage=cfg.slippage,
+                         gap_price=price if getattr(_s, "paper_gap_fills", True) else None)
     if hit is None:
         if getattr(pos, "trade_mode", "") == "swing":
             return None      # swing positions keep their tested stop and target untouched

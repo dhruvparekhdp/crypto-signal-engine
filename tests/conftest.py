@@ -31,3 +31,13 @@ def _no_llm_call_log(monkeypatch):
         monkeypatch.setattr(settings, "llm_call_log", False)
     except Exception:  # noqa: BLE001
         pass
+
+
+@_pytest.fixture(autouse=True)
+def _no_live_perp_prices(monkeypatch):
+    """Swing pricing fetches Binance futures prices live; tests must not touch the network (one test opts in)."""
+    try:
+        from config.settings import settings
+        monkeypatch.setattr(settings, "swing_perp_prices", False)
+    except Exception:  # noqa: BLE001
+        pass

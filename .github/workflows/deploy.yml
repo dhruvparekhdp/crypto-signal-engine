@@ -6,8 +6,31 @@ on:
   workflow_dispatch:
 
 jobs:
+  # Plan Q11 / Phase 1.1: a failing test blocks the deploy (an ImportError once crashed production).
+  test:
+    name: Test suite (blocks deploy)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+      - name: Python (matches production)
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install
+        run: pip install -r requirements.txt -r requirements-dev.txt
+      - name: Run tests
+        run: |
+          set -o pipefail
+          rm -f crypto_engine.db
+          python -m pytest -q -p no:cacheprovider 2>&1 | tee pytest.out
+          grep -Eq "[0-9]+ passed" pytest.out
+          if grep -Eq "[0-9]+ (failed|errors?)" pytest.out; then echo "tests failed"; exit 1; fi
+
   deploy:
     name: Auto Deploy to AWS EC2
+    needs: test
     runs-on: ubuntu-latest
     steps:
       - name: Checkout Code
