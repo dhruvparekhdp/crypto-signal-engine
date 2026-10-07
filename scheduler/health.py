@@ -1205,12 +1205,7 @@ async def _api_swing(runner, request: web.Request) -> web.Response:
     rows = [r for r in (snap.get("rows") or []) if getattr(r, "trade_mode", "") == "swing"]
     trades = [t for t in (snap.get("trades") or []) if str(getattr(t, "signal_type", "")).startswith("swing_")]
 
-    def r_of(t):
-        side = 1 if t.side == "long" else -1
-        risk = abs(t.entry_price - t.stop_price) / t.entry_price if t.entry_price else 0
-        move = side * (t.exit_price - t.entry_price) / t.entry_price if t.entry_price else 0
-        cost = (t.trading_fees + t.funding_paid) / (t.margin * t.leverage) if t.margin and t.leverage else 0
-        return (move - cost) / risk if risk > 0 else 0.0
+    from analysis.strategy_registry import trade_r as r_of
 
     rs = [r_of(t) for t in trades]
     by_strategy = {}
@@ -1246,7 +1241,32 @@ async def _api_swing(runner, request: web.Request) -> web.Response:
                             for t, r in list(zip(trades, rs))[-15:]]},
         "wallet": cycle.wallet if cycle is not None else None,
         "regime_filter": await _swing_regime_section(runner, trades, rs),
+        "registry": await _swing_registry_section(trades),
     })
+
+
+async def _swing_registry_section(trades) -> list[dict]:
+    """Plan 2.3: per spec, the forward clock (live_from) and forward results next to its backtest."""
+    from analysis import strategy_registry as reg
+    from analysis.swing_book import STRATEGY_R
+    try:
+        from storage.database import AsyncSessionFactory
+        async with AsyncSessionFactory() as session:
+            rows = await reg.load(session)
+    except Exception:  # noqa: BLE001
+        return []
+    out = []
+    for key, row in sorted(rows.items()):
+        rs = reg.forward(trades, row)
+        tf, sid = key.split("@", 1)
+        out.append({"spec": key, "params": row.params, "status": row.status, "note": row.note,
+                    "live_from": row.live_from.isoformat() if row.live_from else None,
+                    "forward_trades": len(rs), "forward_total_r": round(sum(rs), 2),
+                    "forward_avg_r": round(sum(rs) / len(rs), 3) if rs else None,
+                    "forward_drawdown_r": round(reg.drawdown_r(rs), 2),
+                    "alarm_at_r": reg.alarm_limit(key, _SETTINGS.swing_dd_alarm_factor),
+                    "backtest_avg_r": STRATEGY_R.get((sid, tf))})
+    return out
 
 
 async def _api_llm_budget(runner, request: web.Request) -> web.Response:
@@ -2425,6 +2445,7 @@ section h2{color:var(--accent-soft)}
 
   <div class="pt-strip" id="paper-strip"></div>
   <div id="regime-card" style="margin:10px 0"></div>
+  <div id="registry-card" style="margin:10px 0"></div>
 
   <div class="pt-shead">
     <h2>Open positions</h2>
@@ -2949,6 +2970,7 @@ async function loadRegimeCard(){
   /* Shadow test of the market filter: closed swing trades split by what the filter would have done. */
   const el = document.getElementById('regime-card'); if(!el) return;
   let d; try { d = await (await fetch('/api/swing')).json(); } catch(e){ return; }
+  renderRegistryCard(d.registry || []);
   const g = d.regime_filter; if(!g){ el.innerHTML=''; return; }
   const sb = g.signals || g.scoreboard || {take:{n:0},skip:{n:0}}, now = g.now || {};
   const r = x => x==null ? '–' : (x>0?'+':'') + x.toFixed(2) + ' R';
@@ -2960,6 +2982,31 @@ async function loadRegimeCard(){
   <table class="tbl" style="margin-top:8px"><thead><tr><th>swing signals, replayed to their stop/target/7 days</th><th>n</th><th>won</th><th>avg</th><th>backtest expects</th></tr></thead><tbody>
   ${row(g.mode==='on'?'taken':'filter would take', sb.take, '+0.36 R')}${row(g.mode==='on'?'skipped by the filter':'filter would skip', sb.skip, 'about 0 or worse')}</tbody></table>
   <span class="pt-muted">${(sb.take.running||0)+(sb.skip.running||0)} still running. Every signal is scored the same way, traded or not, so "skipped" shows what the filter saved or cost. Judge after 30+ in each row.</span></div>`;
+}
+
+function renderRegistryCard(rows){
+  /* Plan 2.3: each swing strategy's forward clock. Only results after "live from" are clean evidence. */
+  const el = document.getElementById('registry-card'); if(!el) return;
+  if(!rows.length){ el.innerHTML=''; return; }
+  const esc = s => String(s==null?'':s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+  const st = s => s==='paused' ? '<b class="neg">paused</b>' : s==='retired' ? '<span class="pt-muted">retired</span>'
+                 : s==='trusted' ? '<b class="pos">trusted</b>' : 'incubating';
+  const r = x => x==null ? '–' : (x>0?'+':'') + Number(x).toFixed(2) + ' R';
+  const day = iso => iso ? fmtStamp(iso) : '<span class="pt-muted">no trade yet</span>';
+  const bar = (dd, lim) => { const w = Math.min(100, lim ? 100*dd/lim : 0);
+    return `<div title="drawdown ${dd} R of ${lim} R alarm" style="height:6px;background:var(--line,#ddd);border-radius:3px;margin-top:3px">`
+         + `<div style="width:${w}%;height:6px;border-radius:3px;background:${w>=75?'#c0392b':w>=40?'#d68910':'#2e86c1'}"></div></div>`; };
+  el.innerHTML = `<div class="cr-note"><b>Strategies · forward evidence</b><br>
+  Each swing strategy's clock starts at its first paper trade ("live from") and restarts if its code or settings change.
+  Only these results are clean: the backtest picked the strategies on the same history it tested them on.
+  A strategy pauses itself if it falls further below its best than it ever did in 5 years of testing.
+  <div style="margin-top:8px">${rows.map(x => `<div title="${esc(x.note)}" style="padding:8px 0;border-top:1px solid var(--line,#3333)">
+    <div style="display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap"><span><b>${esc(x.spec)}</b> <span class="pt-muted">${esc(x.params)}</span></span><span>${st(x.status)}</span></div>
+    <div class="pt-muted" style="display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap">
+      <span>live from ${day(x.live_from)} · ${x.forward_trades} trades · <span class="${x.forward_total_r>0?'pos':x.forward_total_r<0?'neg':''}">${r(x.forward_total_r)}</span>${x.forward_avg_r==null?'':' (avg '+r(x.forward_avg_r)+')'}</span>
+      <span>backtest avg ${r(x.backtest_avg_r)}</span></div>
+    <div class="pt-muted" style="font-size:12px">drawdown ${x.forward_drawdown_r} of ${x.alarm_at_r} R alarm${bar(x.forward_drawdown_r, x.alarm_at_r)}</div></div>`).join('')}</div>
+  <span class="pt-muted">Judge a strategy after ~30 forward trades; until then its average can swing by more than its whole edge.</span></div>`;
 }
 
 async function loadPaper(){

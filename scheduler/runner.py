@@ -982,6 +982,14 @@ class AppRunner:
                 if settings.swing_config_fail_closed:
                     return
             specs = sb.parse_specs(settings.swing_strategies)
+            if settings.swing_registry:                       # plan 2.3: one registry row + forward clock per spec
+                try:
+                    from analysis import strategy_registry as reg_mod
+                    async with AsyncSessionFactory() as session:
+                        for note in await reg_mod.sync(session, specs):
+                            log.info("strategy_registry", note=note)
+                except Exception as e:  # noqa: BLE001 - registry trouble must not stop the scan
+                    log.warning("strategy_registry_sync_failed", error=str(e)[:160])
             states = {st.symbol: st for st in await self.crypto_store.get_all()}
             symbols = [s_ for s_ in CRYPTO if s_.lower() in states]
             now = datetime.now(UTC)
@@ -1050,6 +1058,20 @@ class AppRunner:
                          if str(getattr(t, "signal_type", "")).startswith("swing_")],
                         key=lambda t: t.closed_at)
         dd, streak = sb.book_state(closed)
+        registry = {}
+        if settings.swing_registry:                           # plan 2.4: drawdown alarm, then who may trade
+            from analysis import strategy_registry as reg_mod
+            try:
+                async with AsyncSessionFactory() as session:
+                    for msg in await reg_mod.check_alarms(session, closed, settings.swing_dd_alarm_factor):
+                        log.warning("swing_spec_paused", note=msg)
+                        try:
+                            await self.notifier.send_text("⏸️ Swing strategy paused by its drawdown alarm\n" + msg)
+                        except Exception:  # noqa: BLE001
+                            pass
+                    registry = await reg_mod.load(session)
+            except Exception as e:  # noqa: BLE001
+                log.warning("strategy_registry_unavailable", error=str(e)[:160])
         open_syms = {p.symbol for p in cstate.positions}
         n_swing = sum(1 for p in cstate.positions if getattr(p, "trade_mode", "") == "swing")
         equity0 = cstate.wallet + sum(p.margin for p in cstate.positions)
@@ -1063,6 +1085,10 @@ class AppRunner:
                 continue
             if sig.symbol in excluded:
                 await self._mark_skipped(log_id, "coin_without_edge")
+                continue
+            reg_row = registry.get(reg_mod.key_of_signal(sig.signal_type, sig.timeframe)) if registry else None
+            if reg_row is not None and reg_row.status not in reg_mod.TRADING:
+                await self._mark_skipped(log_id, f"spec_{reg_row.status}")
                 continue
             if settings.swing_max_open and n_swing >= settings.swing_max_open:
                 await self._mark_skipped(log_id, "swing_book_full")
@@ -1152,6 +1178,13 @@ class AppRunner:
             cstate.positions.append(pos)
             open_syms.add(sig.symbol)
             n_swing += 1
+            if reg_row is not None and reg_row.live_from is None:     # first trade of this exact code + params
+                try:
+                    async with AsyncSessionFactory() as session:
+                        await reg_mod.stamp_live_from(session, reg_row.spec_key, now)
+                    reg_row.live_from = now.replace(tzinfo=None)
+                except Exception as e:  # noqa: BLE001
+                    log.warning("live_from_not_stamped", spec=reg_row.spec_key, error=str(e)[:120])
             log.info("swing_trade_opened", symbol=pos.symbol, side=pos.side.value, strategy=sig.signal_type,
                      margin=round(pos.margin, 2), leverage=round(leverage, 2), risk_pct=round(risk * 100, 2))
             if pcfg.alert_telegram:

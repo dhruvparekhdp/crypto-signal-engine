@@ -187,6 +187,10 @@ class Settings(BaseSettings):
     swing_max_margin_frac: float = 0.15
     # Size swing trades to Binance USD-M rules (step size, min quantity, min order value: analysis/binance_filters)
     swing_binance_rules: bool = True
+    # Strategy registry (analysis/strategy_registry.py): forward clock per spec, only incubating/trusted specs trade,
+    # and a spec pauses when its forward drawdown passes factor x its own 5-year backtest worst (0 = alarm off).
+    swing_registry: bool = True
+    swing_dd_alarm_factor: float = 1.0
     swing_hold_minutes: int = 10080
     swing_signal_max_age_minutes: int = 60
     # Regime check (analysis/regime_gate.py): skip swing signals when Bitcoin's 30-day volatility is in the top
