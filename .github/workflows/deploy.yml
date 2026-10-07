@@ -22,11 +22,18 @@ jobs:
         run: pip install -r requirements.txt -r requirements-dev.txt
       - name: Run tests
         run: |
-          set -o pipefail
           rm -f crypto_engine.db
-          python -m pytest -q -p no:cacheprovider 2>&1 | tee pytest.out
-          grep -Eq "[0-9]+ passed" pytest.out
-          if grep -Eq "[0-9]+ (failed|errors?)" pytest.out; then echo "tests failed"; exit 1; fi
+          set +e
+          python -m pytest -q -p no:cacheprovider -rfE 2>&1 | tee pytest.out
+          code=${PIPESTATUS[0]}
+          set -e
+          summary=$(grep -E "^=*.*[0-9]+ (passed|failed)" pytest.out | tail -n 1)
+          echo "summary: $summary"
+          # failing tests as annotations: readable on the public run page without a login
+          grep -E "^(FAILED|ERROR) " pytest.out | head -25 | sed 's/^/::error::/' || true
+          if [ "$code" -ne 0 ] || ! echo "$summary" | grep -Eq "[0-9]+ passed" || echo "$summary" | grep -Eq "[0-9]+ (failed|errors?)"; then
+            echo "::error::test suite did not pass (exit $code): $summary"; exit 1
+          fi
 
   deploy:
     name: Auto Deploy to AWS EC2
