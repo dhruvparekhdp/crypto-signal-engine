@@ -64,3 +64,11 @@ def test_lab_run_records_trials_and_uses_ledger_n(tmp_path, monkeypatch):
     assert runner._record_trials(spec, _summary(["n=150"]), ["BTCUSDT"], log=lambda *_: None) == 3
     no_ledger = runner.RunSpec(strategies=["donchian"])
     assert runner._record_trials(no_ledger, _summary(["n=50"]), ["BTCUSDT"]) == 1
+
+
+def test_null_verdict_uses_normal_approx_when_draws_cannot_reach_the_line():
+    from analysis.lab.runner import _null_verdict
+    # 30 draws, N = 579: exact p >= 1/31 can never pass 0.05/579, so the z-based p decides
+    assert _null_verdict(1 / 31, 1e-9, 30, 579) == "beats random (normal approx)"
+    assert _null_verdict(1 / 31, 0.01, 30, 579) == "inconclusive (normal approx)"
+    assert _null_verdict(1 / 4001, 1e-9, 4000, 10) == "beats random"          # enough draws: exact p used

@@ -72,6 +72,11 @@ def main():
     ap.add_argument("--target", type=float, default=100.0)
     ap.add_argument("--workers", type=int, default=6)
     ap.add_argument("--out", default=None)
+    ap.add_argument("--ledger-family", default=None, help="record every configuration in the trial ledger")
+    ap.add_argument("--ledger-kind", default="search", help="search | stress | ablation | live_rescore")
+    ap.add_argument("--hypothesis", default="")
+    ap.add_argument("--n-tried-floor", type=int, default=0,
+                    help="Bonferroni N is at least this (e.g. configs tried before the ledger existed)")
     a = ap.parse_args()
 
     if a.list:
@@ -88,7 +93,9 @@ def main():
         raise SystemExit(f"unknown or no strategies: {bad or 'none selected'} (use --list)")
     spec = RunSpec(strategies=ids, symbols=a.symbols.split(","), exits=[EXITS[e] for e in a.exits.split(",")],
                    cost=a.cost, grid=a.grid, grid_limit=a.grid_limit, sig_tf=a.tf, exec_tf=a.exec_tf,
-                   start=a.since, end=a.until, null_trials=a.null_trials, overrides=_overrides(a.set))
+                   start=a.since, end=a.until, null_trials=a.null_trials, overrides=_overrides(a.set),
+                   ledger_family=a.ledger_family, ledger_kind=a.ledger_kind, hypothesis=a.hypothesis,
+                   n_tried_floor=a.n_tried_floor)
     wallets = [WalletConfig(start=a.start_balance, target=a.target, risk_pct=float(r), leverage=float(l),
                             max_concurrent=int(c))
                for r in a.risk.split(",") for l in a.leverage.split(",") for c in a.concurrent.split(",")]
@@ -97,7 +104,7 @@ def main():
     s = res["summary"].sort_values("expectancy_r", ascending=False)
     cols = ["strategy", "params", "n", "win_rate", "expectancy_r", "ci_lo", "ci_hi", "profit_factor", "max_dd_r"]
     if "null_p" in s:
-        cols += ["null_mean_r", "null_p"]
+        cols += ["null_mean_r", "null_p", "null_z", "null_p_normal", "n_tried", "null_verdict"]
     pd.set_option("display.width", 220, "display.max_colwidth", 38, "display.float_format", "{:.3f}".format)
     print(s[cols].head(25).to_string(index=False))
     print(f"\n{len(res['trades']):,} trades in {res['elapsed_s']:.0f}s -> {out}")

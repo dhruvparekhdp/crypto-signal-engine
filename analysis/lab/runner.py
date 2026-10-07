@@ -8,6 +8,7 @@ deterministic: the same arguments produce byte-identical trades.
 from __future__ import annotations
 
 import json
+import math
 import sys
 import time
 from concurrent.futures import ProcessPoolExecutor
@@ -24,7 +25,7 @@ from analysis.lab.metrics import by, trade_stats, walk_forward
 from analysis.lab.simulate import COLS, ExitModel, simulate_symbol
 from analysis.lab.strategies import REGISTRY
 from analysis.lab.wallet import WalletConfig, cycle_odds, run_wallet
-from analysis.significance import judge, perm_p
+from analysis.significance import judge, min_trials, perm_p
 
 CRYPTO = ["BTCUSDT", "ETHUSDT", "SOLUSDT", "XRPUSDT", "BNBUSDT", "ADAUSDT", "DOGEUSDT", "AVAXUSDT",
           "LINKUSDT", "LTCUSDT", "BCHUSDT", "SUIUSDT"]
@@ -51,6 +52,7 @@ class RunSpec:
     ledger_kind: str = "search"
     hypothesis: str = ""
     proposed_by: str = "owner"
+    n_tried_floor: int = 0      # Bonferroni N is at least this (configurations tried before the ledger existed)
 
     def window_ms(self):
         ms = lambda s: int(pd.Timestamp(s, tz="UTC").timestamp() * 1000) if s else None
@@ -115,6 +117,14 @@ def work_symbol(args) -> dict:
     return {"symbol": symbol, "trades": trades, "null": null}
 
 
+def _null_verdict(p: float, p_normal: float, trials: int, n_tried: int) -> str | None:
+    if p != p:
+        return None
+    if trials >= min_trials(n_tried) or p_normal != p_normal:
+        return judge(p, n_tried, trials)
+    return judge(p_normal, n_tried) + " (normal approx)"
+
+
 def _record_trials(spec: RunSpec, summary: pd.DataFrame, syms: list[str], log=print) -> int:
     """N for Bonferroni: this run's configurations, or the ledger family's count after recording them."""
     if not spec.ledger_family:
@@ -175,13 +185,19 @@ def run_lab(spec: RunSpec, workers: int = 6, out_dir: str | None = None, wallets
             s["null_sd_r"] = float(means.std())
             s["null_trials"] = len(means)
             s["null_p"] = perm_p(int((means >= s["expectancy_r"]).sum()), len(means))   # never 0
+            # Normal approximation of the random-entry distribution: resolves p far below 1/trials, which a
+            # Bonferroni line at N in the hundreds needs (exact draws would take ~20 * N / alpha simulations)
+            sd = float(means.std(ddof=1)) if len(means) > 1 else 0.0
+            s["null_z"] = (s["expectancy_r"] - s["null_mean_r"]) / sd if sd > 0 else float("nan")
+            s["null_p_normal"] = 0.5 * math.erfc(s["null_z"] / math.sqrt(2)) if sd > 0 else float("nan")
         rows.append(s)
     summary = pd.DataFrame(rows)
-    n_tried = _record_trials(spec, summary, syms, log) if len(summary) else 0
+    n_tried = max(_record_trials(spec, summary, syms, log) if len(summary) else 0, spec.n_tried_floor)
     if "null_p" in summary:
         summary["n_tried"] = n_tried
-        summary["null_verdict"] = [judge(p, n_tried, t) if p == p else None
-                                   for p, t in zip(summary["null_p"], summary["null_trials"])]
+        # exact permutation p when there were enough draws to reach the Bonferroni line, else the normal approx
+        summary["null_verdict"] = [_null_verdict(p, pn, t, n_tried)
+                                   for p, pn, t in zip(summary["null_p"], summary["null_p_normal"], summary["null_trials"])]
     out = {"spec": {**asdict(spec), "exits": [asdict(e) for e in spec.exits]}, "summary": summary, "trades": trades,
            "elapsed_s": time.time() - t0}
 
