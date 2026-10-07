@@ -2457,9 +2457,10 @@ section h2{color:var(--accent-soft)}
 
 <div id="tab-paper" class="tab-content">
   <div class="cr-note" style="margin-bottom:12px">
-    Simulated only — this never places a real order. A cycle ends when the wallet
-    reaches its target or runs out, then a fresh one starts. Every cost is charged:
-    brokerage, GST, funding and slippage.
+    Simulated only — this never places a real order. The wallet starts at its starting amount; each time
+    equity reaches the withdrawal line, that amount is taken out as profit and trading continues (see the
+    Withdrawn tile). A cycle ends only if the wallet runs out. Every cost is charged: brokerage, GST,
+    funding and slippage.
   </div>
   <div id="paper-banner"></div>
 
