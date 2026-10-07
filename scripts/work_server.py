@@ -73,7 +73,10 @@ def result(name: str, res: dict):
     (p / "failed").mkdir(exist_ok=True)
     idx = res["idx"]
     if not res.get("ok"):
-        (p / "failed" / f"{idx}.{int(time.time() * 1000)}.json").write_text(json.dumps(res))
+        # unique per attempt: two failures in the same millisecond (a fast machine, two laptops) used to share a
+        # name, so one overwrote the other and the task was offered again forever
+        import uuid
+        (p / "failed" / f"{idx}.{int(time.time() * 1000)}-{uuid.uuid4().hex[:8]}.json").write_text(json.dumps(res))
         if len(list((p / "failed").glob(f"{idx}.*.json"))) < MAX_ATTEMPTS:
             try:
                 (p / "claims" / str(idx)).unlink()

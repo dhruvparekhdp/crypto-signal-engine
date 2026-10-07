@@ -230,3 +230,16 @@ def test_ai_gate_context_hides_coin_and_date_so_the_model_cannot_recall_history(
     assert "SOL" not in text and "2022" not in text and ctx["coin"] == "Coin A"
     assert "outcome" not in ctx and "next_16_closes_15m_pct_in_trade_direction" not in ctx
     assert raw["symbol"] == "SOLUSDT" and "outcome" not in raw
+
+
+def test_two_failures_in_the_same_millisecond_both_count(tmp_path, monkeypatch):
+    """CI caught it: a fast Linux runner wrote both failure files under one name."""
+    from scripts import work_server as w
+    monkeypatch.setattr(w, "ROOT", tmp_path)
+    make(str(tmp_path), n_items=1, models=("m1",))
+    monkeypatch.setattr(w.time, "time", lambda: 1_791_000_000.123)
+    c = w.claim("job", "w", ["m1"])
+    w.result("job", {"idx": c["idx"], "ok": False})
+    w.result("job", {"idx": c["idx"], "ok": False})
+    assert len(list((tmp_path / "work" / "job" / "failed").glob("0.*.json"))) == 2
+    assert w.claim("job", "w", ["m1"])["idx"] is None
