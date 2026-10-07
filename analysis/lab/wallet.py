@@ -39,6 +39,12 @@ class WalletConfig:
     # Crypto signals arrive in same-direction clusters, so several open trades are one bet on one move.
     max_open_risk: float | None = None  # total risk of all open positions, as a share of the balance
     max_same_side: int | None = None    # most positions open in one direction at once
+    # Production swing sizing (analysis/swing_book.size): lowest leverage the free margin allows, `leverage` as the
+    # ceiling, and optionally one trade's margin capped at max_margin_frac of the balance (0 = the old uncapped way).
+    live_sizing: bool = False
+    max_margin_frac: float = 0.0
+    # Binance USD-M per-coin rules (analysis/binance_filters): step size, min quantity, min order value
+    binance_rules: bool = False
 
     def label(self) -> str:
         if self.sizing == "risk_pct":
@@ -167,24 +173,40 @@ def run_wallet(trades: pd.DataFrame, cfg: WalletConfig) -> WalletResult:
             dd = 1 - bal / max(cycle["peak"], 1e-9)
             f_dd = min([m for l, m in cfg.dd_brake if dd >= l] or [1.0])
             risk = cfg.risk_pct * f_dd * (0.5 if streak >= cfg.streak_brake else 1.0)
-        if cfg.sizing == "risk_pct":
-            notional = bal * risk / sf
-        elif cfg.sizing == "margin_pct":
-            notional = bal * cfg.margin_pct * cfg.leverage
+        lev = cfg.leverage
+        if cfg.live_sizing:
+            from analysis.swing_book import size as live_size
+            sized = live_size(bal, free, risk, 1.0, 1.0 - sf, 0.0, cfg.leverage, cfg.max_margin_frac)
+            if sized is None:
+                skip("no_free_margin"); continue
+            notional, lev = sized[0] * sized[1], sized[1]
+            capped = notional < bal * risk / sf - 1e-9
         else:
-            notional = cfg.fixed_notional
-        cap = free * cfg.max_margin_use * cfg.leverage
-        capped = notional > cap
-        notional = min(notional, cap)
+            if cfg.sizing == "risk_pct":
+                notional = bal * risk / sf
+            elif cfg.sizing == "margin_pct":
+                notional = bal * cfg.margin_pct * cfg.leverage
+            else:
+                notional = cfg.fixed_notional
+            cap = free * cfg.max_margin_use * cfg.leverage
+            capped = notional > cap
+            notional = min(notional, cap)
         if cfg.max_open_risk is not None:
-            room = cfg.max_open_risk * bal - sum(p["risk_usd"] for p in open_pos)
+            room = cfg.max_open_risk * bal - sum(p["risk_usd"] for p in open_pos if p["side"] == int(row.side) or not cfg.live_sizing)
             if room <= 0:
                 skip("open_risk_cap"); continue
             notional = min(notional, room / sf)
-        if notional < cfg.min_notional:
+        if cfg.binance_rules and getattr(row, "entry", None):
+            from analysis import binance_filters as bf
+            qty = bf.round_qty(row.symbol, notional / float(row.entry))
+            why = bf.check_order(row.symbol, qty, float(row.entry))
+            if why:
+                skip(why); continue
+            notional = qty * float(row.entry)
+        elif notional < cfg.min_notional:
             skip("below_min_notional"); continue
-        margin = notional / cfg.leverage
-        liq_frac = 1.0 / cfg.leverage - cfg.mmr
+        margin = notional / lev
+        liq_frac = 1.0 / lev - cfg.mmr
         liquidated = bool(row.mae >= liq_frac and sf >= liq_frac * 0.98)
         pnl = -margin if liquidated else notional * float(row.net_ret)
         fee_usd = notional * (float(getattr(row, "fee_frac", 0.0)))
