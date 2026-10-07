@@ -83,6 +83,9 @@ Binance verified (docs/BINANCE_PLAN.md), sizing freeze fixed, Binance order rule
 drawdown alarm + Paper card, honest null tests (6/8 specs beat random at N=579; Ichimoku inconclusive), input
 guards, audit/FINDINGS.md. Release notes top section. Owner rule now: dev Mac + local dev server only.
 
+## 7 Oct late: deployed 189553c; paper reset to cycle 2 (Rs5,000, withdraw Rs2,500 at Rs10,000; backup in
+~/backups on the server); risk 1-3% live. **docs/ROADMAP.md is now the master to-do list.**
+
 ## Open work (in order)
 1. See docs/RELEASE_NOTES.md "Plan: pending work" (sections A-E) — the current to-do list.
 2. Phase 2 rest: swing null test run, ledger back-fill, v2 N from ledger, registry + live_from + drawdown alarm,
