@@ -90,11 +90,33 @@ async def status_async() -> str:
     return _kaggle(["kernels", "status", f"{keys['user']}/{KERNEL_SLUG}"], keys)
 
 
+def _download_outputs(keys: dict, out: Path) -> None:
+    """eval.json, train_log.json and the GGUF, streamed straight to disk. The kaggle CLI holds a whole file in
+    memory and was killed downloading the 2 GB model on the 2 GB server."""
+    import httpx
+    auth = ({"Authorization": f"Bearer {keys['key']}"} if not (len(keys["key"]) == 32) else {})
+    basic = None if auth else (keys["user"], keys["key"])
+    r = httpx.get("https://www.kaggle.com/api/v1/kernels/output", params={"userName": keys["user"],
+                  "kernelSlug": KERNEL_SLUG}, headers=auth, auth=basic, timeout=60)
+    r.raise_for_status()
+    for f in r.json().get("files", []):
+        name = f.get("fileName", "")
+        target = ("model-q4_k_m.gguf" if name.endswith(".gguf") else
+                  name if name in ("eval.json", "train_log.json") else None)
+        if not target or not f.get("url"):
+            continue
+        with httpx.stream("GET", f["url"], timeout=httpx.Timeout(60, read=300), follow_redirects=True) as resp:
+            resp.raise_for_status()
+            with open(out / target, "wb") as fh:
+                for chunk in resp.iter_bytes(1 << 20):
+                    fh.write(chunk)
+
+
 async def collect_async() -> dict:
     keys = await _keys()
     out = Path("data/finetune/run")
     out.mkdir(parents=True, exist_ok=True)
-    _kaggle(["kernels", "output", f"{keys['user']}/{KERNEL_SLUG}", "-p", str(out), "-o"], keys)
+    _download_outputs(keys, out)
     ev = json.loads((out / "eval.json").read_text()) if (out / "eval.json").exists() else {}
     res = {"eval": ev, "model_file": (out / "model-q4_k_m.gguf").exists()}
     if ev.get("better") and res["model_file"] and keys["hf"]:

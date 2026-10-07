@@ -59,24 +59,27 @@ map; this file has the decisions, results, open work and the owner's rules.
 - SSH to EC2: key `~/.ssh/crypto-ec2` (new). GitHub secret EC2_SSH_KEY still has the old key: owner to update, then
   remove the old key from the server's authorized_keys.
 
-## Live status when this was written (6 Oct, ~14:40 UTC)
-- **Kaggle fine-tune RUNNING**: kaggle.com/code/dhruvparekhdp/crypto-desk-finetune (1,284 examples: 764 headline,
-  176 attribution, 341 event; Qwen2.5-3B LoRA, 3 epochs). When done: on the server run
-  `python -m scripts.kaggle_finetune collect` (needs `set -a && . ./.env && set +a` first). It downloads eval.json +
-  the GGUF and uploads to private HF repo dhruvdp/crypto-analyst-3b-gguf only if it beat the base model.
-  Kaggle keys on /keys work (new-style API token, passed as KAGGLE_API_TOKEN).
-- **HF Space BUILDING**: llama-cpp-python compiles from source (no cp310 wheel); requested hardware still
-  zero-a10g. If the build fails: add `python_version: "3.11"` to huggingface_space/README.md front matter or pin a
-  llama-cpp-python version that has a prebuilt CPU wheel, then `python -m scripts.hf_space_deploy` on the server.
-  Owner must switch hardware to CPU basic in Space settings (API hardware change returns 402).
-- **AI entry test** on the laptop: 32/150 decisions (~3.7 min each).
-- Server commands: `ssh -i ~/.ssh/crypto-ec2 ubuntu@52.62.37.4`, repo ~/crypto-signal-engine, scripts need the
-  .env loaded (`set -a && . ./.env && set +a`) and read keys from the database.
+## Live status (7 Oct)
+- **Phase 1 of docs/INTEGRATION_PLAN.md is done and deployed** (findings L1-L11): fail-loud swing config, perp
+  prices, swing account guards + news rule, 9% per-direction risk cap, gap fills, persistent dedup, regime
+  fail-closed, simulator keys via env, CI test gate before deploy. Every change has a setting (config/settings.py,
+  `swing_*`, `paper_gap_fills`). Defaults chosen: fail-closed config, 9% side cap, regime fail-closed.
+- **Fine-tune done and better than base** on 114 held-out headlines: valid JSON 98 -> 114, score error 0.21 -> 0.13,
+  event accuracy 44% -> 68%; move explanations 0/6 for both (answers cut at 600 tokens: next round). Model:
+  private HF repo dhruvdp/crypto-analyst-3b-gguf. The Space is set to it (variables MODEL_REPO/MODEL_FILE, secret
+  HF_TOKEN) and was rebuilding with llama-cpp-python 0.3.2 (prebuilt wheels; 0.3.16 failed to compile).
+- Space hardware must be switched to CPU basic by the owner (API change is paid).
+- Application review document (map, wireframes, flowcharts): https://claude.ai/artifact/5erobCpcHL5segVYCyBeHc
+- Local dev server: `scripts/dev_server.sh` (own SQLite DB, no AI keys, port 8090); all 20 pages checked, no JS errors.
+- Laptop AI entry test: last seen 32/150; Tailscale was down on 7 Oct.
 
 ## Open work (in order)
 1. When the Space is RUNNING: check `/health`, `/v1/classify`, a fallback chat answer (keys page "Test" on the
    Space URL does `/health`); headline scoring then moves to the Space automatically.
-2. Collect the fine-tune result (above); compare eval.json; switch the Space's MODEL_REPO/MODEL_FILE only if better.
+2. Phase 2 of docs/INTEGRATION_PLAN.md: trial ledger, honest null test on swing exits, per-spec live_from,
+   strategy registry + drawdown alarm, leak/cost/known-answer tests, findings ledger.
+3. Owner decisions listed in the review document (wallet reset + live_from, sizing leverage target, server home vs
+   Sydney after the Binance test).
 3. Owner: update GitHub secret EC2_SSH_KEY; decide paper wallet reset; close port 8080 to the internet (Tailscale).
 4. Read the AI entry-test result; decide whether AI may veto swing entries (only if it beats rules with a CI).
 5. Forecast phase 2 (volatility regime in band width, /predict page); AI prompt rework with logged calls.

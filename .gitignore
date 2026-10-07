@@ -41,3 +41,4 @@ backups/*.json
 /logs/
 /machine.json
 /bin/
+dev_engine.db

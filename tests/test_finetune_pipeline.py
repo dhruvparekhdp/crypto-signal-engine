@@ -56,15 +56,13 @@ async def test_collect_uploads_only_a_model_that_beat_the_base(tmp_path, monkeyp
     from scripts import kaggle_finetune as kf
     monkeypatch.chdir(tmp_path)
 
-    def fake_kaggle(args, keys, cwd=None):
-        out = tmp_path / "data/finetune/run"
+    def fake_download(keys, out):
         out.mkdir(parents=True, exist_ok=True)
         (out / "eval.json").write_text(json.dumps({"better": False}))
         (out / "model-q4_k_m.gguf").write_text("x")
-        return "ok"
 
     monkeypatch.setattr(kf, "_keys", AsyncMock(return_value={"user": "dhruvdp", "key": "k", "hf": "h"}))
-    monkeypatch.setattr(kf, "_kaggle", fake_kaggle)
+    monkeypatch.setattr(kf, "_download_outputs", fake_download)
     res = await kf.collect_async()
     assert res["model_file"] and "uploaded_to" not in res
 

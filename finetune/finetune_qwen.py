@@ -101,10 +101,9 @@ json.dump({"base": base_eval, "tuned": tuned_eval, "better": tuned_eval["json_va
     tuned_eval["headline_score_mae"] or 9) <= (base_eval["headline_score_mae"] or 9)}, open(f"{OUT}/eval.json", "w"), indent=1)
 
 model.save_pretrained_gguf(f"{OUT}/gguf", tok, quantization_method="q4_k_m")
-for root, _, files in os.walk(f"{OUT}/gguf"):
-    for f in files:
-        if f.endswith(".gguf"):
-            os.replace(os.path.join(root, f), f"{OUT}/model-q4_k_m.gguf")
-            break
-subprocess.run(["rm", "-rf", f"{OUT}/gguf", f"{OUT}/ckpt"])
+# Unsloth names the folder and file itself (e.g. gguf_gguf/Qwen2.5-3B-Instruct.Q4_K_M.gguf): find it anywhere
+found = [os.path.join(r, f) for r, _, fs in os.walk(OUT) for f in fs if f.endswith(".gguf") and "Q4_K_M" in f.upper()]
+if found:
+    os.replace(found[0], f"{OUT}/model-q4_k_m.gguf")
+subprocess.run(["bash", "-c", f"rm -rf {OUT}/gguf* {OUT}/ckpt {OUT}/unsloth_compiled_cache"])
 print("done", os.listdir(OUT), flush=True)

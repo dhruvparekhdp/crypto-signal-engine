@@ -1,0 +1,6 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {"name": "dev", "runtimeExecutable": "sh", "runtimeArgs": ["scripts/dev_server.sh"], "port": 8090}
+  ]
+}
