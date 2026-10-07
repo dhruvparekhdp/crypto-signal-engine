@@ -1242,7 +1242,34 @@ async def _api_swing(runner, request: web.Request) -> web.Response:
         "wallet": cycle.wallet if cycle is not None else None,
         "regime_filter": await _swing_regime_section(runner, trades, rs),
         "registry": await _swing_registry_section(trades),
+        "shortfall": await _swing_shortfall_section(getattr(cycle, "id", None)),
     })
+
+
+async def _swing_shortfall_section(cycle_id) -> dict:
+    """Roadmap Q-9: how much worse paper swing entries were than the backtest's fill at the bar close."""
+    import re as _re
+    if cycle_id is None:
+        return {"n": 0}
+    try:
+        from sqlalchemy import select
+
+        from storage.database import AsyncSessionFactory
+        from storage.models import TradeEvent
+        async with AsyncSessionFactory() as session:
+            notes = (await session.execute(select(TradeEvent.note).where(
+                TradeEvent.cycle_id == cycle_id, TradeEvent.kind == "opened",
+                TradeEvent.note.like("%shortfall=%")))).scalars().all()
+    except Exception:  # noqa: BLE001
+        return {"n": 0}
+    pairs = [(float(m.group(1)), float(m.group(2))) for n in notes
+             if (m := _re.search(r"shortfall=([+-]?[\d.]+)bps late=([\d.]+)m", n or ""))]
+    if not pairs:
+        return {"n": 0}
+    bps = sorted(p[0] for p in pairs)
+    late = sorted(p[1] for p in pairs)
+    return {"n": len(pairs), "avg_bps": round(sum(bps) / len(bps), 1), "median_bps": bps[len(bps) // 2],
+            "worst_bps": bps[-1], "median_late_min": late[len(late) // 2]}
 
 
 async def _swing_registry_section(trades) -> list[dict]:

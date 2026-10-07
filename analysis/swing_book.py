@@ -161,7 +161,7 @@ def to_signal(setup: SwingSetup, price: float, now: datetime) -> CryptoSignal | 
         return None
     stop, target = lv
     stop_pct = abs(price - stop) / price * 100
-    return CryptoSignal(
+    sig = CryptoSignal(
         symbol=setup.symbol.lower(), signal_type=f"swing_{setup.strategy}",
         direction="long" if setup.side > 0 else "short",
         trigger_description=(f"{REGISTRY[setup.strategy].name} fired on the {setup.tf} bar closed at "
@@ -171,6 +171,16 @@ def to_signal(setup: SwingSetup, price: float, now: datetime) -> CryptoSignal | 
         edge_pct=0.0, stake_pct=0.0, timeframe=setup.tf, sentiment_score=0.0,
         indicators_summary=f"atr{setup.tf}={setup.atr:.6g} bar_close={setup.close:.6g}",
         timestamp=now, trade_mode="swing", leverage_suggested=1.0)
+    # roadmap Q-9: the backtest fills at the first price after this bar's close; keep it to measure the shortfall
+    sig.bar_close_price = setup.close
+    sig.bar_close_ms = setup.bar_open_ms + INTERVAL_MS[setup.tf]
+    return sig
+
+
+def shortfall(side: int, entry: float, bar_close: float, bar_close_ms: int, now_ms: int) -> tuple[float, float]:
+    """(bps worse than the backtest's fill at the bar close, minutes after the close). Positive bps = paid more."""
+    bps = side * (entry - bar_close) / bar_close * 1e4 if bar_close > 0 else 0.0
+    return bps, (now_ms - bar_close_ms) / 60_000
 
 
 def adaptive_risk(base: float, dd: float, losing_streak: int,

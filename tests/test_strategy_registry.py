@@ -168,3 +168,25 @@ async def test_weekly_report_job_sends_one_message():
         await runner._weekly_forward_report_job()
     txt = runner.notifier.send_text.call_args[0][0]
     assert "Weekly swing report" in txt and "4h@donchian" in txt and "Equity ₹5,000" in txt
+
+
+def test_shortfall_is_positive_when_the_entry_is_worse():
+    from analysis import swing_book as sb
+    assert sb.shortfall(+1, 100.5, 100.0, 0, 15 * 60_000) == (pytest.approx(50.0), 15.0)   # long paid 0.5% more
+    assert sb.shortfall(-1, 100.5, 100.0, 0, 0)[0] == pytest.approx(-50.0)                # short sold higher: better
+
+
+@pytest.mark.asyncio
+async def test_opened_swing_trade_card_records_the_shortfall():
+    from sqlalchemy import select
+
+    from storage.models import TradeEvent
+    sm_holder = {}
+
+    async def seed(sm):
+        sm_holder["sm"] = sm
+    rows, _ = await run([("SOLUSDT", "vol_breakout", +1)], cap=0, seed=seed)
+    assert len(rows) == 1
+    async with sm_holder["sm"]() as s:
+        notes = (await s.execute(select(TradeEvent.note).where(TradeEvent.kind == "opened"))).scalars().all()
+    assert any("shortfall=" in n and "late=" in n for n in notes)

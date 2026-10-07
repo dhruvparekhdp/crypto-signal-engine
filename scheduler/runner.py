@@ -1228,13 +1228,18 @@ class AppRunner:
             cstate.wallet -= pos.margin
             row = await repo.open_position_atomic(cycle.id, pos, cstate.wallet)
             risk_pct = abs(price - stop) / price * 100
+            sf_txt = ""
+            if getattr(sig, "bar_close_price", None):
+                sf_bps, late_min = sb.shortfall(side, pos.entry_price, sig.bar_close_price, sig.bar_close_ms,
+                                                int(now.timestamp() * 1000))
+                sf_txt = f" · shortfall={sf_bps:+.1f}bps late={late_min:.0f}m vs the backtest fill at the bar close"
             await repo.add_trade_events([_event(
                 pos, cycle.id, now, "opened", "entry", new=f"{price:.6g}",
                 note=(f"SWING {sig.timeframe} {pos.side.value} {sig.signal_type} · stop {stop:.6g} ({risk_pct:.2f}% away, 3xATR {sig.timeframe}) · "
                       f"target {target:.6g} (3R) · {leverage:.1f}x · margin {pos.margin:.0f} · "
                       f"risking {risk * 100:.2f}% of the wallet ({sb.risk_reason(sig.signal_type, sig.timeframe, dd, streak, trusted)}; "
                       f"range {settings.swing_risk_min * 100:g}-{settings.swing_risk_pct * 100:g}%) · "
-                      f"closes only at stop, target or after 7 days"
+                      f"closes only at stop, target or after 7 days" + sf_txt
                       + (f" · {verdict.tag()} ({settings.swing_regime_filter})" if verdict is not None else "")))])
             cstate.position_ids[len(cstate.positions)] = row.id
             cstate.positions.append(pos)
