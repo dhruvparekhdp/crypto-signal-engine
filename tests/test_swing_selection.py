@@ -12,7 +12,7 @@ from storage.models import Base
 PRICES = {"BTCUSDT": 60000.0, "SOLUSDT": 150.0, "DOGEUSDT": 0.2, "XRPUSDT": 0.6, "BCHUSDT": 400.0}
 
 
-async def run(signals, cap=2):
+async def run(signals, cap=2, binance_rules=False):
     engine = create_async_engine("sqlite+aiosqlite:///:memory:")
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
@@ -23,6 +23,7 @@ async def run(signals, cap=2):
     with patch("scheduler.runner.settings.paper_trading_enabled", True), \
          patch("scheduler.runner.settings.session_filter_enabled", False), \
          patch("scheduler.runner.settings.swing_max_same_side", cap), \
+         patch("scheduler.runner.settings.swing_binance_rules", binance_rules), \
          patch("scheduler.runner.AsyncSessionFactory", session_maker):
         for sym, px in PRICES.items():
             st = CryptoState(symbol=sym.lower(), base_asset=sym[:-4])

@@ -39,5 +39,7 @@ def _no_live_perp_prices(monkeypatch):
     try:
         from config.settings import settings
         monkeypatch.setattr(settings, "swing_perp_prices", False)
+        # Binance min orders skip most trades of the small test wallets; tests opt in (test_swing_sizing_binance)
+        monkeypatch.setattr(settings, "swing_binance_rules", False)
     except Exception:  # noqa: BLE001
         pass

@@ -69,7 +69,9 @@ map; this file has the decisions, results, open work and the owner's rules.
   private HF repo dhruvdp/crypto-analyst-3b-gguf. The Space is set to it (variables MODEL_REPO/MODEL_FILE, secret
   HF_TOKEN). **Space RUNNING with it (7 Oct)**: /health ready, /v1/classify 0.1 s, chat 13 s, valid JSON.
   Startup fixes: launch via Gradio (no own uvicorn), no-op @spaces.GPU for ZeroGPU, musl for the llama.cpp wheel.
-- Space hardware still ZeroGPU: owner to switch to CPU basic (API change is paid).
+- Space stays on ZeroGPU (HF blocks the move to CPU basic without PRO); works via CPU-only code + GPU stub.
+- Deferred by owner (7 Oct): key rotation, GitHub EC2_SSH_KEY update (old key still on server, deploys work),
+  home server move (Wi-Fi in 2-3 days). Production stays on EC2.
 - Phase 2 started: honest permutation p (never 0), Bonferroni on N, trial ledger `analysis/lab/ledger.py`
   (`audit/trial_ledger.jsonl`). Release notes + evening plan: docs/RELEASE_NOTES.md.
 - Application review document (map, wireframes, flowcharts): https://claude.ai/artifact/5erobCpcHL5segVYCyBeHc

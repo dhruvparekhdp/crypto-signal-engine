@@ -185,14 +185,20 @@ def adaptive_risk(base: float, dd: float, losing_streak: int,
 
 
 def size(wallet: float, free: float, risk_pct: float, entry: float, stop: float, costs: float,
-         max_leverage: float) -> tuple[float, float] | None:
+         max_leverage: float, max_margin_frac: float = 0.0) -> tuple[float, float] | None:
     """(margin, leverage) so that a stop-out costs risk_pct of the wallet, at the lowest leverage the free
-    margin allows (capped at max_leverage). None if it cannot be funded."""
+    margin allows (capped at max_leverage). None if it cannot be funded.
+
+    max_margin_frac > 0 caps one trade's margin at that share of the wallet, so one trade can no longer lock the
+    whole wallet (7 Oct 2026: a 1x SOL trade took Rs1,238 of Rs1,735 and every later signal was skipped).
+    Leverage rises to fit the cap; the stop-out risk is unchanged, only less margin is tied up."""
     move = abs(entry - stop) / entry + max(costs, 0.0)
     if move <= 0 or wallet <= 0:
         return None
     notional = wallet * risk_pct / move
     usable = free * 0.9
+    if max_margin_frac > 0:
+        usable = min(usable, wallet * max_margin_frac)
     if usable <= 0:
         return None
     leverage = min(max(1.0, notional / usable), max_leverage)

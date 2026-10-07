@@ -66,8 +66,7 @@ race in the lab work queue). All fixed.
 - Local dev server (`scripts/dev_server.sh`, port 8090, own database, no AI keys): all 20 pages checked.
 
 ### Known issues
-- The Space hardware still says ZeroGPU (works now, but switch to **CPU Basic** in the Space settings: it is the
-  free always-on tier; changing it through the API asks for payment).
+- The Space runs on ZeroGPU hardware (moving to CPU Basic needs PRO). It works, but may sleep when idle.
 - Move explanations from the small model get cut at 600 tokens (0/6 in the eval for both models): next fine-tune.
 - The paper wallet still carries the old 15-minute losses (1,735 of 3,000).
 
@@ -75,14 +74,16 @@ race in the lab work queue). All fixed.
 
 ## Plan: pending work (this evening)
 
-### A. Owner actions (5–10 min each, no code)
-1. Space settings → hardware → **CPU Basic**.
-2. Rotate the OpenRouter, Hugging Face and Gemini keys; paste the new ones on `/keys`.
-3. GitHub → Settings → Secrets → update `EC2_SSH_KEY` with the new key; then I remove the old key from the server.
-4. Close port 8080 to the internet (AWS security group), use Tailscale.
-5. Binance-from-home test on a laptop (decides home server vs Sydney):
-   `curl -s "https://fapi.binance.com/fapi/v1/klines?symbol=BTCUSDT&interval=4h&limit=2"`
-6. Decide: reset the paper wallet now so forward results start clean (recommended, pairs with task C2).
+### A. Owner actions (decided 7 Oct)
+- Space hardware: **stays on ZeroGPU**. Hugging Face blocks the move to CPU Basic without PRO. It runs fine on
+  ZeroGPU because our code only uses the CPU (no-op `@spaces.GPU` stub). If it sleeps when idle, the engine falls
+  back to Groq until it wakes.
+- Key rotation: deferred by the owner.
+- GitHub secret `EC2_SSH_KEY`: not needed now. Deploys work because the old key is still on the server; update it
+  only before that old key is removed.
+- Home server / Binance-from-home test: later (home Wi-Fi 2-3 days away). Production stays on EC2 Sydney.
+- Still open: close port 8080 to the internet (Tailscale); decide on the paper wallet reset (recommended, pairs
+  with task C2).
 
 ### B. Finish Phase 2 statistics (me, ~2 h)
 1. Run the swing book's real null test on the Mac lake: 4h/8h specs, 3×ATR stop / 3R / 7 days, ledger family

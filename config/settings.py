@@ -182,6 +182,11 @@ class Settings(BaseSettings):
     swing_adaptive_risk: bool = False
     swing_max_open: int = 0                   # 0 = no limit: free margin and leverage decide how many fit
     swing_max_leverage: float = 10.0          # a ceiling: each trade uses the lowest leverage its margin needs
+    # One trade's margin is capped at this share of the wallet (0 = no cap). Without it the first trade took
+    # nearly all free margin at 1x and the book froze (7 Oct 2026). 0.15 leaves room for ~6 trades.
+    swing_max_margin_frac: float = 0.15
+    # Size swing trades to Binance USD-M rules (step size, min quantity, min order value: analysis/binance_filters)
+    swing_binance_rules: bool = True
     swing_hold_minutes: int = 10080
     swing_signal_max_age_minutes: int = 60
     # Regime check (analysis/regime_gate.py): skip swing signals when Bitcoin's 30-day volatility is in the top

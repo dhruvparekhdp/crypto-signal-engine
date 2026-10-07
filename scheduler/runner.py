@@ -30,6 +30,7 @@ import structlog
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from telegram.constants import ParseMode
 
+from analysis import binance_filters as bfilters
 from analysis.crypto_engine import CryptoEngine
 from analysis.crypto_signal import CryptoSignal, make_mirror_signal
 from analysis.crypto_state_store import CommodityStateStore, CryptoStateStore
@@ -1112,12 +1113,20 @@ class AppRunner:
             risk = (sb.adaptive_risk(settings.swing_risk_pct, dd, streak) if settings.swing_adaptive_risk
                     else settings.swing_risk_pct)
             sized = sb.size(equity, cstate.wallet, risk, price, stop, stop_out_costs(sig.symbol, cfg),
-                            settings.swing_max_leverage)
+                            settings.swing_max_leverage, settings.swing_max_margin_frac)
             if sized is None:
                 await self._mark_skipped(log_id, "no_free_margin")
                 continue
             margin, leverage = sized
             spec = spec_for(sig.symbol)
+            rules = bfilters.rules_for(sig.symbol) if settings.swing_binance_rules else None
+            lot_step = rules.step if rules is not None else spec.lot_step
+            if rules is not None:
+                qty = bfilters.round_qty(sig.symbol, margin * leverage / (pcfg.usdt_inr * price))   # margin is INR
+                why = bfilters.check_order(sig.symbol, qty, price)
+                if why:
+                    await self._mark_skipped(log_id, why)
+                    continue
             pos = open_position(
                 symbol=sig.symbol, side=Side.LONG if side > 0 else Side.SHORT, entry_price=price,
                 margin=margin, leverage=leverage, fees=fees_for(sig.symbol),
@@ -1125,7 +1134,7 @@ class AppRunner:
                 stop_price=stop, target_price=target, opened_at=now, signal_type=sig.signal_type,
                 timeframe=sig.timeframe, confidence=sig.confidence,
                 expires_at=now + timedelta(minutes=settings.swing_hold_minutes),
-                usdt_inr=pcfg.usdt_inr, lot_step=spec.lot_step, slippage=cfg.slippage, trade_mode="swing")
+                usdt_inr=pcfg.usdt_inr, lot_step=lot_step, slippage=cfg.slippage, trade_mode="swing")
             if pos.coin_qty <= 0:
                 await self._mark_skipped(log_id, "below_one_lot")
                 continue
