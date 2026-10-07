@@ -61,7 +61,20 @@ def _read_dir(root: Path, market: str, symbol: str, interval: str) -> pd.DataFra
     cols = ["open_time", "open", "high", "low", "close", "volume", "taker_buy_volume"]
     df = pd.concat([pd.read_parquet(f, columns=cols) for f in files], ignore_index=True)
     df = df.drop_duplicates("open_time").sort_values("open_time").reset_index(drop=True)
+    check_clock(df["open_time"], interval, f"{symbol} {interval}")
     return df
+
+
+def check_clock(open_time, interval: str, label: str = "") -> None:
+    """Plan Q10: open_time must be epoch milliseconds on the interval grid. A file in seconds or microseconds
+    would otherwise shift every bar silently."""
+    if not len(open_time):
+        return
+    lo, hi = int(open_time.min()), int(open_time.max())
+    if not (1e12 <= lo and hi < 1e13):
+        raise MissingData(f"{label}: open_time is not epoch milliseconds ({lo}..{hi})")
+    if (open_time % INTERVAL_MS[interval]).any():
+        raise MissingData(f"{label}: bars are off the {interval} grid")
 
 
 def _to_bars(symbol: str, interval: str, df: pd.DataFrame) -> Bars:

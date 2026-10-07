@@ -14,6 +14,14 @@ class CostModel:
     tp_maker: bool = False           # a target fills as a limit order only when asked
     funding: bool = True
 
+    def __post_init__(self):
+        # plan Q10: negative fees or slippage would turn costs into income
+        for name in ("taker_fee", "maker_fee", "slip_bps", "stop_slip_bps"):
+            if getattr(self, name) < 0:
+                raise ValueError(f"CostModel.{name} cannot be negative")
+        if not 0 <= self.gst <= 1:
+            raise ValueError(f"CostModel.gst={self.gst} is outside [0, 1]")
+
     @property
     def taker(self) -> float:
         return self.taker_fee * (1 + self.gst)
