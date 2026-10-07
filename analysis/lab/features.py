@@ -127,3 +127,43 @@ def cross_up(a, b):
 
 def cross_dn(a, b):
     return (a < b) & (np.r_[False, a[:-1] >= b[:-1]])
+
+
+def kama(c: np.ndarray, n: int = 10, fast: int = 2, slow: int = 30) -> np.ndarray:
+    """Kaufman adaptive moving average (Kaufman 1995): moves fast in trends, slowly in chop. Causal."""
+    c = np.asarray(c, float)
+    out = np.full(len(c), np.nan)
+    if len(c) <= n:
+        return out
+    fsc, ssc = 2 / (fast + 1), 2 / (slow + 1)
+    out[n] = c[n]
+    for i in range(n + 1, len(c)):
+        change = abs(c[i] - c[i - n])
+        vol = np.abs(np.diff(c[i - n:i + 1])).sum()
+        er = change / vol if vol > 0 else 0.0
+        sc = (er * (fsc - ssc) + ssc) ** 2
+        out[i] = out[i - 1] + sc * (c[i] - out[i - 1])
+    return out
+
+
+def mcginley(c: np.ndarray, n: int = 14) -> np.ndarray:
+    """McGinley Dynamic (McGinley 1990): an average that speeds up when price runs away from it. Causal."""
+    c = np.asarray(c, float)
+    out = np.full(len(c), np.nan)
+    if not len(c):
+        return out
+    out[0] = c[0]
+    for i in range(1, len(c)):
+        prev = out[i - 1]
+        ratio = c[i] / prev if prev > 0 else 1.0
+        out[i] = prev + (c[i] - prev) / (n * ratio ** 4) if prev > 0 else c[i]
+    return out
+
+
+def garman_klass(o, h, l, c, n: int = 20) -> np.ndarray:
+    """Garman-Klass volatility (1980) from OHLC, averaged over n bars (per-bar, not annualised). Causal."""
+    o, h, l, c = (np.asarray(x, float) for x in (o, h, l, c))
+    with np.errstate(divide="ignore", invalid="ignore"):
+        v = 0.5 * np.log(h / l) ** 2 - (2 * np.log(2) - 1) * np.log(c / o) ** 2
+    v = np.where(np.isfinite(v), v, np.nan)
+    return np.sqrt(pd.Series(v).rolling(n, min_periods=n).mean().to_numpy())

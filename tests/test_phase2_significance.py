@@ -80,3 +80,19 @@ def test_v2_report_takes_n_from_the_ledger(tmp_path, monkeypatch):
     assert v2_report.n_trials() == v2_report.TRIALS                     # empty ledger: the report's own count
     ledger.record([{"digest": f"d{i}"} for i in range(40)], "v2")
     assert v2_report.n_trials() == 40
+
+
+def test_cluster_stats_shrink_t_when_trades_move_together():
+    import numpy as np
+    from analysis.significance import cluster_stats
+    rng = np.random.default_rng(1)
+    # 100 clusters of 10 identical trades: really 100 observations, not 1000
+    base = rng.normal(0.15, 1.0, 100)
+    r = np.repeat(base, 10)
+    cl = np.repeat(np.arange(100), 10)
+    s = cluster_stats(r, cl)
+    assert s["clusters"] == 100
+    assert s["naive_t"] > 2.5 * s["cluster_t"]          # naive t inflated ~sqrt(10)
+    assert s["ci_lo"] < s["mean"] < s["ci_hi"]
+    ind = cluster_stats(r, np.arange(1000))              # every trade its own cluster: the two t's agree
+    assert abs(ind["naive_t"] - ind["cluster_t"]) / ind["naive_t"] < 0.05

@@ -65,3 +65,18 @@ def test_swing_signal_on_bad_prints_is_none_not_nan():
                 if sig is not None:
                     assert np.isfinite(sig.stop_loss) and sig.stop_loss > 0, (sid, setup)
                     assert np.isfinite(sig.target) and sig.target > 0, (sid, setup)
+
+
+def test_new_filters_are_causal_and_sane():
+    from analysis.lab import features as F
+    rng = np.random.default_rng(5)
+    c = 100 * np.exp(np.cumsum(rng.normal(0, 0.01, 600)))
+    o, h, l = c * (1 + rng.normal(0, 0.002, 600)), c * 1.01, c * 0.99
+    for fn, args in ((F.kama, (c,)), (F.mcginley, (c,)), (F.garman_klass, (o, h, l, c))):
+        full = fn(*args)
+        cut = fn(*(a[:400] for a in args))
+        assert np.allclose(full[:400], cut, equal_nan=True), fn.__name__    # no value depends on later bars
+        assert np.isfinite(full[-1]) and full[-1] > 0
+    trend = np.linspace(100, 200, 300)
+    k = F.kama(trend)
+    assert k[-1] > k[-50]                                                 # follows a steady trend upward
