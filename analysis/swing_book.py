@@ -184,7 +184,7 @@ def adaptive_risk(base: float, dd: float, losing_streak: int,
     return base * max(f, floor)
 
 
-def risk_for(signal_type: str, timeframe: str, dd: float, streak: int) -> float:
+def risk_for(signal_type: str, timeframe: str, dd: float, streak: int, trusted: bool = False) -> float:
     """Risk per trade between swing_risk_min and swing_risk_pct (owner, 7 Oct 2026): cut in book drawdowns and
     after losing streaks (adaptive_risk), halved for specs whose random-entry test was inconclusive, never below
     the minimum. Backtested as variant F in scripts/wallet_plan_backtest."""
@@ -193,9 +193,26 @@ def risk_for(signal_type: str, timeframe: str, dd: float, streak: int) -> float:
     risk = adaptive_risk(top, dd, streak) if settings.swing_adaptive_risk else top
     key = f"{timeframe}@{signal_type.removeprefix('swing_')}"
     weak = {k.strip() for k in settings.swing_weak_specs.split(",") if k.strip()}
-    if key in weak:
+    if key in weak and not trusted:          # a weak spec that earned "trusted" on forward results gets full risk
         risk *= settings.swing_weak_spec_factor
     return max(risk, min(settings.swing_risk_min, top))
+
+
+def risk_reason(signal_type: str, timeframe: str, dd: float, streak: int, trusted: bool = False) -> str:
+    """Plain-English why for the trade card (roadmap F-5)."""
+    from config.settings import settings
+    parts = []
+    if settings.swing_adaptive_risk and dd >= 0.10:
+        parts.append(f"book {dd * 100:.0f}% below its peak")
+    if settings.swing_adaptive_risk and streak >= 3:
+        parts.append(f"{streak} losses in a row")
+    key = f"{timeframe}@{signal_type.removeprefix('swing_')}"
+    if key in {k.strip() for k in settings.swing_weak_specs.split(",")} and not trusted:
+        parts.append("strategy not yet proven vs random (half risk)")
+    r = risk_for(signal_type, timeframe, dd, streak, trusted)
+    if r <= settings.swing_risk_min + 1e-12 and parts:
+        parts.append("floor reached")
+    return "full risk" if not parts else ", ".join(parts)
 
 
 def size(wallet: float, free: float, risk_pct: float, entry: float, stop: float, costs: float,
