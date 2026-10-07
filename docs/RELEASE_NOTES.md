@@ -28,9 +28,9 @@ mark price / trades / candles only on `/market/stream`.
 **Backtests run on the Mac (in-sample, read with care)**
 - Swing null test, real exits, 100 random draws each, judged at N = 579: **6 of 8 live specs beat random**
   (z 3.9-6.3); **4h and 8h Ichimoku inconclusive** (z 3.3-3.7). Caveat: z overstates because trades cluster.
-- Sizing (12-month windows, monthly starts): 3% risk → median x2.2-2.5 a year but median worst drawdown ~65%;
-  1% risk → x1.3-1.7, drawdown 24-46%. The cap does not raise returns; it unfreezes the book. Phase 1 guards cost
-  5-8% of return and did not cut the 3%-risk drawdown. data/lab/sizing_backtest.json.
+- Sizing (12-month windows, monthly starts): 3% risk → median x2.2-2.5 a year, median worst fall ~29%;
+  1% risk → x1.3-1.7, fall 7-17%. (Earlier "~65%" was a lab metric bug, fixed: audit R15.) The cap does not raise
+  returns; it unfreezes the book. data/lab/sizing_backtest.json.
 
 **Owner decisions waiting:** deploy this branch; paper wallet size + reset; risk 3% vs 1%; pause the two Ichimoku
 specs (set status "paused" in the registry) or keep watching them.

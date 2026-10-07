@@ -179,7 +179,13 @@ class Settings(BaseSettings):
     swing_risk_pct: float = 0.03
     # Backtest (scripts/portfolio_wallet, fixed vs adaptive): cutting risk in drawdowns barely reduced the
     # worst drawdown but halved the profit, so fixed risk is the default.
-    swing_adaptive_risk: bool = False
+    # 7 Oct 2026, owner: risk moves between swing_risk_min and swing_risk_pct. Backtest (scripts/wallet_plan_backtest,
+    # variant F): median 12-month x2.08, typical worst fall 23% vs 29% at flat 3%.
+    swing_adaptive_risk: bool = True
+    swing_risk_min: float = 0.01
+    # Specs whose random-entry test was inconclusive at N=579 (7 Oct) trade at this share of the risk
+    swing_weak_specs: str = "4h@ichimoku,8h@ichimoku"
+    swing_weak_spec_factor: float = 0.5
     swing_max_open: int = 0                   # 0 = no limit: free margin and leverage decide how many fit
     swing_max_leverage: float = 10.0          # a ceiling: each trade uses the lowest leverage its margin needs
     # One trade's margin is capped at this share of the wallet (0 = no cap). Without it the first trade took
@@ -517,8 +523,12 @@ class Settings(BaseSettings):
 
     # Paper Trading defaults (Dynamically managed in DB via PaperTradingConfig)
     paper_trading_enabled: bool = True
-    paper_starting_wallet: float = 3000.0
-    paper_target_wallet: float = 20000.0
+    paper_starting_wallet: float = 5000.0
+    paper_target_wallet: float = 10_000_000.0      # effectively never: profit is withdrawn instead (sweep below)
+    # Owner plan (7 Oct 2026): each time paper equity reaches paper_sweep_at, withdraw paper_sweep_amount (INR) from
+    # free cash and keep trading. 0 = off. Withdrawals are rows in paper_withdrawals.
+    paper_sweep_at: float = 10000.0
+    paper_sweep_amount: float = 2500.0
     paper_leverage: float = 10.0
     paper_stop_pct_of_margin: float = 0.20
     paper_reward_risk: float = 2.0

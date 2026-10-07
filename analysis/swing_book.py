@@ -184,6 +184,20 @@ def adaptive_risk(base: float, dd: float, losing_streak: int,
     return base * max(f, floor)
 
 
+def risk_for(signal_type: str, timeframe: str, dd: float, streak: int) -> float:
+    """Risk per trade between swing_risk_min and swing_risk_pct (owner, 7 Oct 2026): cut in book drawdowns and
+    after losing streaks (adaptive_risk), halved for specs whose random-entry test was inconclusive, never below
+    the minimum. Backtested as variant F in scripts/wallet_plan_backtest."""
+    from config.settings import settings
+    top = settings.swing_risk_pct
+    risk = adaptive_risk(top, dd, streak) if settings.swing_adaptive_risk else top
+    key = f"{timeframe}@{signal_type.removeprefix('swing_')}"
+    weak = {k.strip() for k in settings.swing_weak_specs.split(",") if k.strip()}
+    if key in weak:
+        risk *= settings.swing_weak_spec_factor
+    return max(risk, min(settings.swing_risk_min, top))
+
+
 def size(wallet: float, free: float, risk_pct: float, entry: float, stop: float, costs: float,
          max_leverage: float, max_margin_frac: float = 0.0) -> tuple[float, float] | None:
     """(margin, leverage) so that a stop-out costs risk_pct of the wallet, at the lowest leverage the free

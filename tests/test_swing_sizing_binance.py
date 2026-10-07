@@ -85,3 +85,25 @@ def test_lab_wallet_binance_rules_skip_orders_binance_would_reject():
     res = run_wallet(tr, WalletConfig(start=29, target=1e9, live_sizing=True, risk_pct=0.03, leverage=10,
                                       max_concurrent=99, reset=False, max_margin_frac=0.15, binance_rules=True))
     assert res.ledger == [] and set(res.skipped) & {"below_one_lot", "below_min_notional"}
+
+
+def test_lab_wallet_drawdown_is_measured_from_the_running_peak():
+    import pandas as pd
+    from analysis.lab.wallet import WalletConfig, run_wallet
+    # lose 20%, then double twice: the worst fall from a peak is the early 20%, not (peak - trough) / peak = 80%+
+    rows = [("SOLUSDT", 1, -0.2), ("XRPUSDT", 2 * 10**8, 1.0), ("ADAUSDT", 4 * 10**8, 1.0)]
+    tr = pd.DataFrame([dict(symbol=s, side=1, entry_t=t, exit_t=t + 10**7, entry=1.0, exit=1.0, stop_frac=1.0,
+                            net_ret=r, mae=0.0, reason="time", strategy="x", fee_frac=0.0) for s, t, r in rows])
+    res = run_wallet(tr, WalletConfig(start=100, target=1e9, sizing="fixed_notional", fixed_notional=100,
+                                      leverage=1, max_concurrent=9, reset=False, max_margin_use=1.0))
+    assert abs(res.cycles[0]["dd"] - 0.2) < 1e-9
+
+
+def test_lab_wallet_sweep_withdraws_and_is_not_a_drawdown():
+    import pandas as pd
+    from analysis.lab.wallet import WalletConfig, run_wallet
+    tr = pd.DataFrame([dict(symbol="SOLUSDT", side=1, entry_t=1, exit_t=10, entry=1.0, exit=1.0, stop_frac=1.0,
+                            net_ret=1.2, mae=0.0, reason="time", strategy="x", fee_frac=0.0)])
+    res = run_wallet(tr, WalletConfig(start=50, target=1e9, sizing="fixed_notional", fixed_notional=50, leverage=1,
+                                      max_concurrent=9, reset=False, sweep_at=100, sweep_amount=25, max_margin_use=1.0))
+    assert res.withdrawn == 25 and res.cycles[0]["end"] == 85 and res.cycles[0]["dd"] == 0

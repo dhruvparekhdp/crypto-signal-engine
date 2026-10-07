@@ -45,6 +45,12 @@ class WalletConfig:
     max_margin_frac: float = 0.0
     # Binance USD-M per-coin rules (analysis/binance_filters): step size, min quantity, min order value
     binance_rules: bool = False
+    # Profit sweep (owner, 7 Oct): when the balance reaches sweep_at, withdraw sweep_amount and keep trading
+    sweep_at: float | None = None
+    sweep_amount: float = 0.0
+    # Risk range: risk_pct is the ceiling; adaptive/evidence cuts never go below risk_min (absolute share)
+    risk_min: float | None = None
+    evidence: dict | None = None        # {"4h@ichimoku": 0.5, ...}: risk factor per strategy (tf@id)
 
     def label(self) -> str:
         if self.sizing == "risk_pct":
@@ -59,6 +65,8 @@ class WalletResult:
     ledger: list[dict] = field(default_factory=list)
     skipped: dict = field(default_factory=dict)
     discarded_on_reset: int = 0
+    withdrawn: float = 0.0
+    withdrawals: list = field(default_factory=list)
     curve: list[tuple] = field(default_factory=list)
 
     def summary(self) -> dict:
@@ -103,7 +111,7 @@ def run_wallet(trades: pd.DataFrame, cfg: WalletConfig) -> WalletResult:
 
     def close_cycle(status, t):
         nonlocal bal, cycle, streak, day_start
-        cycle.update(status=status, end=bal, t1=t, dd=(cycle["peak"] - cycle["trough"]) / max(cycle["peak"], 1e-9))
+        cycle.update(status=status, end=bal, t1=t, dd=cycle.get("mdd", 0.0))
         res.cycles.append(cycle)
         bal = cfg.start
         streak = 0
@@ -123,6 +131,9 @@ def run_wallet(trades: pd.DataFrame, cfg: WalletConfig) -> WalletResult:
             bal = max(0.0, bal + pos["pnl"])
             cycle["trades"] += 1
             cycle["peak"] = max(cycle["peak"], bal)
+            # true max drawdown: fall from the running peak (the old (peak - trough) / peak counted a dip that
+            # came BEFORE the peak, e.g. a wallet that dipped early then grew 100x showed a 99% drawdown)
+            cycle["mdd"] = max(cycle.get("mdd", 0.0), (cycle["peak"] - bal) / max(cycle["peak"], 1e-9))
             cycle["trough"] = min(cycle["trough"], bal)
             cycle["fees"] += pos["fee_usd"]
             streak = streak + 1 if pos["pnl"] <= 0 else 0
@@ -134,6 +145,11 @@ def run_wallet(trades: pd.DataFrame, cfg: WalletConfig) -> WalletResult:
                 streak = 0
             res.ledger.append({**pos["row"], "cycle": cycle["id"], "balance_before": before, "balance_after": bal,
                                "pnl": pos["pnl"], "t": pos["exit_t"]})
+            if cfg.sweep_at and bal >= cfg.sweep_at and bal - sum(p["margin"] for p in open_pos) >= cfg.sweep_amount:
+                bal -= cfg.sweep_amount
+                cycle["peak"] = max(cycle["peak"] - cfg.sweep_amount, bal)   # a withdrawal is not a drawdown
+                res.withdrawn += cfg.sweep_amount
+                res.withdrawals.append((pos["exit_t"], cfg.sweep_amount, bal))
             res.curve.append((pos["exit_t"], bal))
             if bal >= cfg.target:
                 close_cycle("TARGET", pos["exit_t"])
@@ -173,6 +189,10 @@ def run_wallet(trades: pd.DataFrame, cfg: WalletConfig) -> WalletResult:
             dd = 1 - bal / max(cycle["peak"], 1e-9)
             f_dd = min([m for l, m in cfg.dd_brake if dd >= l] or [1.0])
             risk = cfg.risk_pct * f_dd * (0.5 if streak >= cfg.streak_brake else 1.0)
+        if cfg.evidence:
+            risk *= cfg.evidence.get(f"{getattr(row, 'tf', '')}@{getattr(row, 'strategy', '')}", 1.0)
+        if cfg.risk_min is not None:
+            risk = max(risk, min(cfg.risk_min, cfg.risk_pct))
         lev = cfg.leverage
         if cfg.live_sizing:
             from analysis.swing_book import size as live_size
@@ -223,7 +243,7 @@ def run_wallet(trades: pd.DataFrame, cfg: WalletConfig) -> WalletResult:
     settle(10**18)
     if cycle["trades"] or not res.cycles:
         cycle.update(status="IN_PROGRESS", end=bal, t1=int(tr.exit_t.iloc[-1]),
-                     dd=(cycle["peak"] - cycle["trough"]) / max(cycle["peak"], 1e-9))
+                     dd=cycle.get("mdd", 0.0))
         res.cycles.append(cycle)
     return res
 

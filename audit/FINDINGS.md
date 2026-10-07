@@ -40,6 +40,7 @@ Status: **fixed** (test named), **open**, **accepted** (known, deliberately not 
 | R11 | Significance treats clustered trades as independent | open | Phase 3 (O3); note: swing null z-scores (7 Oct) are overstated for the same reason |
 | R12 | v2 "run now" silently no-op when disabled | open | Phase 3 |
 | R13 | Lake clock and cost inputs unchecked (seconds vs ms, negative fees) | fixed (branch) | `test_phase2_batteries.py::test_lake_clock_must_be_epoch_ms_on_the_grid`, `::test_lab_cost_model_refuses_nonsense`, `::test_paper_fee_model_refuses_nonsense` |
+| R15 | Lab wallet drawdown was (highest - lowest) / highest even when the low came before the high: overstated every reported drawdown (e.g. "median 78%", "~65%") | fixed (branch) | `test_swing_sizing_binance.py::test_lab_wallet_drawdown_is_measured_from_the_running_peak` |
 | R14 | Binance futures WebSocket split: legacy `/stream` silently returns nothing for markPrice/aggTrade/kline | open (engine has WebSocket off) | docs/BINANCE_PLAN.md section 3; use `/market/stream` when WebSocket is enabled |
 
 ## Not automated yet (SCENARIOS)

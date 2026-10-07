@@ -834,6 +834,9 @@ class AppRunner:
 
                 await repo.update_cycle_wallet(cycle.id, wallet)
 
+                # 2b. Owner's profit sweep: withdraw from free cash when equity reaches the line
+                wallet = await self._maybe_sweep(repo, cycle, cstate, wallet, pcfg)
+
                 # 3. Has the cycle finished?
                 outcome = cycle_outcome(wallet + sum(p.margin for p in cstate.positions),
                                         cfg, len(cstate.positions))
@@ -854,6 +857,26 @@ class AppRunner:
             cache.invalidate("paper_db_snapshot", "pipeline_db_read")
         except Exception:
             log.exception("paper_trading_job_failed")
+
+    async def _maybe_sweep(self, repo, cycle, cstate, wallet: float, pcfg) -> float:
+        """Withdraw paper_sweep_amount when equity >= paper_sweep_at and free cash covers it. Returns the wallet."""
+        at, amount = settings.paper_sweep_at, settings.paper_sweep_amount
+        equity = wallet + sum(p.margin for p in cstate.positions)
+        if not at or amount <= 0 or equity < at or wallet < amount:
+            return wallet
+        from storage.models import PaperWithdrawal
+        wallet -= amount
+        cstate.wallet = wallet
+        repo.session.add(PaperWithdrawal(cycle_id=cycle.id, amount=amount, equity_before=equity, wallet_after=wallet))
+        await repo.update_cycle_wallet(cycle.id, wallet)
+        log.info("paper_profit_withdrawn", amount=amount, equity_before=round(equity, 2), wallet=round(wallet, 2))
+        if pcfg.alert_telegram:
+            try:
+                await self.notifier.send_text(f"💰 Paper profit withdrawn: ₹{amount:,.0f} (equity was ₹{equity:,.0f}, "
+                                              f"free cash now ₹{wallet:,.0f})")
+            except Exception:  # noqa: BLE001
+                pass
+        return wallet
 
     async def _candle_refresh_job(self) -> None:
         """Keep market_candles current. Nothing live reads it (trading uses in-memory candles), but the
@@ -1136,8 +1159,7 @@ class AppRunner:
             dist = abs(sig.current_price - sig.stop_loss)
             stop, target = price - side * dist, price + side * sb.REWARD_RISK * dist
             equity = cstate.wallet + sum(p.margin for p in cstate.positions)
-            risk = (sb.adaptive_risk(settings.swing_risk_pct, dd, streak) if settings.swing_adaptive_risk
-                    else settings.swing_risk_pct)
+            risk = sb.risk_for(sig.signal_type, sig.timeframe, dd, streak)
             sized = sb.size(equity, cstate.wallet, risk, price, stop, stop_out_costs(sig.symbol, cfg),
                             settings.swing_max_leverage, settings.swing_max_margin_frac)
             if sized is None:

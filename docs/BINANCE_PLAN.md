@@ -54,20 +54,32 @@ so a burst never reaches 429 (and never 418, an IP ban). Rule in code: any 429 o
 
 ## 5. Backtest of the changes (in-sample, 2021-10 to 2026-09, 12-month windows started monthly)
 
-See `data/lab/sizing_backtest.json`. Median 12-month result (end balance / start), median worst drawdown:
+Drawdowns below use the corrected metric (fall from the running peak; the lab wallet used to report
+(highest - lowest) / highest even when the low came first, which overstated them: see audit R15).
+
+Sizing (`data/lab/sizing_backtest.json`), median 12-month multiple, median worst fall:
 
 | Wallet | Old: 3%, no cap | New: 3%, cap + Binance rules | New: 1%, cap + Binance rules |
 |---|---|---|---|
-| $29 (~₹3,000) | x2.38, dd 64% | x2.19, dd 62% | x1.26, dd 24% (most signals too small for Binance) |
-| $50 | x2.40, dd 66% | x2.18, dd 63% | x1.49, dd 35% |
-| $100 | x2.47, dd 67% | x2.31, dd 66% | x1.52, dd 42% |
-| $300 | x2.48, dd 67% | x2.54, dd 67% | x1.69, dd 46% |
+| $29 (~Rs3,000) | x2.38, 24% | x2.19, 29% | x1.26, 7% (most signals too small for Binance) |
+| $50 | x2.40, 25% | x2.18, 29% | x1.49, 14% |
+| $100 | x2.47, 25% | x2.31, 28% | x1.52, 15% |
+| $300 | x2.48, 24% | x2.54, 29% | x1.69, 17% |
 
-Read with care: the strategies were chosen on this same history, so real results will be lower. The cap does not
-raise returns; it stops one trade freezing the book and lets the book take its other signals. **3% risk means a
-typical worst drawdown of about two thirds of the wallet** in every size; 1% roughly halves that and the return.
-Phase 1 guards (9% daily loss, pause after 3 losses) cost ~5-8% of the median return and did not reduce the
-drawdown at 3% risk: the drawdown comes from the risk level, not from bad days.
+Owner plan (`scripts/wallet_plan_backtest.py`, `data/lab/wallet_plan_backtest.json`): Rs5,000 start, withdraw
+Rs2,500 each time it reaches Rs10,000.
+
+| Variant | 12 months: median total x (worst) | median / worst fall | 24 months: total x | 5 years: withdrawn |
+|---|---|---|---|---|
+| A fixed 3% | x2.19 (x1.07) | 29% / 45% | x3.26 | Rs37,500 |
+| B fixed 2% | x2.11 (x1.06) | 24% / 32% | x3.44 | Rs32,500 |
+| C fixed 1% | x1.49 (x1.06) | 14% / 17% | x2.19 | Rs15,000 |
+| D 1-3% by drawdown/streak | x1.96 (x0.96) | 25% / 28% | x3.05 | Rs32,500 |
+| E D + Ichimoku at half risk | x1.88 (x0.95) | 21% / 27% | x3.15 | Rs30,000 |
+| **F E + Phase 1 guards (live default)** | **x2.08 (x0.90)** | **23% / 31%** | **x3.41** | **Rs25,000** |
+
+"Total x" counts money withdrawn plus the balance left. No window busted. Real results will be lower: the
+strategies were chosen on this history.
 
 ## 6. Tax (owner's question: speculative business income)
 

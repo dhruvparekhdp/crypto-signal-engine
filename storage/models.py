@@ -835,3 +835,19 @@ class StrategyRegistry(Base):
     note: Mapped[str] = mapped_column(Text, default="")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_now_utc)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=_now_utc)
+
+
+class PaperWithdrawal(Base):
+    """
+    Profit taken out of the paper wallet (owner plan, 7 Oct 2026: start Rs5,000, withdraw Rs2,500 each time
+    equity reaches Rs10,000). Kept as rows so "how much did it pay out" is answerable after the fact.
+    """
+
+    __tablename__ = "paper_withdrawals"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    cycle_id: Mapped[int] = mapped_column(Integer, index=True)
+    amount: Mapped[float] = mapped_column(Float)
+    equity_before: Mapped[float] = mapped_column(Float)
+    wallet_after: Mapped[float] = mapped_column(Float)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=_now_utc)

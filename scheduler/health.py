@@ -1303,6 +1303,22 @@ async def _swing_regime_section(runner, trades, rs) -> dict:
     return out
 
 
+async def _paper_withdrawals(cycle_id: int) -> list[dict]:
+    """Profit taken out of this cycle (owner plan: withdraw Rs2,500 each time equity reaches Rs10,000)."""
+    try:
+        from sqlalchemy import select
+
+        from storage.database import AsyncSessionFactory
+        from storage.models import PaperWithdrawal
+        async with AsyncSessionFactory() as session:
+            rows = (await session.execute(select(PaperWithdrawal).where(PaperWithdrawal.cycle_id == cycle_id)
+                                          .order_by(PaperWithdrawal.id))).scalars().all()
+        return [{"amount": r.amount, "equity_before": round(r.equity_before, 2), "wallet_after": round(r.wallet_after, 2),
+                 "at": r.created_at.isoformat() if r.created_at else None} for r in rows]
+    except Exception:  # noqa: BLE001 - the page must load even if this table is unreachable
+        return []
+
+
 async def _api_paper(runner, request: web.Request) -> web.Response:
     """
     Live state of the paper-trading cycle: wallet, open positions, trade log.
@@ -1371,10 +1387,14 @@ async def _api_paper(runner, request: web.Request) -> web.Response:
             "partial_pnl": round(getattr(r, "partial_pnl", 0.0), 2),
         })
 
+    withdrawals = await _paper_withdrawals(cycle.id)
     return web.Response(text=json.dumps({
         "running": True,
         "enabled": _SETTINGS.paper_trading_enabled,
         "cycle": _cycle_row(cycle),
+        "withdrawals": {"total": round(sum(w["amount"] for w in withdrawals), 2), "count": len(withdrawals),
+                        "rule": {"at": _SETTINGS.paper_sweep_at, "amount": _SETTINGS.paper_sweep_amount},
+                        "last": withdrawals[-10:]},
         "equity": round(cycle.wallet + sum(p["margin"] for p in positions)
                         + unrealised_total, 2),
         "unrealised": round(unrealised_total, 2),
@@ -3070,10 +3090,16 @@ function renderPaper(){
       <div class="pt-v ${_ptCls(realised)}">${_ptMoney(realised, rate, true)}</div></div>
     <div class="pt-cell"><div class="pt-k">Margin in use</div>
       <div class="pt-v">${_ptMoney(margin, rate)}<small> · ${(d.positions||[]).length} open</small></div></div>
-    <div class="pt-cell"><div class="pt-k">Cycle ${c.id} · ${c.leverage}&times;</div>
+    ${(() => { const w = d.withdrawals || {}, rule = w.rule || {};
+      if(!rule.at) return `<div class="pt-cell"><div class="pt-k">Cycle ${c.id} · ${c.leverage}&times;</div>
       <div class="pt-v" style="font-size:13px">${_ptMoney(c.starting_wallet, rate)} &rarr; ${_ptMoney(c.target_wallet, rate)}</div>
       <div class="pt-rail"><i style="width:${pct.toFixed(1)}%"></i></div>
-      <div class="pt-railcap"><span>${pct.toFixed(0)}% there</span>
+      <div class="pt-railcap"><span>${pct.toFixed(0)}% there</span>`;
+      const p2 = Math.max(0, Math.min(100, (d.equity - c.starting_wallet) / Math.max(1, rule.at - c.starting_wallet) * 100));
+      return `<div class="pt-cell"><div class="pt-k">Withdrawn · cycle ${c.id}</div>
+      <div class="pt-v">${_ptMoney(w.total || 0, rate)}<small> · ${w.count || 0}&times;</small></div>
+      <div class="pt-rail"><i style="width:${p2.toFixed(1)}%"></i></div>
+      <div class="pt-railcap"><span>next ${_ptMoney(rule.amount, rate)} at ${_ptMoney(rule.at, rate)} · ${p2.toFixed(0)}%</span>`; })()}
         <span>${window.Money.get() === 'INR' ? 'figures in &#8377;' : '1 USDT = &#8377;' + rate}</span></div></div>`;
 
   renderPaperPositions(d.positions || [], rate);
