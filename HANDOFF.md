@@ -78,6 +78,11 @@ map; this file has the decisions, results, open work and the owner's rules.
 - Local dev server: `scripts/dev_server.sh` (own SQLite DB, no AI keys, port 8090); all 20 pages checked, no JS errors.
 - Laptop AI entry test: last seen 32/150; Tailscale was down on 7 Oct.
 
+## 7 Oct evening (branch phase1-protect-production, NOT deployed)
+Binance verified (docs/BINANCE_PLAN.md), sizing freeze fixed, Binance order rules in paper, strategy registry +
+drawdown alarm + Paper card, honest null tests (6/8 specs beat random at N=579; Ichimoku inconclusive), input
+guards, audit/FINDINGS.md. Release notes top section. Owner rule now: dev Mac + local dev server only.
+
 ## Open work (in order)
 1. See docs/RELEASE_NOTES.md "Plan: pending work" (sections A-E) — the current to-do list.
 2. Phase 2 rest: swing null test run, ledger back-fill, v2 N from ledger, registry + live_from + drawdown alarm,

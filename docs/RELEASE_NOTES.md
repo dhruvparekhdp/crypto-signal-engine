@@ -4,6 +4,39 @@ Everything below is dev / proof of concept: **paper trading only**. No real-mone
 
 ---
 
+## 7 Oct 2026 (evening): Binance verified, sizing fixed, strategy registry, honest null tests — NOT DEPLOYED
+
+All on branch `phase1-protect-production`, tested on the Mac and the local dev server only (owner rule: no
+production changes tonight). Full suite: 1,555 passed. Details: docs/BINANCE_PLAN.md, audit/FINDINGS.md.
+
+**Binance (read-only key, Mac):** 500/500 public calls and 679/679 calls of every read-only endpoint for 60 s
+(peak weight 1,531/2,400) OK from India. The owner's account has USD-M futures access. Futures WebSocket moved:
+mark price / trades / candles only on `/market/stream`.
+
+**Fixes and features**
+| What | Why | Setting |
+|---|---|---|
+| Margin per swing trade capped at 15% of the wallet | One 1x SOL trade took ₹1,238 of ₹1,735 and froze the book | `swing_max_margin_frac` 0.15 |
+| Paper orders follow Binance USD-M rules (step, min qty, $5/$20/$50 min order) | Old lot table was CoinDCX's and missed most coins | `swing_binance_rules` on |
+| Strategy registry: per-strategy "live from" clock, resets on code/param change; only incubating/trusted trade; drawdown alarm at each strategy's own 5-year worst (8.6-28.7R) | Forward results are the only clean evidence | `swing_registry`, `swing_dd_alarm_factor` 1.0 |
+| Paper tab card "Strategies · forward evidence" (phone-friendly) | See each strategy's clock, forward R, drawdown vs alarm | — |
+| Null test: z-score + normal-approx p at Bonferroni N (≥ 579 configs tried); `run_lab --ledger-family` | Old p = 0.000 from 30 draws, no correction | — |
+| v2 report: N from the trial ledger | Was hard-coded | — |
+| Input guards: lake clock must be epoch ms on the grid; negative fees / GST outside [0,1] refused | Silent mis-pricing | — |
+| Lab = paper cost check (both 0.188% per stop-out) | Plan L10 | — |
+
+**Backtests run on the Mac (in-sample, read with care)**
+- Swing null test, real exits, 100 random draws each, judged at N = 579: **6 of 8 live specs beat random**
+  (z 3.9-6.3); **4h and 8h Ichimoku inconclusive** (z 3.3-3.7). Caveat: z overstates because trades cluster.
+- Sizing (12-month windows, monthly starts): 3% risk → median x2.2-2.5 a year but median worst drawdown ~65%;
+  1% risk → x1.3-1.7, drawdown 24-46%. The cap does not raise returns; it unfreezes the book. Phase 1 guards cost
+  5-8% of return and did not cut the 3%-risk drawdown. data/lab/sizing_backtest.json.
+
+**Owner decisions waiting:** deploy this branch; paper wallet size + reset; risk 3% vs 1%; pause the two Ichimoku
+specs (set status "paused" in the registry) or keep watching them.
+
+---
+
 ## 7 Oct 2026: Phase 1 protection, our own AI model online, honest statistics (Phase 2 start)
 
 ### 1. Production safety (Phase 1 of docs/INTEGRATION_PLAN.md) — live since commit 7364dde

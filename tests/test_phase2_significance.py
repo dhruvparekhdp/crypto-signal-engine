@@ -72,3 +72,11 @@ def test_null_verdict_uses_normal_approx_when_draws_cannot_reach_the_line():
     assert _null_verdict(1 / 31, 1e-9, 30, 579) == "beats random (normal approx)"
     assert _null_verdict(1 / 31, 0.01, 30, 579) == "inconclusive (normal approx)"
     assert _null_verdict(1 / 4001, 1e-9, 4000, 10) == "beats random"          # enough draws: exact p used
+
+
+def test_v2_report_takes_n_from_the_ledger(tmp_path, monkeypatch):
+    from analysis import v2_report
+    monkeypatch.setattr(ledger, "LEDGER", tmp_path / "l.jsonl")
+    assert v2_report.n_trials() == v2_report.TRIALS                     # empty ledger: the report's own count
+    ledger.record([{"digest": f"d{i}"} for i in range(40)], "v2")
+    assert v2_report.n_trials() == 40
