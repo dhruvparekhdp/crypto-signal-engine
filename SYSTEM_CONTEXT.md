@@ -51,8 +51,10 @@ fresh session can pick up full context. **Section 0 is current (6 Oct 2026). Sec
   `~/projects/crypto-signal-engine` with its own venv and a copy of `data/lake`.
 
 ### Operations
-- Web portal: `/` opens the four-hub portal (`/command`, `/book`, `/evidence`, `/system`, code in `scheduler/portal.py`
-  and `scheduler/portal/`); the old one-page dashboard is at `/classic`. Design, palettes and redirects: `docs/PORTAL_REVAMP.md`.
+- Web portal: `/` opens the four-hub portal (`/command`, `/book`, `/evidence`, `/system` and their pages, e.g.
+  `/book/paper`); every other page carries the same header (`scheduler/portal/nav.js` is the one nav map). Code in
+  `scheduler/portal.py` and `scheduler/portal/` (core + per-hub widget modules). Old addresses (`/#paper`, `/data`, …)
+  redirect. Design, page map, redirects, components: `docs/PORTAL_REVAMP.md`.
 - Production: EC2 `52.62.37.4:8080`, systemd `crypto-engine`, deploy = push to `main` (GitHub Actions restarts the
   service). Each deploy restarts the engine, so changes go out in batches.
 - Tests: 1,473 passing (`python -m pytest -q`). `tests/conftest.py` gives every test a fresh AI budget file.

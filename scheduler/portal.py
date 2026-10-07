@@ -1,22 +1,29 @@
 """
 The portal: four hubs (Command, Book, Evidence, System) served from one page shell.
 
-Design, palettes, page map and redirects: docs/PORTAL_REVAMP.md. The page itself is plain
-HTML/CSS/JS in scheduler/portal/ with no build step; every number on it comes from the
-existing read APIs plus the three small endpoints below.
+Design, palettes, page map, redirects and the micro UI model: docs/PORTAL_REVAMP.md. The front end
+is plain HTML/CSS/JS in scheduler/portal/ with no build step:
+
+  nav.js          the one navigation map (hubs → pages), used by the shell and by every tool page
+  core.js         store (one request per endpoint, shared), component kit, widget runtime, shell
+  hubs/<hub>.js   that hub's widgets and views, loaded on the first visit to the hub
+  chrome.js/.css  the same header + the "brutal" skin for the server-rendered tool pages
 
 Routes
-  /                      -> 302 /command (the old single-page dashboard now lives at /classic)
-  /command /book /evidence /system   the same shell; the page picks the hub from the path
-  /portal/static/{name}  the shell's CSS and JS
-  /api/portal/candles    closed bars for one coin (Binance futures klines, cached 60 s)
-  /api/portal/signals    recent swing-book signals with their market-filter verdict
-  /api/portal/meta       the few settings the page needs to state what it is (paper/live, filter)
+  /                          -> 302 /command
+  /<hub>, /<hub>/<page>      the shell; the page picks the view from the path
+  /portal/static/<asset>     fixed whitelist; ?v=<content hash> is cached for a year, anything else revalidates
+  /data                      -> 301 /system/data (the rest of the retired addresses are forwarded in chrome.js)
+  /api/portal/candles        closed bars for one coin (Binance futures klines, cached 60 s)
+  /api/portal/signals        recent swing-book signals with their market-filter verdict
+  /api/portal/meta           the few settings the page needs to state what it is (paper/live, filter)
 """
 
 from __future__ import annotations
 
+import hashlib
 import json
+import re
 import time
 from datetime import UTC, datetime
 from pathlib import Path
@@ -25,10 +32,24 @@ from aiohttp import web
 
 STATIC = Path(__file__).with_name("portal")
 HUBS = ("command", "book", "evidence", "system")
-ASSETS = {"portal.css": "text/css", "portal.js": "application/javascript"}
+ASSETS = {
+    "portal.css": "text/css",
+    "chrome.css": "text/css",
+    "nav.js": "application/javascript",
+    "core.js": "application/javascript",
+    "chrome.js": "application/javascript",
+    "hubs/command.js": "application/javascript",
+    "hubs/book.js": "application/javascript",
+    "hubs/evidence.js": "application/javascript",
+    "hubs/system.js": "application/javascript",
+}
+REDIRECTS = {"/data": "/system/data"}
 TIMEFRAMES = ("1h", "4h", "8h", "1d")
 CANDLE_TTL_S = 60
+_PAGE_RE = re.compile(r"^[a-z0-9-]{1,40}$")
 _candles: dict[tuple[str, str], tuple[float, list[dict]]] = {}
+_assets: dict[str, tuple[str, str]] = {}       # name -> (text, hash)
+_shell: str | None = None
 
 
 def _json(data, status: int = 200) -> web.Response:
@@ -42,20 +63,58 @@ def _int(raw: str | None, default: int, lo: int, hi: int) -> int:
         return default
 
 
+def _asset(name: str) -> tuple[str, str]:
+    """Text and content hash of one whitelisted asset, read once per process (files ship with the deploy)."""
+    if name not in _assets:
+        text = (STATIC / name).read_text(encoding="utf-8")
+        _assets[name] = (text, hashlib.sha256(text.encode()).hexdigest()[:10])
+    return _assets[name]
+
+
+def asset_url(name: str) -> str:
+    return f"/portal/static/{name}?v={_asset(name)[1]}"
+
+
+def chrome_snippet() -> str:
+    """Head tags that give a server-rendered page the portal header and skin. Not deferred on
+    purpose: chrome.js forwards retired addresses before the old page starts loading its data."""
+    return (f'<link rel="stylesheet" href="{asset_url("chrome.css")}">'
+            f'<script src="{asset_url("nav.js")}"></script>'
+            f'<script src="{asset_url("chrome.js")}"></script>')
+
+
+def _render_shell() -> str:
+    global _shell
+    if _shell is None:
+        html = (STATIC / "portal.html").read_text(encoding="utf-8")
+        html = re.sub(r"\{\{asset:([\w./-]+)\}\}", lambda m: asset_url(m.group(1)), html)
+        hubs = {n: asset_url(n) for n in ASSETS if n.startswith("hubs/")}
+        _shell = html.replace("{{assets_json}}", json.dumps(hubs))
+    return _shell
+
+
 async def root_redirect(request: web.Request) -> web.Response:
     raise web.HTTPFound("/command")
 
 
+async def retired(request: web.Request) -> web.Response:
+    raise web.HTTPMovedPermanently(REDIRECTS[request.path])
+
+
 async def portal_page(request: web.Request) -> web.Response:
-    return web.Response(text=(STATIC / "portal.html").read_text(encoding="utf-8"), content_type="text/html")
+    page = request.match_info.get("page")
+    if page is not None and not _PAGE_RE.match(page):
+        raise web.HTTPNotFound()
+    return web.Response(text=_render_shell(), content_type="text/html")
 
 
 async def portal_asset(request: web.Request) -> web.Response:
     name = request.match_info["name"]
     if name not in ASSETS:                       # a fixed list: no path ever reaches the filesystem unchecked
         raise web.HTTPNotFound()
-    return web.Response(text=(STATIC / name).read_text(encoding="utf-8"), content_type=ASSETS[name],
-                        headers={"Cache-Control": "no-cache"})
+    text, digest = _asset(name)
+    cache = "public, max-age=31536000, immutable" if request.query.get("v") == digest else "no-cache"
+    return web.Response(text=text, content_type=ASSETS[name], headers={"Cache-Control": cache, "ETag": f'"{digest}"'})
 
 
 async def api_candles(request: web.Request) -> web.Response:
@@ -114,7 +173,7 @@ async def api_signals(request: web.Request) -> web.Response:
             "id": r.id, "time": ts.isoformat(), "symbol": r.symbol.upper(), "strategy": r.signal_type,
             "direction": r.direction, "timeframe": r.timeframe, "price": r.current_price,
             "stop": r.stop_loss, "target": r.target_price, "outcome": r.outcome, "pnl_pct": r.pnl_pct,
-            "skip_reason": r.skip_reason or "", "btc_vol_rank": tag.get("btc_vol_rank"),
+            "skip_reason": reason, "btc_vol_rank": tag.get("btc_vol_rank"),
             "filter_skip": bool(tag.get("would_skip")), "filter_reasons": tag.get("reasons", []),
         })
     return _json({"signals": out})
@@ -136,7 +195,10 @@ def register(app: web.Application) -> None:
     app.router.add_get("/", root_redirect)
     for hub in HUBS:
         app.router.add_get(f"/{hub}", portal_page)
-    app.router.add_get("/portal/static/{name}", portal_asset)
+        app.router.add_get(f"/{hub}/{{page}}", portal_page)
+    for old in REDIRECTS:
+        app.router.add_get(old, retired)
+    app.router.add_get("/portal/static/{name:.+}", portal_asset)
     app.router.add_get("/api/portal/candles", api_candles)
     app.router.add_get("/api/portal/signals", api_signals)
     app.router.add_get("/api/portal/meta", api_meta)

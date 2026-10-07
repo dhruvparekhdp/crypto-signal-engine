@@ -4,8 +4,13 @@ The single place for everything decided about the portal redesign: why it change
 each old page went, how the code is laid out, and what is left to do. Read this before touching
 `scheduler/portal.py` or `scheduler/portal/`.
 
-Status (7 Oct 2026): **v1 shipped on branch `claude/portal-design-revamp-l69rn1`.** `/` now opens the new portal; the
-old one-page dashboard is unchanged at `/classic`.
+Status (7 Oct 2026): **v2 (all phases) built on branch `claude/portal-design-revamp-l69rn1`, not yet deployed.** The owner
+reviews and tests everything on the branch, then deploys at once.
+
+- v1: the four-hub portal shell and the Command hub on live data.
+- v2 (this round): every old page clubbed into a hub; one navigation on every page (no more pages with only a
+  "← back" link); retired addresses redirected; the front end split into reusable components and per-hub micro UI
+  modules; versioned, long-cached assets.
 
 ---
 
@@ -20,6 +25,7 @@ old one-page dashboard is unchanged at `/classic`.
 | Feedback 2 | D chosen, but the neon lime was too flashy: wanted a softer, user-friendly, creative palette that people like on first sight. |
 | Round 3 | Four palettes for D: Champagne & Teal, **Sage & Lilac**, Ice & Peach, Classic lime. |
 | Decision | **"Option 2 and all the 4 shades"**: Sage & Lilac is the default, and all four stay as a theme switcher in the header. Build it into the real portal. |
+| Phase 2 brief | "Build all phases on this branch only. Club some pages and give proper redirection: some pages have all options in the nav bar and some have one option to go back. Create multiple reusable components as micro UI services, in an optimised way." |
 
 Design boards (live demos with simulated data) are kept in `design/revamp/`:
 
@@ -85,112 +91,169 @@ data. Motion that is not data (the pipeline hand-off cycle, sweeps, glitches) ne
 
 ---
 
-## 3. Information architecture: 11 screens → 4 hubs
+## 3. Information architecture: every page in one of 4 hubs
 
-| Hub | Route | Question it answers | Absorbs |
-|---|---|---|---|
-| 01 Command | `/command` | What is the market doing and what did the engine just decide? | Dashboard, Signals, Watchlist (prices) |
-| 02 Book | `/book` | What am I holding and how is each trade doing? | Paper Trading (swing book) |
-| 03 Evidence | `/evidence` | Can I trust these strategies? | Accuracy, Historic Data, Explorer, Lab results (links to deep tools) |
-| 04 System | `/system` | Is the machine healthy? | Diagnostics, Guard, Settings (links), AI budget |
+The single source of truth is `scheduler/portal/nav.js`. Both the portal shell and every server-rendered tool page
+draw their header from it, so there is exactly one navigation and it is the same everywhere: the four hubs, then
+the pages of the current hub. Pages marked ↗ are **tools**: their own server page, shown under the same header.
 
-**Always visible on every hub** (status strip): market filter open/closed, open swing trades, worst case if every
-stop hits (open trades × risk per trade), feed freshness, and "LIVE TRADING: OFF · PAPER ONLY" (from settings).
-The header also carries the UTC clock, a countdown to the next 4h bar close, and the theme switcher.
+| Hub | Pages (native) | Tools (own page, same header) |
+|---|---|---|
+| 01 Command `/command` | **Overview**, **Signals** `/command/signals`, **Watchlist** `/command/watchlist` | Price outlook `/predict`, Market moves `/moves`, Chart `/chart` |
+| 02 Book `/book` | **Swing book**, **Paper cycle** `/book/paper`, **Session guard** `/book/guard` | Simulator `/classic#simulator`, Journal `/journal` |
+| 03 Evidence `/evidence` | **Strategies**, **Accuracy** `/evidence/accuracy`, **History** `/evidence/history`, **Research** `/evidence/research` | Audit `/audit`, Mirror `/classic#mirror`, Pipeline `/pipeline`, v2 shadow `/v2` |
+| 04 System `/system` | **Health**, **Data** `/system/data`, **Diagnostics** `/system/diagnostics` | Settings `/settings`, Keys `/keys`, API list `/api-docs` |
 
-### What each hub shows (v1)
+### What was clubbed
 
-**Command**
-- Agent pipeline: 8 cards (Market feed → Detectors → Market filter → Swing scanner → Risk sizer → Paper exec → Outcome
-  replay → AI analyst), each with a live metric. Market filter turns "BLOCKING" when the filter is closed.
-- Chart: 4h candles for the selected coin + a forming candle from the live price, Keltner channel (EMA 20, ATR 10,
-  k 2.5) computed in the browser. Coin buttons switch the chart.
-- Market radar (24h change per coin) and the market-filter gauge (BTC 30-day vol percentile vs threshold).
-- Decision trace for the newest swing signal: scanner → filter → risk → exec → replay.
-- Market stream (price, 24h change, RSI, volume ratio), signal feed (last 14 days), Ask the desk (4 questions answered
-  from the data on the page).
+| Old page(s) | Now |
+|---|---|
+| Dashboard (`/#dashboard`) + Signals (`/#crypto`) | Command › Signals: one 7-day table with coin/side/status filters, sort, search, and "why refused" |
+| Watchlist (`/#watchlist`) + the add box on Signals | Command › Watchlist: the list (sortable, remove) + Binance search and add |
+| Paper Trading (`/#paper`) | Book › Paper cycle: cycle tiles, open positions (all modes), filterable history with totals |
+| Session Guard (`/#guard`) | Book › Session guard: same flags and drift table, from the paper book |
+| Accuracy (`/#accuracy`) | Evidence › Accuracy: calibration, move-size histogram, accuracy by setup |
+| Historic Data (`/#historic`) | Evidence › History: archive tiles + filterable archive table |
+| Research report + v2 shadow summary | Evidence › Research (full v2 page stays a tool) |
+| Database dump (`/data`) | System › Data: every table, expandable, newest rows |
+| Debug feed + perf | System › Diagnostics: feed state per coin, route/job speed, probe links |
+| Swing scan, AI budget, news pauses, engine facts | System › Health |
 
-**Book**: open swing positions in R on a −1R…+3R bar with stop, target, entry, mark and time left; closed swing
-trades (win rate, avg R, total R, last 15); taken vs skipped by the market filter.
+### Every old page and where it goes now
 
-**Evidence**: expected numbers from the 5-year backtest; live results per strategy (trades, wins, avg R, total R);
-armed strategies; links to Audit, Accuracy, Chart, Historic data, Market moves, Price outlook, Pipeline, v2 shadow,
-Journal, Mirror.
-
-**System**: last swing scan per coin@timeframe; AI budget per model (tokens or calls vs daily limit, cooldowns);
-engine facts (uptime, symbols, paper/swing/filter/live modes, wallet, excluded coins); links to Settings, Keys,
-Watchlist, Session guard, Simulator, Data, API list, Diagnostics, Classic dashboard.
-
-### Redirects and old links
-
-| Old address | Now |
+| Old address | Behaviour |
 |---|---|
 | `/` | 302 → `/command` |
-| `/#dashboard`, `/#paper`, `/#crypto`, `/#mirror`, `/#guard`, `/#accuracy`, `/#historic`, `/#watchlist`, `/#simulator` | The browser keeps the hash through the redirect; the portal script sends any of these to `/classic#…`, so every old bookmark still lands on the same view |
-| Old one-page dashboard | `/classic` (unchanged; its page-group strip now points at `/classic#…`) |
-| `/audit` `/chart` `/moves` `/predict` `/pipeline` `/v2` `/journal` `/data` `/settings` `/keys` `/api-docs` | Unchanged, linked from Evidence or System. Their "← Dashboard" links go to `/`, i.e. the new portal |
+| `/classic` (no hash) | → `/command` |
+| `/classic#dashboard`, `#crypto` | → `/command/signals` |
+| `/classic#watchlist` | → `/command/watchlist` |
+| `/classic#paper` / `#guard` | → `/book/paper` / `/book/guard` |
+| `/classic#accuracy` / `#historic` | → `/evidence/accuracy` / `/evidence/history` |
+| `/classic#mirror`, `/classic#simulator` | Stay (tools) under the new header; the old sidebar is hidden |
+| `/data` | 301 → `/system/data` |
+| `/<hub>/<tool page>` (e.g. `/book/simulator`) | Forwarded to the tool's address |
+| `/predict` `/moves` `/chart` `/audit` `/settings` `/settings/classic` `/keys` `/journal` `/v2` `/pipeline` `/api-docs` | Same address, now with the portal header (hub + its pages + theme + paper/live badge) and the new skin. Their old "← Dashboard" links, nav rows, sidebar and theme pickers are hidden |
 
-Phase 2 (not done): rebuild those deep pages in the new style inside their hub, then turn their routes into
-redirects to `/<hub>?tab=…`.
+Hash anchors never reach the server, so the `/classic#…` forwards run in `chrome.js` before the old page loads its
+data (also on a hash change while on `/classic`).
 
----
-
-## 4. Code
+## 4. Code: micro UI architecture
 
 ```
-scheduler/portal.py            routes + 3 small APIs, registered from health.make_app
-scheduler/portal/portal.html   page shell, all four hubs (sections toggled by path)
-scheduler/portal/portal.css    palettes, layout, motion
-scheduler/portal/portal.js     polling, rendering, routing (no framework, no build)
-tests/test_portal.py           routes, redirect, asset whitelist, candles, signals
-design/revamp/                 the design boards
+scheduler/portal.py              routes, redirects, versioned assets, chrome_snippet(), 3 small APIs
+scheduler/portal/
+  nav.js                         the navigation map (hubs → pages → tools → aliases)            ~4 KB
+  core.js                        store · component kit · widget runtime · shell (router, strip, theme)
+  hubs/command.js                Command widgets + views     (loaded on first visit to the hub)
+  hubs/book.js                   Book widgets + views
+  hubs/evidence.js               Evidence widgets + views
+  hubs/system.js                 System widgets + views
+  portal.html / portal.css       the shell page and its styles (palettes, components, motion)
+  chrome.js / chrome.css         header + brutal skin for the server-rendered tool pages
+tests/test_portal.py             routes, redirects, assets/caching, tool-page header, nav ↔ views ↔ widgets wiring
+design/revamp/                   the design boards
 ```
+
+### The pieces
+
+- **Store** (`UI.Store`): one entry per endpoint (`Store.def(key, url, everyMs)`). Widgets subscribe with
+  `Store.use(key, fn)`; an endpoint polls only while something on screen uses it, every subscriber shares one
+  request, and polling pauses while the browser tab is hidden (stale entries refresh when it comes back). The coin
+  feed, swing book, meta and signals are shared by the shell (ticker, status strip, toast) and the widgets.
+- **Widgets** (`UI.widget(name, def)`): self-contained units. `def.uses` lists store keys; `mount` builds static DOM;
+  `render(el, D, ctx)` draws from the data snapshot `D`; `on: {act: fn}` handles any `[data-act]` element inside it
+  (click, input and change are delegated once for the whole page); `ctx.s` is the widget's own state;
+  `ctx.every()` timers are cleared on unmount. A widget that throws shows "This panel failed to draw" instead of
+  breaking the page. `title` gives it the standard panel header; `bare` renders without a panel.
+- **Views** (`UI.view("hub/page", rows)`): a page is rows of cells; a cell is a widget name, `{w, size}` with size
+  `grow` / `side` / `full`, or `{stack: [...]}`. Rows wrap, so every page stacks on a phone.
+- **Components** (`UI.C`, pure functions returning escaped HTML): `panel` (via widget title), `tiles`, `table`
+  (sortable headers via `C.sortState`), `select`, `search`, `chip`, `tag`, `side`, `signed`, `meter`, `rbar`, `bars`,
+  `hist`, `flag`, `links`, `pre`, `empty`, `loading`, `state` (standard loading / error / admin-login line for a store
+  key).
+- **Shared facts** (`UI.F`): `coin`, `regime` (market filter), `openSwing` (positions in R), `riskPct`, `budgetShare`,
+  `live`. **Helpers** (`UI.U`): `esc`, price/percent/R/₹ formatting, `ago`, `stamp`, `hours`, `median`.
+- **Network** (`UI.Net`): `get`, and `post` with the same API-token flow as the classic pages (localStorage
+  `api_token`, asked once on a 401) for watchlist add/remove.
+
+### Adding a page
+
+1. Add `{ id, label, native: true }` to the hub in `nav.js` (or `url: "/x"` for a tool).
+2. In `hubs/<hub>.js`: `UI.widget(...)` for each panel, then `UI.view("<hub>/<id>", rows)`.
+3. A new endpoint: `UI.Store.def("key", "/api/...", everyMs)` in `core.js`.
+`tests/test_portal.py` fails if a native page has no view, a view names a missing widget, or a widget uses an
+undefined store key.
+
+### Performance
+
+- Hub modules load only when their hub is opened (Command alone on first visit).
+- Assets are served as `/portal/static/<name>?v=<content hash>` with `Cache-Control: immutable, max-age=1y`; the
+  shell and tool pages always reference the current hash, so a deploy is picked up at once and nothing is
+  downloaded twice. Text responses over 1 KB are gzipped by the existing middleware.
+- Only the open page's widgets are mounted; leaving a page unsubscribes its endpoints and clears its timers.
+- One request per endpoint however many widgets read it; no polling in a hidden tab.
 
 ### Routes (`scheduler/portal.py`)
 
 | Route | What |
 |---|---|
 | `GET /` | 302 → `/command` |
-| `GET /command`, `/book`, `/evidence`, `/system` | The same HTML shell; the script picks the hub from the path and uses `history.pushState` to switch |
-| `GET /portal/static/{name}` | `portal.css` / `portal.js` only (fixed whitelist, anything else is 404) |
-| `GET /api/portal/candles?symbol=&tf=4h&limit=48` | Closed bars via `analysis.swing_book.fetch_bars` (the same Binance futures klines call the swing scan uses), cached 60 s per symbol+tf; bad input → 400, exchange error → 502 |
-| `GET /api/portal/signals?days=14&limit=40` | Swing signals newest first with `status` = TRADED / NOT TRADED / FILTER BLOCK (same rule as the classic Signals tab: no skip reason = traded), the human skip reason, and the regime tag (`btc_vol_rank`, `filter_skip`) |
+| `GET /<hub>`, `/<hub>/<page>` | The shell (page must be a slug, else 404); the router picks the view, forwards tools, and normalises unknown pages to the hub |
+| `GET /data` | 301 → `/system/data` |
+| `GET /portal/static/<asset>` | Whitelisted assets only (`ASSETS`); `?v=` matching the content hash → cached for a year, otherwise `no-cache` |
+| `GET /api/portal/candles?symbol=&tf=4h&limit=48` | Closed bars via `analysis.swing_book.fetch_bars`, cached 60 s per symbol+tf; bad input → 400, exchange error → 502 |
+| `GET /api/portal/signals?days=14&limit=40` | Swing signals with `status` TRADED / NOT TRADED / FILTER BLOCK, the human skip reason and the regime tag |
 | `GET /api/portal/meta` | `live_trading_mode`, `paper_trading_enabled`, `swing_enabled`, `regime_filter`, `vol_rank_max` |
 
-All three APIs are listed on `/api-docs` (group "Portal").
+The tool pages get the header through `chrome_snippet()`, appended to the shared head snippet in
+`scheduler/health.py` (and to `/keys`, which does not use it). The old theme system now always applies the
+`brutal` theme in the palette picked in the portal (`localStorage` `portal-palette`); `chrome.css` maps the old
+pages' colour variables onto the four palettes.
 
 ### Data the page reads, and how often
 
-| Source | Every | Used for |
-|---|---|---|
-| `/api/crypto/coins` | 5 s | Ticker, radar, chart price and forming candle, stream, feed freshness |
-| `/api/swing` | 30 s | Filter state, open/closed swing trades, scan, rules, expected numbers, take-vs-skip |
-| `/api/portal/signals` | 30 s | Feed, decision trace, toast on a new signal |
-| `/api/status` | 30 s | Uptime, symbols tracked |
-| `/api/llm/budget` | 60 s | AI budget |
-| `/api/portal/meta` | 5 min | Paper/live badge, modes |
-| `/api/portal/candles` | on coin change + 2 min | Chart |
-
-Polling pauses while the tab is hidden.
+| Store key | Endpoint | Every | Used by |
+|---|---|---|---|
+| `coins` | `/api/crypto/coins` | 5 s | ticker, strip, chart, radar, stream, watchlist, positions in R |
+| `swing` | `/api/swing` | 30 s | strip, pipeline, gate, swing book, strategies, scan, engine |
+| `signals` | `/api/portal/signals` | 30 s | feed, trace, toast, Ask the desk |
+| `meta` | `/api/portal/meta` | 5 min | paper/live badge, modes |
+| `status` | `/api/status` | 30 s | pipeline, engine |
+| `budget` | `/api/llm/budget` | 60 s | pipeline, AI budget |
+| `paper` | `/api/paper` | 20 s | paper cycle, session guard |
+| `history7` | `/api/signals/history?days=7` | 60 s | Signals |
+| `archive` | `/api/signals/history?days=365&before=7` | 5 min | History |
+| `accuracy` | `/api/signals/accuracy` | 5 min | Accuracy, Signals (cost floor) |
+| `research` / `v2` | `/api/research`, `/api/v2/shadow` | 5 min | Research |
+| `events` | `/api/events` | 2 min | Health |
+| `debug` / `perf` | `/api/debug`, `/api/debug/perf` | 30 s / 60 s | Diagnostics (perf needs admin login) |
+| `tables` | `/api/tables?limit=50` | on open + Reload | Data |
+| `candles:<SYM>` | `/api/portal/candles` | 2 min | chart (one key per coin viewed) |
 
 ### Conventions
 
-- Escape every string that goes into `innerHTML` (`esc()` in `portal.js`).
+- Escape every string that goes into HTML (`UI.U.esc`; the components already do).
 - Colours only through the CSS variables; never hard-code a palette colour in JS.
 - Up = `--up`, down/short/skip = `--dn`. Text on an accent fill uses `--on-acc`.
 - Touch targets ≥ 44 px; layout stacks at phone width with no horizontal page scroll (wide tables scroll in their box).
-
----
+- Money from the paper book is INR (`UI.U.inr`); prices stay in USDT.
 
 ## 5. Verifying
 
-- `python -m pytest -q`: 1,537 passed, 3 skipped (7 Oct 2026), including `tests/test_portal.py`.
-- Browser smoke test (headless Chromium against the real app with canned API data): all four hubs render, no console
-  errors, theme switch and Ask the desk work, no horizontal scroll at 1440 px or at 390 px (phone).
+- `python -m pytest -q`: 1,544 passed, 3 skipped (7 Oct 2026), including `tests/test_portal.py` (routes, redirects,
+  asset caching, header on every tool page, nav ↔ views ↔ widgets ↔ store keys).
+- Browser smoke test (headless Chromium against the real app with canned API data): all 13 native pages render with
+  no console errors and no failed panels; all 12 tool pages show the header with the right hub and page highlighted;
+  the `/classic#…`, `/classic`, `/data` and `/<hub>/<tool>` redirects land where the table above says; filters and
+  back/forward work in-app; no horizontal scroll at 1440 px or 390 px.
 
-## 6. Next steps
+## 6. Review checklist before deploying
 
-1. Owner reviews `/command` on production after deploy (deploy = push to `main`).
-2. Phase 2: rebuild Audit, Accuracy, Historic and Chart inside Evidence; Settings and Keys inside System; then redirect
-   the old routes.
-3. Optional: per-hub deep links (`/command?coin=SOLUSDT`), a "what changed since you last looked" digest on Command.
+1. Open `/command`, then click through every hub and every page; check the tools (↗) open with the same header.
+2. Try two old bookmarks: `/#paper` and `/data`.
+3. Switch the four palettes in the header; open `/settings` and `/audit` to see the tool pages follow.
+4. Add and remove a pair on Command › Watchlist (needs the API token, same as before).
+5. Deploy = merge to `main`.
+
+Later, optional: rebuild the remaining tools (Audit, Chart, Settings, Keys, Simulator, Mirror) as native widgets one
+by one; each then only needs its nav entry switched from `url` to `native` and an alias for the old address.

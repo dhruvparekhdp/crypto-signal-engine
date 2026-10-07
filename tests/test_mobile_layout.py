@@ -324,8 +324,10 @@ class TestTheming(unittest.TestCase):
                 with self.subTest(theme=theme, key=k):
                     self.assertIn(k, block)
 
-    def test_the_default_is_no_longer_blue(self):
-        self.assertIn("||'amber'", self.snippet)
+    def test_every_page_uses_the_portal_skin(self):
+        """One look everywhere: the brutal skin, in the palette chosen in the portal header."""
+        self.assertIn("var t='brutal'", self.snippet)
+        self.assertIn("portal-palette", self.snippet)
 
     def test_the_default_is_a_named_theme_so_overrides_apply(self):
         """
@@ -414,19 +416,24 @@ class TestEveryDestinationIsReachableOnAPhone(unittest.TestCase):
         self.assertLess(default, phone,
                         "the default must come first or it overrides the phone rule")
 
-    def test_every_former_destination_is_in_a_page_group(self):
-        """Nothing the old menu reached may become unreachable: every page is listed in HUB_GROUPS."""
-        hub = self.html[self.html.index("window.HUB_GROUPS"[:0] + "var G = ["):self.html.index("window.HUB_GROUPS = G")]
+    def test_every_former_destination_is_in_the_portal_navigation(self):
+        """Nothing the old menu reached may become unreachable: the portal's nav map (or a hub's
+        own links) lists every former destination, as a page, a tool or an alias."""
+        from scheduler.portal import STATIC
+        nav = (STATIC / "nav.js").read_text() + "".join(p.read_text() for p in (STATIC / "hubs").glob("*.js"))
         for url in ("/classic#dashboard", "/classic#crypto", "/classic#mirror", "/classic#paper", "/classic#guard",
-                    "/classic#accuracy", "/classic#historic", "/classic#watchlist", "/classic#simulator", "/audit", "/predict", "/moves", "/chart", "/pipeline", "/v2",
-                    "/settings", "/data", "/api/debug/binance", "/api-docs", "/journal"):
+                    "/classic#accuracy", "/classic#historic", "/classic#watchlist", "/classic#simulator",
+                    "/audit", "/predict", "/moves", "/chart", "/pipeline", "/v2",
+                    "/settings", "/data", "/api/debug/binance", "/api-docs", "/journal", "/keys"):
             with self.subTest(url=url):
-                self.assertIn(f'"{url}"]', hub)
+                self.assertIn(f'"{url}"', nav)
 
-    def test_every_in_page_link_has_a_tab_to_open(self):
+    def test_every_classic_anchor_has_a_tab_to_open(self):
         import re
-        hub = self.html[self.html.index("var G = ["):self.html.index("window.HUB_GROUPS = G")]
-        for tab in re.findall(r'"/classic#(\w+)"', hub):
+
+        from scheduler.portal import STATIC
+        nav = (STATIC / "nav.js").read_text()
+        for tab in re.findall(r'"/classic#(\w+)"', nav):
             with self.subTest(tab=tab):
                 self.assertIn(f'id="tab-{tab}"', self.html)
 
@@ -538,9 +545,10 @@ class TestTheNavBarActuallyFits(unittest.TestCase):
         """
         self.assertIn(".sidebar.more-open .side-secondary{order:-1", self.phone)
 
-    def test_the_standalone_pages_carry_the_group_strip_too(self):
-        """A group strip only on the dashboard would strand you on /chart or /pipeline."""
-        self.assertIn("renderHub", health._THEME_SNIPPET)
+    def test_the_standalone_pages_carry_the_portal_header_too(self):
+        """A header only on the portal would strand you on /chart or /pipeline."""
+        self.assertIn("/portal/static/chrome.js", health._THEME_SNIPPET)
+        self.assertIn("/portal/static/nav.js", health._THEME_SNIPPET)
 
 
 class TestPricesAreFormatted(unittest.TestCase):

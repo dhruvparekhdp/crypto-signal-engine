@@ -1,0 +1,73 @@
+/* Portal chrome + the "brutal" skin for server-rendered tool pages. Spec: docs/PORTAL_REVAMP.md §2–3.
+   Loaded on every legacy page through the shared head snippet. Two parts:
+   1. .pc-* : the shared header (hubs, the hub's pages, theme, paper/live badge)
+   2. html[data-theme="brutal"] : maps the legacy pages' own colour variables onto the four portal
+      palettes, squares the corners and hides their old one-off navigation. */
+@import url("https://fonts.googleapis.com/css2?family=Archivo:wght@500;700;900&family=JetBrains+Mono:wght@400;700&display=swap");
+
+html[data-palette="sage"],html:not([data-palette]){--pc-acc:#A9D3B6;--pc-up:#A9D3B6;--pc-dn:#B9AAF2}
+html[data-palette="champagne"]{--pc-acc:#E3C58D;--pc-up:#6CC9AE;--pc-dn:#A99BF0}
+html[data-palette="ice"]{--pc-acc:#94C5F5;--pc-up:#94C5F5;--pc-dn:#EDA982}
+html[data-palette="lime"]{--pc-acc:#C6F432;--pc-up:#C6F432;--pc-dn:#9B8CFF}
+
+/* ---- 1. header ---- */
+.pc-bar{position:relative;z-index:30;background:#0A0A0A;color:#E8E6DF;border-bottom:3px solid #E8E6DF;padding:12px 16px 0;
+  font-family:'Archivo',system-ui,sans-serif;display:flex;flex-direction:column;gap:10px;box-sizing:border-box;width:100%}
+.pc-bar *{box-sizing:border-box}
+.pc-row{display:flex;flex-wrap:wrap;gap:10px;align-items:center;justify-content:space-between;max-width:1400px;width:100%;margin:0 auto}
+.pc-logo{display:flex;border:3px solid #E8E6DF;box-shadow:4px 4px 0 var(--pc-acc);text-decoration:none;color:#E8E6DF}
+.pc-logo-a{background:var(--pc-acc);color:#0A0A0A;padding:4px 10px;font-weight:900;font-size:20px;letter-spacing:-.04em;border-right:3px solid #E8E6DF}
+.pc-logo-b{padding:4px 10px;font-weight:900;font-size:20px;letter-spacing:-.04em}
+.pc-tabs{display:flex;flex-wrap:wrap;gap:8px}
+.pc-tab{font:900 14px 'Archivo',system-ui,sans-serif;min-height:44px;padding:0 14px;display:flex;align-items:center;border:3px solid #E8E6DF;
+  box-shadow:3px 3px 0 var(--pc-acc);background:#0A0A0A;color:#E8E6DF!important;text-decoration:none}
+.pc-tab:hover{transform:translate(-1px,-1px);box-shadow:5px 5px 0 var(--pc-acc)}
+.pc-tab.on{background:var(--pc-acc);color:#0A0A0A!important}
+.pc-right{display:flex;gap:10px;align-items:center}
+.pc-mode{font:700 12px 'JetBrains Mono',monospace;padding:8px 10px;background:#E8E6DF;color:#0A0A0A}
+.pc-mode.live{background:var(--pc-dn)}
+.pc-sw{display:flex;gap:4px}
+.pc-swb{width:30px;height:26px;padding:0;border:2px solid #555;background:none;display:flex;cursor:pointer}
+.pc-swb i{flex:1;display:block}
+.pc-swb.on{border-color:#E8E6DF;outline:2px solid var(--pc-acc);outline-offset:1px}
+.pc-subs{display:flex;flex-wrap:wrap;max-width:1400px;width:100%;margin:0 auto;border-top:1px solid #E8E6DF33}
+.pc-sub{font:700 12px 'JetBrains Mono',monospace;letter-spacing:.04em;text-transform:uppercase;padding:0 14px;min-height:42px;display:flex;align-items:center;
+  color:#A3A39A!important;text-decoration:none;border-right:1px solid #E8E6DF22}
+.pc-sub:hover{color:#E8E6DF!important;background:#ffffff10}
+.pc-sub.on{background:#E8E6DF;color:#0A0A0A!important}
+.pc-tab:focus-visible,.pc-sub:focus-visible,.pc-swb:focus-visible,.pc-logo:focus-visible{outline:3px solid var(--pc-dn);outline-offset:2px}
+@media (max-width:640px){
+  .pc-tab{flex:1 1 40%;justify-content:center;font-size:13px}
+  .pc-subs{flex-wrap:nowrap;overflow-x:auto}
+  .pc-sub{white-space:nowrap}
+}
+
+/* ---- 2. brutal skin over the legacy theme variables ---- */
+html[data-theme="brutal"]{
+  --bg:#0A0A0A; --panel:#0F100E; --panel2:#121411; --sunk:#050505;
+  --line:#3a3a36; --line2:#262624;
+  --text:#E8E6DF; --text-strong:#FFFFFF; --muted:#A3A39A; --muted2:#7d7d76;
+  --accent:var(--pc-acc); --accent2:var(--pc-acc); --accent-soft:var(--pc-acc);
+  --pos:var(--pc-up); --pos-strong:var(--pc-up); --pos-btn:var(--pc-up);
+  --neg:var(--pc-dn); --neg-strong:var(--pc-dn); --neg-btn:var(--pc-dn);
+  --primary:var(--pc-acc);
+  /* keys page */
+  --card:#0F100E; --fg:#E8E6DF; --mut:#A3A39A; --ok:var(--pc-up); --bad:var(--pc-dn); --warn:var(--pc-acc); --acc:var(--pc-acc);
+}
+html[data-theme="brutal"] body{background:#0A0A0A!important;color:#E8E6DF!important;font-family:'Archivo',system-ui,sans-serif}
+html[data-theme="brutal"] h1,html[data-theme="brutal"] h2{font-weight:900!important;letter-spacing:-.01em}
+html[data-theme="brutal"] .card,html[data-theme="brutal"] .pnl,html[data-theme="brutal"] .cr-coin,html[data-theme="brutal"] .cr-sig-card,
+html[data-theme="brutal"] .tbl tr,html[data-theme="brutal"] article,html[data-theme="brutal"] .stat,html[data-theme="brutal"] section.card{
+  border-radius:0!important;border:2px solid #3a3a36!important}
+html[data-theme="brutal"] button,html[data-theme="brutal"] input,html[data-theme="brutal"] select,html[data-theme="brutal"] textarea,
+html[data-theme="brutal"] .cr-page-btn,html[data-theme="brutal"] .pill,html[data-theme="brutal"] .pt-chip,html[data-theme="brutal"] .sub-tab-btn{border-radius:0!important}
+html[data-theme="brutal"] table,html[data-theme="brutal"] code,html[data-theme="brutal"] pre,html[data-theme="brutal"] .mono{font-family:'JetBrains Mono',ui-monospace,monospace}
+html[data-theme="brutal"] a{color:var(--pc-acc)}
+
+/* old one-off navigation, replaced by the header above */
+html.pc-on #sidebar,html.pc-on .more-scrim,html.pc-on #hub-strip,html.pc-on .side-themes,html.pc-on .theme-row,
+html.pc-on a.nav-btn,html.pc-on .topbar>a[href],html.pc-on .nav-links,html.pc-on header>nav,html.pc-on .legacy-nav,
+html.pc-on #sec-themes,html.pc-on a[href="#sec-themes"],html.pc-on body>div.sub>a[href="/settings"]{display:none!important}
+html.pc-on .app{display:block}
+html.pc-on .main{min-height:auto}
+@media (max-width:640px){ html.pc-on .main-body{padding-bottom:16px!important} }

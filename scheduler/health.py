@@ -7021,59 +7021,6 @@ load(); setInterval(load,300000);
 """
 
 
-_HUB_SNIPPET = """
-<style>
-/* Page groups: one strip of related pages at the top of every page (see HUB_GROUPS). */
-.hub-strip{display:flex;gap:6px;align-items:center;flex-wrap:wrap;padding:8px 12px;margin:0 0 12px;
-  border-bottom:1px solid rgba(127,127,127,.25);font:13px/1.3 system-ui,-apple-system,"Segoe UI",sans-serif}
-.hub-strip b{margin-right:6px;font-size:11px;letter-spacing:.08em;text-transform:uppercase;opacity:.65}
-.hub-strip a{padding:4px 11px;border-radius:999px;text-decoration:none;color:inherit;opacity:.78;
-  border:1px solid rgba(127,127,127,.32);white-space:nowrap}
-.hub-strip a:hover{opacity:1}
-.hub-strip a.on{opacity:1;font-weight:600;background:rgba(127,127,127,.2)}
-@media(max-width:640px){.hub-strip{flex-wrap:nowrap;overflow-x:auto;-webkit-overflow-scrolling:touch}}
-</style>
-<script>
-(function(){
-  /* Six groups instead of twenty menu entries. Every page still exists at its own address. */
-  var G = [
-    {id:"trading", label:"Trading", items:[["Overview","/classic#dashboard"],["Paper book","/classic#paper"],["Session guard","/classic#guard"]]},
-    {id:"signals", label:"Signals", items:[["Live signals","/classic#crypto"],["Mirror","/classic#mirror"],["Accuracy","/classic#accuracy"],["Audit","/audit"],["History","/classic#historic"]]},
-    {id:"market", label:"Market", items:[["Price outlook","/predict"],["Market moves","/moves"],["Chart","/chart"]]},
-    {id:"research", label:"Research", items:[["Pipeline","/pipeline"],["v2 shadow","/v2"],["Simulator","/classic#simulator"]]},
-    {id:"settings", label:"Settings", items:[["Settings","/settings"],["Keys","/keys"],["Watchlist","/classic#watchlist"]]},
-    {id:"admin", label:"Admin", items:[["Data","/data"],["Diagnostics","/api/debug/binance"],["API list","/api-docs"],["Journal","/journal"]]}
-  ];
-  window.HUB_GROUPS = G;
-  function here(){ return location.pathname === "/classic" ? "/classic" + (location.hash || "#dashboard") : location.pathname.replace(/\\/$/, ""); }
-  window.hubGroupOf = function(url){
-    for (var i = 0; i < G.length; i++) for (var j = 0; j < G[i].items.length; j++) if (G[i].items[j][1] === url) return G[i];
-    return null;
-  };
-  window.renderHub = function(){
-    var cur = here(), g = window.hubGroupOf(cur), el = document.getElementById("hub-strip");
-    if (!g) { if (el) el.remove(); return; }
-    if (!el) {
-      el = document.createElement("nav"); el.id = "hub-strip"; el.className = "hub-strip"; el.setAttribute("aria-label", g.label + " pages");
-      var head = document.querySelector(".main-head");
-      if (head && head.parentNode) head.parentNode.insertBefore(el, head); else document.body.insertBefore(el, document.body.firstChild);
-    }
-    var onMain = location.pathname === "/classic";
-    el.innerHTML = "<b>" + g.label + "</b>" + g.items.map(function(it){
-      var tab = onMain && it[1].indexOf("/classic#") === 0 ? it[1].slice(9) : "";
-      return '<a href="' + it[1] + '"' + (it[1] === cur ? ' class="on" aria-current="page"' : "") + (tab ? ' data-hub-tab="' + tab + '"' : "") + ">" + it[0] + "</a>";
-    }).join("");
-  };
-  document.addEventListener("click", function(e){
-    var a = e.target.closest && e.target.closest("[data-hub-tab]");
-    if (a && typeof window.switchTab === "function") { e.preventDefault(); window.switchTab(a.getAttribute("data-hub-tab")); }
-  });
-  document.addEventListener("DOMContentLoaded", window.renderHub);
-  window.addEventListener("hashchange", window.renderHub);
-})();
-</script>
-"""
-
 _THEME_SNIPPET = """
 <style>
 /* Theme palettes */
@@ -7247,7 +7194,9 @@ html[data-theme="light"] .src,html[data-theme="light"] .source-tag{background:#d
 </style>
 <script>
 (function(){
-  var t=localStorage.getItem('site_theme')||'amber';
+  // One look everywhere now: the portal's brutal skin, in the palette picked in the portal header.
+  var t='brutal';
+  try{document.documentElement.setAttribute('data-palette',localStorage.getItem('portal-palette')||'sage');}catch(e){}
   document.documentElement.setAttribute('data-theme',t);
   // The dots render after this runs, so mark the active one once they exist.
   document.addEventListener('DOMContentLoaded',function(){
@@ -7261,7 +7210,7 @@ html[data-theme="light"] .src,html[data-theme="light"] .source-tag{background:#d
 })();
 function setSiteTheme(t){
   localStorage.setItem('site_theme',t);
-  document.documentElement.setAttribute('data-theme',t);
+  document.documentElement.setAttribute('data-theme','brutal');
   document.querySelectorAll('.theme-sw').forEach(function(b){b.classList.toggle('on',b.dataset.t===t);});
   document.querySelectorAll('.side-themes .dot').forEach(function(d){d.classList.toggle('on',d.dataset.t===t);});
 }
@@ -7508,7 +7457,11 @@ _HTML = (
     .replace("__MIN_TARGET_PCT__", f"{_SCALP.min_target_pct * 100:.4f}")
     .replace("__PAPER_LEVERAGE__", f"{_SETTINGS.paper_leverage:g}")
 )
-_THEME_SNIPPET = _THEME_SNIPPET + _HUB_SNIPPET
+# Every server-rendered page gets the portal header (hubs + the hub's pages) and skin; see
+# scheduler/portal.py and docs/PORTAL_REVAMP.md. This replaced the older page-group strip.
+from scheduler.portal import chrome_snippet as _chrome_snippet  # noqa: E402
+
+_THEME_SNIPPET = _THEME_SNIPPET + _chrome_snippet()
 _HTML = _HTML.replace("</head>", _THEME_SNIPPET + "</head>")
 _DATA_HTML = _DATA_HTML.replace("</head>", _THEME_SNIPPET + "</head>")
 _SETTINGS_HTML = _SETTINGS_HTML.replace("</head>", _THEME_SNIPPET + "</head>")
@@ -7635,7 +7588,6 @@ async def make_app(runner) -> web.Application:
     app.router.add_get("/classic", _dashboard)
     from scheduler.portal import register as _register_portal
     _register_portal(app)
-    app.router.add_get("/data", _data_page)
     app.router.add_get("/api/tables", _bind(_api_tables))
     app.router.add_get("/health", _bind(_health))
     app.router.add_get("/api/status", _bind(_api_status))
@@ -7774,7 +7726,7 @@ body { background: #0b1120; color: #f8fafc; font-family: -apple-system, BlinkMac
 <body>
 <div class="container">
   <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:16px;">
-    <div style="display:flex; gap:16px; font-size:13px;">
+    <div class="legacy-nav" style="display:flex; gap:16px; font-size:13px;">
       <a href="/" style="color:#94a3b8; text-decoration:none; font-weight:500;">← Main Dashboard</a>
       <a href="/pipeline" style="color:#38bdf8; text-decoration:none; font-weight:bold;">⚡ Pipeline Monitor</a>
       <a href="/chart" style="color:#38bdf8; text-decoration:none; font-weight:500;">📊 Interactive TradingView Chart</a>

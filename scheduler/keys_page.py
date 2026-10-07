@@ -130,7 +130,8 @@ async def _admin(request):
 def register(app: web.Application, runner) -> None:
 
     async def page(request):
-        return web.Response(text=PAGE, content_type="text/html")
+        from scheduler.portal import chrome_snippet
+        return web.Response(text=PAGE.replace("</head>", chrome_snippet() + "</head>"), content_type="text/html")
 
     async def api(request):
         denied = await _admin(request)

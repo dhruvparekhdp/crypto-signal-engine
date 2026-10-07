@@ -74,7 +74,9 @@ class TestPrompt(unittest.TestCase):
 class TestPage(unittest.TestCase):
     def test_the_page_is_linked_and_themed(self):
         import scheduler.health as h
-        self.assertIn('["Market moves","/moves"]', h._THEME_SNIPPET)   # reached through the Market page group
+        from scheduler.portal import STATIC
+        self.assertIn('url: "/moves"', (STATIC / "nav.js").read_text())   # Command › Market moves
+        self.assertIn("/portal/static/chrome.js", h._THEME_SNIPPET)          # and the page carries the portal header
         self.assertIn("fmtStamp", h._MOVES_HTML)
         self.assertIn("<title>Market Moves</title>", h._MOVES_HTML)
 
