@@ -116,7 +116,7 @@ def _embedder():
         return _aux["emb"]
 
 
-api = FastAPI(title="Crypto Analyst LLM")
+api = FastAPI(title="Crypto Analyst LLM")             # kept for local tests; the Space uses Gradio's own app
 
 
 class TextsReq(BaseModel):
@@ -199,8 +199,22 @@ demo = gr.Interface(fn=ui, inputs=[gr.Textbox(label="Question", value="Why did B
                     outputs=gr.Code(label="Answer", language="json"), title="Crypto Analyst LLM (CPU)",
                     description="Manual tester (1-3 minutes per answer on the free CPU). "
                                 "The trading engine calls /v1/chat/completions.")
-app = gr.mount_gradio_app(api, demo, path="/")
+
+# On a Gradio Space the platform serves `demo` itself on port 7860, so starting our own server collides with it
+# (crashed with "address already in use"). Launch Gradio, then attach the API routes to its FastAPI app.
+API_ROUTES = [("/health", health, ["GET"]), ("/v1/chat/completions", chat, ["POST"]),
+              ("/v1/classify", classify, ["POST"]), ("/v1/embed", embed, ["POST"])]
+
+
+def attach_routes(fastapi_app) -> None:
+    for path, fn, methods in API_ROUTES:
+        fastapi_app.add_api_route(path, fn, methods=methods)
+    # Gradio registers a catch-all page route; ours must be matched first
+    fastapi_app.router.routes.sort(key=lambda r: 0 if getattr(r, "path", "") in {p for p, _, _ in API_ROUTES} else 1)
+
 
 if __name__ == "__main__":
-    import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=7860)
+    fastapi_app, _, _ = demo.queue(default_concurrency_limit=1).launch(
+        server_name="0.0.0.0", server_port=int(os.getenv("PORT", "7860")), prevent_thread_lock=True, show_error=True)
+    attach_routes(fastapi_app)
+    demo.block_thread()
