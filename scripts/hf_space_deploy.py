@@ -9,7 +9,7 @@ from __future__ import annotations
 import asyncio
 from pathlib import Path
 
-FILES = ("app.py", "requirements.txt", "README.md")
+FILES = ("app.py", "requirements.txt", "packages.txt", "README.md")
 
 
 def deploy(token: str, repo_id: str, folder: str = "huggingface_space") -> dict:

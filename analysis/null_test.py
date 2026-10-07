@@ -23,9 +23,10 @@ precisely and only what a detector claims to know.
 
 Reading the result
 ------------------
-`p_value` is the share of random trials that matched or beat the real signals.
-Above ~0.5 the detectors are doing nothing. Below 0.05 there is something
-worth keeping, on this sample. It is a permutation test rather than a
+`p_value` is (random trials that matched or beat the real signals + 1) / (trials + 1),
+so it is never 0. Above ~0.5 the detectors are doing nothing. "Beats random" needs
+p <= 0.05 / n_tried, where n_tried is how many configurations were tried to find this
+one (analysis/significance.py); with one configuration that is plain p <= 0.05. It is a permutation test rather than a
 parametric one because trade returns are nowhere near normal — a handful of
 trailing winners carry the whole distribution, and a t-test on that lies.
 
@@ -41,6 +42,8 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 
 import structlog
+
+from analysis.significance import judge, perm_p
 
 log = structlog.get_logger()
 
@@ -60,11 +63,12 @@ class NullResult:
     random_sd: float
     trials: int
     beaten_by: int
+    n_tried: int = 1                      # configurations tried to find this one (Bonferroni)
 
     @property
     def p_value(self) -> float:
-        """Share of random trials that matched or beat the real signals."""
-        return self.beaten_by / self.trials if self.trials else 1.0
+        """(Random trials that matched or beat the real signals + 1) / (trials + 1); never 0."""
+        return perm_p(self.beaten_by, self.trials)
 
     @property
     def edge(self) -> float:
@@ -73,11 +77,7 @@ class NullResult:
 
     @property
     def verdict(self) -> str:
-        if self.p_value <= 0.05:
-            return "beats random"
-        if self.p_value >= 0.50:
-            return "no better than random"
-        return "inconclusive"
+        return judge(self.p_value, self.n_tried)
 
 
 def replay(entries: list[Entry], paths: dict[str, tuple[list[datetime], list[float]]],
@@ -182,6 +182,6 @@ def render(result: NullResult, stop_pct: float, target_pct: float,
         f"(sd {result.random_sd:.1f}, {result.trials} trials)",
         f"  difference              {result.edge:+.1f}%",
         f"  random matched or beat  {result.beaten_by}/{result.trials}"
-        f"  ->  p = {result.p_value:.2f}",
+        f"  ->  p = {result.p_value:.3f}",
         f"  verdict                 {result.verdict.upper()}",
     ])

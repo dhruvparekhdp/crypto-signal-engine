@@ -17,12 +17,14 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
+from analysis.lab import ledger
 from analysis.lab.costs import PRESETS, CostModel
 from analysis.lab.data import LAKE, Bars, available_symbols, load_bars
 from analysis.lab.metrics import by, trade_stats, walk_forward
 from analysis.lab.simulate import COLS, ExitModel, simulate_symbol
 from analysis.lab.strategies import REGISTRY
 from analysis.lab.wallet import WalletConfig, cycle_odds, run_wallet
+from analysis.significance import judge, perm_p
 
 CRYPTO = ["BTCUSDT", "ETHUSDT", "SOLUSDT", "XRPUSDT", "BNBUSDT", "ADAUSDT", "DOGEUSDT", "AVAXUSDT",
           "LINKUSDT", "LTCUSDT", "BCHUSDT", "SUIUSDT"]
@@ -44,6 +46,11 @@ class RunSpec:
     overrides: dict = field(default_factory=dict)   # {strategy_id: {param: value}}
     root: str = str(LAKE)
     seed: int = 1
+    # trial ledger (analysis/lab/ledger.py): a family name records every configuration and sets N for Bonferroni
+    ledger_family: str | None = None
+    ledger_kind: str = "search"
+    hypothesis: str = ""
+    proposed_by: str = "owner"
 
     def window_ms(self):
         ms = lambda s: int(pd.Timestamp(s, tz="UTC").timestamp() * 1000) if s else None
@@ -108,6 +115,26 @@ def work_symbol(args) -> dict:
     return {"symbol": symbol, "trades": trades, "null": null}
 
 
+def _record_trials(spec: RunSpec, summary: pd.DataFrame, syms: list[str], log=print) -> int:
+    """N for Bonferroni: this run's configurations, or the ledger family's count after recording them."""
+    if not spec.ledger_family:
+        return len(summary)
+    data_fp = ledger.data_fingerprint(syms, spec.root)
+    codes, rows = {}, []
+    for _, r in summary.iterrows():
+        sid = r["strategy"]
+        codes.setdefault(sid, ledger.code_digest(sid))
+        tf = spec.sig_tf or REGISTRY[sid].tf
+        params = dict(kv.split("=", 1) for kv in r["params"].split(",") if kv)
+        rows.append({"digest": ledger.trial_digest(sid, params, tf, r["exit"], (spec.start, spec.end), spec.cost,
+                                                   data_fp, codes[sid]),
+                     "cfg": r["cfg"], "timeframe": tf, "symbols": len(syms), "trades": int(r.get("trades", 0) or 0),
+                     "expectancy_r": r.get("expectancy_r"), "null_p": r.get("null_p")})
+    res = ledger.record(rows, spec.ledger_family, spec.ledger_kind, spec.hypothesis, spec.proposed_by)
+    log(f"ledger: {res['new']} new trials, family '{spec.ledger_family}' N={res['n_family']}")
+    return max(res["n_family"], len(summary))
+
+
 def run_lab(spec: RunSpec, workers: int = 6, out_dir: str | None = None, wallets: list[WalletConfig] | None = None,
             log=print) -> dict:
     t0 = time.time()
@@ -146,9 +173,15 @@ def run_lab(spec: RunSpec, workers: int = 6, out_dir: str | None = None, wallets
             means = acc[:, 0] / np.maximum(acc[:, 1], 1)
             s["null_mean_r"] = float(means.mean())
             s["null_sd_r"] = float(means.std())
-            s["null_p"] = float((means >= s["expectancy_r"]).mean())
+            s["null_trials"] = len(means)
+            s["null_p"] = perm_p(int((means >= s["expectancy_r"]).sum()), len(means))   # never 0
         rows.append(s)
     summary = pd.DataFrame(rows)
+    n_tried = _record_trials(spec, summary, syms, log) if len(summary) else 0
+    if "null_p" in summary:
+        summary["n_tried"] = n_tried
+        summary["null_verdict"] = [judge(p, n_tried, t) if p == p else None
+                                   for p, t in zip(summary["null_p"], summary["null_trials"])]
     out = {"spec": {**asdict(spec), "exits": [asdict(e) for e in spec.exits]}, "summary": summary, "trades": trades,
            "elapsed_s": time.time() - t0}
 

@@ -170,7 +170,7 @@ def test_space_deploy_uploads_the_app_privately_on_cpu_and_returns_the_address(t
         from scripts.hf_space_deploy import deploy
         out = deploy("hf_token", "dhruvdp/dhruv-llm", str(tmp_path))
     api.upload_folder.assert_called_once()
-    assert api.upload_folder.call_args.kwargs["allow_patterns"] == ["app.py", "requirements.txt", "README.md"]
+    assert api.upload_folder.call_args.kwargs["allow_patterns"] == ["app.py", "requirements.txt", "packages.txt", "README.md"]
     api.request_space_hardware.assert_called_once_with("dhruvdp/dhruv-llm", "cpu-basic")
     assert out["url"] == "https://dhruvdp-dhruv-llm.hf.space" and out["private"] is True and out["stage"] == "BUILDING"
 

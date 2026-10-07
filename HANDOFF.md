@@ -67,17 +67,19 @@ map; this file has the decisions, results, open work and the owner's rules.
 - **Fine-tune done and better than base** on 114 held-out headlines: valid JSON 98 -> 114, score error 0.21 -> 0.13,
   event accuracy 44% -> 68%; move explanations 0/6 for both (answers cut at 600 tokens: next round). Model:
   private HF repo dhruvdp/crypto-analyst-3b-gguf. The Space is set to it (variables MODEL_REPO/MODEL_FILE, secret
-  HF_TOKEN) and was rebuilding with llama-cpp-python 0.3.2 (prebuilt wheels; 0.3.16 failed to compile).
-- Space hardware must be switched to CPU basic by the owner (API change is paid).
+  HF_TOKEN). **Space RUNNING with it (7 Oct)**: /health ready, /v1/classify 0.1 s, chat 13 s, valid JSON.
+  Startup fixes: launch via Gradio (no own uvicorn), no-op @spaces.GPU for ZeroGPU, musl for the llama.cpp wheel.
+- Space hardware still ZeroGPU: owner to switch to CPU basic (API change is paid).
+- Phase 2 started: honest permutation p (never 0), Bonferroni on N, trial ledger `analysis/lab/ledger.py`
+  (`audit/trial_ledger.jsonl`). Release notes + evening plan: docs/RELEASE_NOTES.md.
 - Application review document (map, wireframes, flowcharts): https://claude.ai/artifact/5erobCpcHL5segVYCyBeHc
 - Local dev server: `scripts/dev_server.sh` (own SQLite DB, no AI keys, port 8090); all 20 pages checked, no JS errors.
 - Laptop AI entry test: last seen 32/150; Tailscale was down on 7 Oct.
 
 ## Open work (in order)
-1. When the Space is RUNNING: check `/health`, `/v1/classify`, a fallback chat answer (keys page "Test" on the
-   Space URL does `/health`); headline scoring then moves to the Space automatically.
-2. Phase 2 of docs/INTEGRATION_PLAN.md: trial ledger, honest null test on swing exits, per-spec live_from,
-   strategy registry + drawdown alarm, leak/cost/known-answer tests, findings ledger.
+1. See docs/RELEASE_NOTES.md "Plan: pending work" (sections A-E) — the current to-do list.
+2. Phase 2 rest: swing null test run, ledger back-fill, v2 N from ledger, registry + live_from + drawdown alarm,
+   leak/cost/known-answer/bad-data tests, findings ledger.
 3. Owner decisions listed in the review document (wallet reset + live_from, sizing leverage target, server home vs
    Sydney after the Binance test).
 3. Owner: update GitHub secret EC2_SSH_KEY; decide paper wallet reset; close port 8080 to the internet (Tailscale).

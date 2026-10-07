@@ -22,12 +22,37 @@ from __future__ import annotations
 import json
 import os
 import re
+import sys
 import threading
 import time
 
 import gradio as gr
 from fastapi import FastAPI, Header, HTTPException
 from pydantic import BaseModel
+
+def _musl_shim() -> None:
+    """The prebuilt llama-cpp-python CPU wheels link against musl libc ("libc.musl-x86_64.so.1: cannot open shared
+    object file"). packages.txt installs musl-dev; expose its libc under that name, by a symlink in /lib if we may
+    write there, else in /tmp with LD_LIBRARY_PATH (read only at process start, hence the re-exec)."""
+    name, src = "libc.musl-x86_64.so.1", "/usr/lib/x86_64-linux-musl/libc.so"
+    if not os.path.exists(src) or os.path.exists(f"/lib/{name}") or os.environ.get("MUSL_SHIM_DONE"):
+        return
+    try:
+        os.symlink(src, f"/lib/{name}")
+        return
+    except OSError:
+        pass
+    shim_dir = "/tmp/musl-shim"
+    os.makedirs(shim_dir, exist_ok=True)
+    if not os.path.exists(f"{shim_dir}/{name}"):
+        os.symlink(src, f"{shim_dir}/{name}")
+    os.environ["LD_LIBRARY_PATH"] = shim_dir + ":" + os.environ.get("LD_LIBRARY_PATH", "")
+    os.environ["MUSL_SHIM_DONE"] = "1"
+    os.execv(sys.executable, [sys.executable] + sys.argv)
+
+
+_musl_shim()
+
 
 MODEL_REPO = os.getenv("MODEL_REPO", "Qwen/Qwen2.5-3B-Instruct-GGUF")
 MODEL_FILE = os.getenv("MODEL_FILE", "qwen2.5-3b-instruct-q4_k_m.gguf")
@@ -53,6 +78,18 @@ def _load():
 
 
 threading.Thread(target=_load, daemon=True).start()
+
+# ZeroGPU hardware refuses to start an app with no @spaces.GPU function ("No @spaces.GPU function detected during
+# startup"). Everything here runs on the CPU, so register a no-op GPU function when the `spaces` package exists; on
+# CPU Basic hardware the import fails and nothing happens.
+try:
+    import spaces
+
+    @spaces.GPU(duration=1)
+    def _gpu_noop() -> bool:
+        return True
+except ImportError:
+    pass
 
 
 def search(query: str, n: int = 5) -> str:
@@ -215,6 +252,7 @@ def attach_routes(fastapi_app) -> None:
 
 if __name__ == "__main__":
     fastapi_app, _, _ = demo.queue(default_concurrency_limit=1).launch(
-        server_name="0.0.0.0", server_port=int(os.getenv("PORT", "7860")), prevent_thread_lock=True, show_error=True)
+        server_name="0.0.0.0", server_port=int(os.getenv("PORT", "7860")), prevent_thread_lock=True, show_error=True,
+        ssr_mode=False)  # SSR puts a Node proxy on 7860 and Python on 7861; the API routes must be on 7860
     attach_routes(fastapi_app)
     demo.block_thread()
