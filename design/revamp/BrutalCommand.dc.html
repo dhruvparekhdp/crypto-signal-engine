@@ -1,0 +1,404 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Brutal Command</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Archivo:wght@500;700;900&amp;family=JetBrains+Mono:wght@400;700&amp;display=swap" rel="stylesheet">
+<style>
+body{margin:0;background:#0A0A0A}
+a{color:var(--acc)}a:hover{color:#FFFFFF}
+@keyframes bcMarq{from{transform:translateX(0)}to{transform:translateX(-50%)}}
+@keyframes bcBlink{0%,49%{opacity:1}50%,100%{opacity:0}}
+@keyframes bcSweep{to{transform:rotate(360deg)}}
+@keyframes bcBlip{0%{opacity:1;transform:translate(-50%,-50%) scale(1.8);box-shadow:0 0 0 0 var(--acc)}12%{opacity:1;transform:translate(-50%,-50%) scale(1);box-shadow:0 0 0 10px var(--acc-0)}100%{opacity:.25;transform:translate(-50%,-50%) scale(1)}}
+@keyframes bcRain{from{transform:translateY(0)}to{transform:translateY(-50%)}}
+@keyframes bcGlitchA{0%,86%,100%{clip-path:inset(0 0 100% 0);transform:none}87%{clip-path:inset(10% 0 55% 0);transform:translate(-4px,0)}90%{clip-path:inset(60% 0 8% 0);transform:translate(4px,0)}93%{clip-path:inset(30% 0 40% 0);transform:translate(-2px,0)}}
+@keyframes bcGlitchB{0%,88%,100%{clip-path:inset(0 0 100% 0);transform:none}89%{clip-path:inset(50% 0 20% 0);transform:translate(4px,0)}92%{clip-path:inset(5% 0 70% 0);transform:translate(-4px,0)}}
+@keyframes bcScan{from{transform:translateY(-100%)}to{transform:translateY(100vh)}}
+@keyframes bcToast{0%{opacity:0;transform:translate(-50%,-30px) skewX(-8deg)}8%{opacity:1;transform:translate(-50%,0) skewX(0)}10%{transform:translate(calc(-50% + 6px),0)}12%{transform:translate(-50%,0)}85%{opacity:1}100%{opacity:0;transform:translate(-50%,0)}}
+@keyframes bcIn{from{opacity:0;transform:translateX(-10px);background:var(--acc)}to{opacity:1;transform:none;background:transparent}}
+@keyframes bcBar{from{background-position:0 0}to{background-position:40px 0}}
+.bc-marq{display:flex;width:max-content;animation:bcMarq 38s linear infinite}
+.bc-blink{animation:bcBlink 1s steps(1) infinite}
+.bc-sweep{position:absolute;inset:0;border-radius:50%;background:conic-gradient(from 0deg,var(--acc-0) 0deg,var(--acc-0) 290deg,var(--acc-glow) 360deg);animation:bcSweep 4s linear infinite}
+.bc-blip{position:absolute;width:10px;height:10px;transform:translate(-50%,-50%);animation:bcBlip 4s linear infinite}
+.bc-rain{animation:bcRain linear infinite}
+.bc-gl{position:relative;display:inline-block}
+.bc-gl::before,.bc-gl::after{content:attr(data-text);position:absolute;left:0;top:0;width:100%;height:100%;background:#0A0A0A}
+.bc-gl::before{color:var(--dn);animation:bcGlitchA 3.2s infinite}
+.bc-gl::after{color:var(--acc);animation:bcGlitchB 3.2s infinite}
+.bc-scan{pointer-events:none;position:fixed;left:0;right:0;top:0;height:120px;background:linear-gradient(180deg,transparent,var(--acc-faint),transparent);animation:bcScan 6s linear infinite;z-index:4}
+.bc-toast{position:fixed;left:50%;top:84px;z-index:10;animation:bcToast 2.8s ease-out forwards}
+.bc-in{animation:bcIn .7s ease-out}
+.bc-bar{background-image:repeating-linear-gradient(-45deg,var(--acc) 0 10px,#0A0A0A 10px 20px);background-size:40px 100%;animation:bcBar .6s linear infinite}
+.bc-btn{cursor:pointer;transition:transform .08s,box-shadow .08s}
+.bc-btn:hover{transform:translate(-2px,-2px);box-shadow:6px 6px 0 var(--acc)}
+.bc-btn:active{transform:translate(2px,2px);box-shadow:0 0 0 var(--acc)}
+.bc-node{transition:background .3s,color .3s,transform .3s}
+</style>
+</helmet>
+<div style="--acc:{{pal.acc}};--up:{{pal.up}};--dn:{{pal.dn}};--acc-a1:{{pal.a1}};--acc-a2:{{pal.a2}};--acc-0:{{pal.a0}};--acc-glow:{{pal.glow}};--acc-faint:{{pal.faint}};min-height:100vh;background:#0A0A0A;color:#E8E6DF;font-family:'Archivo',sans-serif;box-sizing:border-box;position:relative;background-image:linear-gradient(#ffffff08 1px,transparent 1px),linear-gradient(90deg,#ffffff08 1px,transparent 1px);background-size:40px 40px">
+<div class="bc-scan"></div>
+
+<sc-if value="{{toast.show}}" hint-placeholder-val="{{ false }}">
+  <div class="bc-toast" style="background:{{toast.bg}};color:#0A0A0A;border:3px solid #0A0A0A;box-shadow:8px 8px 0 #E8E6DF;padding:14px 24px;display:flex;align-items:center;gap:14px;white-space:nowrap">
+    <span style="font-family:'JetBrains Mono',monospace;font-size:12px;font-weight:700;letter-spacing:.14em">{{toast.kicker}}</span>
+    <span style="font-weight:900;font-size:30px;letter-spacing:-.03em">{{toast.text}}</span>
+  </div>
+</sc-if>
+
+<div style="background:var(--acc);color:#0A0A0A;overflow:hidden;border-bottom:3px solid #0A0A0A;height:38px;display:flex;align-items:center">
+  <div class="bc-marq" style="font-family:'JetBrains Mono',monospace;font-size:13px;font-weight:700">
+    <sc-for list="{{tape}}" as="c" hint-placeholder-count="20">
+      <span style="padding:0 22px;display:flex;gap:10px;white-space:nowrap;border-right:2px solid #0A0A0A"><span>{{c.sym}}</span><span style="font-weight:400">{{c.price}}</span><span>{{c.arrow}} {{c.chg}}</span></span>
+    </sc-for>
+  </div>
+</div>
+
+<div style="max-width:1400px;margin:0 auto;padding:24px 20px 48px;display:flex;flex-direction:column;gap:24px;position:relative;z-index:1">
+
+<div style="display:flex;flex-wrap:wrap;gap:16px;align-items:stretch;justify-content:space-between">
+  <div style="display:flex;align-items:center;border:3px solid #E8E6DF;box-shadow:6px 6px 0 var(--acc);background:#0A0A0A">
+    <span style="background:var(--acc);color:#0A0A0A;padding:8px 14px;font-weight:900;font-size:28px;letter-spacing:-.04em;border-right:3px solid #E8E6DF">SIG/</span>
+    <span style="padding:8px 14px;font-weight:900;font-size:28px;letter-spacing:-.04em"><span class="bc-gl" data-text="COMMAND">COMMAND</span><span class="bc-blink" style="color:var(--acc)">_</span></span>
+  </div>
+  <nav style="display:flex;flex-wrap:wrap;gap:10px" aria-label="Hubs">
+    <sc-for list="{{tabs}}" as="t" hint-placeholder-count="4">
+      <button class="bc-btn" onClick="{{t.go}}" style="font-family:'Archivo',sans-serif;font-weight:900;font-size:16px;min-height:48px;padding:0 20px;border:3px solid #E8E6DF;box-shadow:4px 4px 0 var(--acc);background:{{t.bg}};color:{{t.fg}}">{{t.num}} {{t.label}}</button>
+    </sc-for>
+  </nav>
+  <div style="display:flex;flex-wrap:wrap;gap:10px;font-family:'JetBrains Mono',monospace;font-size:13px">
+    <div style="border:3px solid #E8E6DF;padding:6px 12px;display:flex;flex-direction:column;justify-content:center"><span style="font-size:10px;letter-spacing:.1em;color:#A3A39A">UTC</span><b style="font-size:18px">{{clock}}</b></div>
+    <div style="border:3px solid #E8E6DF;padding:6px 12px;display:flex;flex-direction:column;justify-content:center"><span style="font-size:10px;letter-spacing:.1em;color:#A3A39A">NEXT 4H CLOSE</span><b style="font-size:18px">{{next4}}</b></div>
+    <div style="border:3px solid var(--acc);color:var(--acc);padding:6px 12px;display:flex;align-items:center;gap:8px"><span class="bc-blink" style="width:10px;height:10px;background:var(--acc);display:inline-block"></span>SIM FEED</div>
+  </div>
+</div>
+
+<div style="display:flex;flex-wrap:wrap;border:3px solid #E8E6DF;font-family:'JetBrains Mono',monospace;font-size:13px">
+  <span style="padding:10px 14px;border-right:3px solid #E8E6DF;background:{{gateBg}};color:#0A0A0A;font-weight:700">FILTER {{gateWord}}</span>
+  <span style="padding:10px 14px;border-right:3px solid #E8E6DF">OPEN TRADES {{openCount}}</span>
+  <span style="padding:10px 14px;border-right:3px solid #E8E6DF">WORST CASE −{{worstCase}}% WALLET</span>
+  <span style="padding:10px 14px;border-right:3px solid #E8E6DF">TAKEN {{taken}} · SKIPPED {{skipped}} · REFUSED {{refused}}</span>
+  <span style="padding:10px 14px;background:#E8E6DF;color:#0A0A0A;font-weight:700">LIVE TRADING: OFF · PAPER ONLY</span>
+</div>
+
+<sc-if value="{{isCommand}}" hint-placeholder-val="{{ true }}">
+<div style="display:flex;flex-direction:column;gap:24px">
+
+  <div style="border:3px solid #E8E6DF;box-shadow:8px 8px 0 var(--acc);background:#0F100E;padding:18px;display:flex;flex-direction:column;gap:14px">
+    <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px">
+      <span style="font-weight:900;font-size:20px">AGENT PIPELINE</span>
+      <span style="font-family:'JetBrains Mono',monospace;font-size:12px;color:#A3A39A">HANDOFF → <b style="color:var(--acc)">{{activeName}}</b></span>
+    </div>
+    <div style="height:12px;border:2px solid #E8E6DF;position:relative">
+      <div class="bc-bar" style="position:absolute;left:0;top:0;bottom:0;width:{{flowW}}%;transition:width .8s"></div>
+    </div>
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px">
+      <sc-for list="{{agents}}" as="a" hint-placeholder-count="8">
+        <div class="bc-node" style="border:3px solid {{a.bd}};background:{{a.bg}};color:{{a.fg}};padding:12px;display:flex;flex-direction:column;gap:6px;min-height:124px;box-sizing:border-box;transform:{{a.lift}};box-shadow:{{a.shadow}}">
+          <div style="display:flex;justify-content:space-between;font-family:'JetBrains Mono',monospace;font-size:11px;font-weight:700"><span>{{a.n}}</span><span>{{a.status}}</span></div>
+          <span style="font-weight:900;font-size:16px;line-height:1.1">{{a.name}}</span>
+          <span style="font-size:12px;line-height:1.35;opacity:.8">{{a.does}}</span>
+          <span style="font-family:'JetBrains Mono',monospace;font-size:12px;font-weight:700;margin-top:auto">{{a.metric}}</span>
+        </div>
+      </sc-for>
+    </div>
+  </div>
+
+  <div style="display:flex;flex-wrap:wrap;gap:24px">
+    <div style="flex:999 1 620px;min-width:0;border:3px solid #E8E6DF;box-shadow:8px 8px 0 var(--acc);background:#0F100E;display:flex;flex-direction:column">
+      <div style="display:flex;flex-wrap:wrap;justify-content:space-between;align-items:flex-end;gap:12px;padding:18px 20px 12px;border-bottom:3px solid #E8E6DF">
+        <div style="display:flex;flex-direction:column;gap:4px">
+          <span style="font-family:'JetBrains Mono',monospace;font-size:12px;letter-spacing:.12em;color:#A3A39A">TARGET :: {{sel.sym}}/USDT · 4H · KELTNER 20 / 2.5</span>
+          <span style="font-weight:900;font-size:72px;line-height:.9;letter-spacing:-.05em">{{sel.price}}</span>
+        </div>
+        <span style="font-weight:900;font-size:26px;padding:6px 12px;border:3px solid #E8E6DF;background:{{sel.chgBg}};color:#0A0A0A">{{sel.chg}}</span>
+      </div>
+      <div style="position:relative;height:280px;margin:16px 20px;background-image:linear-gradient(#E8E6DF14 1px,transparent 1px);background-size:100% 56px">
+        <svg viewBox="0 0 1000 280" preserveAspectRatio="none" style="position:absolute;inset:0;width:100%;height:100%">
+          <polygon points="{{band}}" style="fill:var(--acc);fill-opacity:.08"></polygon>
+          <polyline points="{{upper}}" style="fill:none;stroke:var(--acc);stroke-width:2px;stroke-dasharray:6 5" vector-effect="non-scaling-stroke"></polyline>
+          <polyline points="{{lower}}" style="fill:none;stroke:var(--acc);stroke-width:2px;stroke-dasharray:6 5" vector-effect="non-scaling-stroke"></polyline>
+          <polyline points="{{mid}}" fill="none" stroke="#E8E6DF" stroke-opacity="0.4" stroke-width="1" vector-effect="non-scaling-stroke"></polyline>
+        </svg>
+        <sc-for list="{{candles}}" as="k" hint-placeholder-count="48">
+          <div style="position:absolute;left:{{k.wx}}%;top:{{k.wt}}px;height:{{k.wh}}px;width:2px;background:{{k.col}}"></div>
+          <div style="position:absolute;left:{{k.x}}%;width:{{k.w}}%;top:{{k.bt}}px;height:{{k.bh}}px;background:{{k.col}}"></div>
+        </sc-for>
+        <div style="position:absolute;left:0;right:0;top:{{lastY}}px;border-top:2px dashed #E8E6DF"></div>
+        <div style="position:absolute;right:0;top:{{lastY}}px;transform:translateY(-50%);background:var(--acc);color:#0A0A0A;font-family:'JetBrains Mono',monospace;font-weight:700;font-size:12px;padding:3px 6px">{{sel.price}}</div>
+      </div>
+      <div style="display:flex;flex-wrap:wrap;gap:8px;padding:0 20px 20px">
+        <sc-for list="{{coins}}" as="c" hint-placeholder-count="10">
+          <button class="bc-btn" onClick="{{c.pick}}" style="font-family:'JetBrains Mono',monospace;font-weight:700;font-size:14px;min-height:44px;min-width:64px;border:3px solid #E8E6DF;background:{{c.btnBg}};color:{{c.btnFg}}">{{c.sym}}</button>
+        </sc-for>
+      </div>
+    </div>
+
+    <div style="flex:1 1 340px;min-width:0;display:flex;flex-direction:column;gap:24px">
+      <div style="border:3px solid #E8E6DF;box-shadow:8px 8px 0 var(--acc);background:#0F100E;padding:18px;display:flex;flex-direction:column;gap:12px">
+        <div style="display:flex;justify-content:space-between;font-family:'JetBrains Mono',monospace;font-size:12px;letter-spacing:.1em"><span>MARKET RADAR</span><span style="color:var(--acc)">SCANNING 10<span class="bc-blink">_</span></span></div>
+        <div style="position:relative;width:100%;max-width:260px;aspect-ratio:1;margin:0 auto;border-radius:50%;border:2px solid var(--acc);background:radial-gradient(circle,transparent 32%,var(--acc-a1) 33%,transparent 34%,transparent 65%,var(--acc-a1) 66%,transparent 67%)">
+          <div style="position:absolute;left:50%;top:0;bottom:0;width:1px;background:var(--acc-a2)"></div>
+          <div style="position:absolute;top:50%;left:0;right:0;height:1px;background:var(--acc-a2)"></div>
+          <div class="bc-sweep"></div>
+          <sc-for list="{{blips}}" as="b" hint-placeholder-count="10">
+            <div class="bc-blip" style="left:{{b.x}}%;top:{{b.y}}%;background:{{b.col}};animation-delay:{{b.delay}}s"></div>
+            <span style="position:absolute;left:{{b.x}}%;top:{{b.y}}%;transform:translate(8px,-14px);font-family:'JetBrains Mono',monospace;font-size:10px;color:#E8E6DF">{{b.sym}}</span>
+          </sc-for>
+        </div>
+        <span style="font-family:'JetBrains Mono',monospace;font-size:11px;color:#A3A39A;text-align:center">distance from centre = move since open · colour = direction</span>
+      </div>
+      <div style="border:3px solid #E8E6DF;box-shadow:8px 8px 0 var(--acc);background:{{gateBg}};color:#0A0A0A;padding:18px;display:flex;flex-direction:column;gap:10px">
+        <span style="font-family:'JetBrains Mono',monospace;font-size:12px;letter-spacing:.12em;font-weight:700">MARKET FILTER · BTC 30-DAY VOL</span>
+        <div style="display:flex;align-items:baseline;gap:10px"><span style="font-weight:900;font-size:80px;line-height:.85;letter-spacing:-.06em">{{vol}}</span><span style="font-weight:700;font-size:16px">th pctl · threshold 67</span></div>
+        <div style="position:relative;height:22px;border:3px solid #0A0A0A;background:#E8E6DF">
+          <div style="position:absolute;left:0;top:0;bottom:0;width:{{vol}}%;background:#0A0A0A;transition:width .6s"></div>
+          <div style="position:absolute;left:66.7%;top:-8px;bottom:-8px;width:3px;background:#0A0A0A"></div>
+        </div>
+        <div style="font-weight:900;font-size:28px">{{gateWord}}</div>
+      </div>
+    </div>
+  </div>
+
+  <div style="display:flex;flex-wrap:wrap;gap:24px">
+    <div style="flex:999 1 560px;min-width:0;border:3px solid #E8E6DF;box-shadow:8px 8px 0 var(--acc);background:#050505;display:flex;flex-direction:column">
+      <div style="display:flex;justify-content:space-between;align-items:center;padding:12px 18px;border-bottom:3px solid #E8E6DF;background:#E8E6DF;color:#0A0A0A">
+        <span style="font-weight:900;font-size:18px">DECISION TRACE · {{dec.sym}} {{dec.side}}</span>
+        <span style="font-family:'JetBrains Mono',monospace;font-size:12px;font-weight:700;padding:3px 8px;background:{{dec.stBg}};border:2px solid #0A0A0A">{{dec.status}}</span>
+      </div>
+      <div style="padding:16px 18px;min-height:210px;font-family:'JetBrains Mono',monospace;font-size:14px;line-height:1.75;color:var(--acc);white-space:pre-wrap;word-break:break-word">{{typed}}<span class="bc-blink" style="display:inline-block;width:9px;height:16px;background:var(--acc);vertical-align:-2px"></span></div>
+    </div>
+    <div style="flex:1 1 340px;min-width:0;border:3px solid #E8E6DF;background:#050505;height:278px;overflow:hidden;position:relative;display:flex;gap:10px;padding:0 10px">
+      <sc-for list="{{rain}}" as="r" hint-placeholder-count="9">
+        <div class="bc-rain" style="flex:1;font-family:'JetBrains Mono',monospace;font-size:11px;line-height:1.5;color:{{r.col}};white-space:pre;animation-duration:{{r.dur}}s;opacity:{{r.op}}">{{r.text}}</div>
+      </sc-for>
+      <div style="position:absolute;left:0;right:0;bottom:0;padding:8px 10px;background:#0A0A0A;border-top:3px solid #E8E6DF;font-family:'JetBrains Mono',monospace;font-size:11px;display:flex;justify-content:space-between"><span>ORDER-FLOW STREAM</span><span style="color:var(--acc)">{{rate}} msg/s</span></div>
+    </div>
+  </div>
+
+  <div style="display:flex;flex-wrap:wrap;gap:24px">
+    <div id="feed" style="flex:999 1 620px;min-width:0;border:3px solid #E8E6DF;box-shadow:8px 8px 0 var(--acc);background:#0F100E">
+      <div style="display:flex;justify-content:space-between;align-items:center;padding:12px 18px;border-bottom:3px solid #E8E6DF">
+        <span style="font-weight:900;font-size:20px">SIGNAL FEED</span>
+        <span style="font-family:'JetBrains Mono',monospace;font-size:12px;color:#A3A39A">SWING BOOK · 4H/8H</span>
+      </div>
+      <div style="overflow-x:auto">
+        <div style="min-width:640px">
+          <sc-for list="{{feed}}" as="f" hint-placeholder-count="6">
+            <div class="bc-in" style="display:grid;grid-template-columns:70px 64px 70px minmax(0,1.4fr) minmax(0,1fr) 110px;gap:10px;align-items:center;padding:10px 18px;border-bottom:1px solid #E8E6DF33;font-family:'JetBrains Mono',monospace;font-size:13px">
+              <span style="color:#A3A39A">{{f.time}}</span>
+              <b style="font-family:'Archivo',sans-serif;font-size:18px">{{f.sym}}</b>
+              <span style="font-weight:700;padding:2px 6px;text-align:center;background:{{f.sideBg}};color:#0A0A0A">{{f.side}}</span>
+              <span>{{f.strat}}</span>
+              <span style="color:#A3A39A">{{f.entry}} · stop {{f.stopPct}}</span>
+              <span style="font-weight:700;padding:4px 6px;text-align:center;border:2px solid {{f.stCol}};color:{{f.stCol}}">{{f.status}}</span>
+            </div>
+          </sc-for>
+        </div>
+      </div>
+    </div>
+    <div style="flex:1 1 340px;min-width:0;border:3px solid #E8E6DF;box-shadow:8px 8px 0 var(--acc);background:#0F100E;padding:18px;display:flex;flex-direction:column;gap:12px">
+      <span style="font-weight:900;font-size:20px">ASK THE DESK</span>
+      <div style="display:flex;flex-wrap:wrap;gap:8px">
+        <sc-for list="{{asks}}" as="q" hint-placeholder-count="4">
+          <button class="bc-btn" onClick="{{q.go}}" style="min-height:40px;padding:0 12px;border:2px solid #E8E6DF;background:{{q.bg}};color:{{q.fg}};font-family:'Archivo',sans-serif;font-weight:700;font-size:13px">{{q.label}}</button>
+        </sc-for>
+      </div>
+      <div style="border:2px dashed #E8E6DF66;padding:12px;font-size:14px;line-height:1.5;min-height:96px">{{answer}}</div>
+    </div>
+  </div>
+</div>
+</sc-if>
+
+<sc-if value="{{isBook}}" hint-placeholder-val="{{ false }}">
+<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:24px">
+  <sc-for list="{{positions}}" as="p" hint-placeholder-count="4">
+    <div style="border:3px solid #E8E6DF;box-shadow:8px 8px 0 var(--acc);background:#0F100E;padding:20px;display:flex;flex-direction:column;gap:12px">
+      <div style="display:flex;justify-content:space-between;align-items:center"><b style="font-size:36px;letter-spacing:-.04em">{{p.sym}}</b><span style="font-weight:700;padding:4px 8px;background:{{p.sideBg}};color:#0A0A0A">{{p.side}}</span></div>
+      <div style="font-family:'JetBrains Mono',monospace;font-size:12px;color:#A3A39A">{{p.strat}}</div>
+      <div style="font-weight:900;font-size:56px;line-height:.9;letter-spacing:-.04em;color:{{p.rCol}}">{{p.r}}</div>
+      <div style="position:relative;height:22px;border:3px solid #E8E6DF">
+        <div style="position:absolute;left:0;top:0;bottom:0;width:{{p.prog}}%;background:{{p.rCol}};transition:width .6s"></div>
+        <div style="position:absolute;left:25%;top:-6px;bottom:-6px;width:2px;background:#E8E6DF"></div>
+      </div>
+      <div style="display:flex;justify-content:space-between;font-family:'JetBrains Mono',monospace;font-size:11px;color:#A3A39A"><span>STOP −1R</span><span>0</span><span>+3R TARGET</span></div>
+      <div style="display:flex;justify-content:space-between;font-family:'JetBrains Mono',monospace;font-size:13px;border-top:2px solid #E8E6DF;padding-top:10px"><span>in {{p.entry}}</span><span>now {{p.mark}}</span><b>{{p.days}}d left</b></div>
+    </div>
+  </sc-for>
+</div>
+</sc-if>
+
+<sc-if value="{{isEvidence}}" hint-placeholder-val="{{ false }}">
+<div style="display:flex;flex-direction:column;gap:24px">
+  <div style="border:3px solid #E8E6DF;box-shadow:8px 8px 0 #E8E6DF;background:var(--acc);color:#0A0A0A;padding:24px;display:flex;flex-wrap:wrap;gap:16px;align-items:baseline;justify-content:space-between">
+    <span style="font-weight:900;font-size:48px;letter-spacing:-.04em;line-height:.95">+0.20 → +0.32 R / trade</span>
+    <span style="font-size:15px;max-width:460px;line-height:1.4">Market filter effect in the 5-year backtest with fees, 18% GST, slippage and funding.</span>
+  </div>
+  <div style="border:3px solid #E8E6DF;background:#0F100E;overflow-x:auto">
+    <div style="min-width:760px">
+      <sc-for list="{{strats}}" as="s" hint-placeholder-count="8">
+        <div style="display:grid;grid-template-columns:minmax(0,1.6fr) repeat(4,96px) 80px;gap:10px;padding:12px 20px;border-bottom:1px solid #E8E6DF33;align-items:center;font-family:'JetBrains Mono',monospace;font-size:12px">
+          <b style="font-family:'Archivo',sans-serif;font-size:17px">{{s.name}}</b>
+          <span style="color:var(--acc)">■ COSTS</span><span style="color:var(--acc)">■ NULL</span><span style="color:var(--acc)">■ WALK-FWD</span><span style="color:var(--acc)">■ 2.5× SLIP</span>
+          <b style="font-size:16px">{{s.count}} live</b>
+        </div>
+      </sc-for>
+    </div>
+  </div>
+</div>
+</sc-if>
+
+<sc-if value="{{isSystem}}" hint-placeholder-val="{{ false }}">
+<div style="display:flex;flex-wrap:wrap;gap:24px">
+  <div style="flex:999 1 560px;min-width:0;border:3px solid #E8E6DF;box-shadow:8px 8px 0 var(--acc);background:#0F100E">
+    <div style="padding:12px 20px;border-bottom:3px solid #E8E6DF;font-weight:900;font-size:20px">SCHEDULER</div>
+    <sc-for list="{{jobs}}" as="j" hint-placeholder-count="6">
+      <div style="display:grid;grid-template-columns:minmax(0,1fr) 120px 100px;gap:10px;padding:12px 20px;border-bottom:1px solid #E8E6DF33;font-family:'JetBrains Mono',monospace;font-size:13px">
+        <b style="font-family:'Archivo',sans-serif;font-size:16px">{{j.name}}</b><span style="color:#A3A39A">{{j.every}}</span><b style="color:var(--acc)">{{j.next}}</b>
+      </div>
+    </sc-for>
+  </div>
+  <div style="flex:1 1 340px;min-width:0;border:3px solid #E8E6DF;box-shadow:8px 8px 0 var(--acc);background:#0F100E;padding:20px;display:flex;flex-direction:column;gap:14px">
+    <span style="font-weight:900;font-size:20px">AI BUDGET · DAILY TOKENS</span>
+    <sc-for list="{{budgets}}" as="b" hint-placeholder-count="3">
+      <div style="display:flex;flex-direction:column;gap:4px;font-family:'JetBrains Mono',monospace;font-size:13px">
+        <div style="display:flex;justify-content:space-between"><span>{{b.name}}</span><b>{{b.pct}}%</b></div>
+        <div style="height:16px;border:2px solid #E8E6DF"><div style="height:100%;width:{{b.pct}}%;background:{{b.col}};transition:width .6s"></div></div>
+      </div>
+    </sc-for>
+    <span style="font-size:13px;color:#A3A39A">Capped at 85% of each free-tier limit. 1,473 tests passing. execution/ live book not wired.</span>
+  </div>
+</div>
+</sc-if>
+
+</div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props="{&quot;palette&quot;:{&quot;editor&quot;:&quot;enum&quot;,&quot;options&quot;:[&quot;Champagne &amp; Teal&quot;,&quot;Sage &amp; Lilac&quot;,&quot;Ice &amp; Peach&quot;,&quot;Classic lime&quot;],&quot;default&quot;:&quot;Sage &amp; Lilac&quot;},&quot;$preview&quot;:{&quot;width&quot;:1440,&quot;height&quot;:1560}}">
+const COINS=[['BTC',62840.5],['ETH',2465.3],['SOL',148.21],['BNB',571.3],['XRP',0.5412],['DOGE',0.10931],['ADA',0.3521],['AVAX',26.41],['LINK',11.274],['DOT',4.312]];
+const STRATS=['4h vol-breakout z=3','4h Keltner k=2.5','4h Donchian n=100','4h Ichimoku','8h Keltner k=2','8h vol-breakout z=3','8h Donchian n=100','8h Ichimoku'];
+const AGENTS=[['Market feed','Binance WS + REST, 10 coins'],['Detectors','Five 15m families, shadow only'],['Market filter','Skips swings in top-third BTC vol'],['Swing scanner','8 validated 4h / 8h strategies'],['Risk sizer','3% risk · stop 3×ATR · cap 8%'],['Paper exec','Target 3R · 7-day limit'],['Outcome replay','Every signal replayed on 1h'],['AI analyst','Hourly briefing, budgeted']];
+const LIME='var(--acc)', UP='var(--up)', VIO='var(--dn)', INK='#E8E6DF';
+const PALETTES={
+  'Champagne & Teal':{acc:'#E3C58D',up:'#6CC9AE',dn:'#A99BF0'},
+  'Sage & Lilac':{acc:'#A9D3B6',up:'#A9D3B6',dn:'#B9AAF2'},
+  'Ice & Peach':{acc:'#94C5F5',up:'#94C5F5',dn:'#EDA982'},
+  'Classic lime':{acc:'#C6F432',up:'#C6F432',dn:'#9B8CFF'}
+};
+const rgba=(h,a)=>'rgba('+parseInt(h.slice(1,3),16)+','+parseInt(h.slice(3,5),16)+','+parseInt(h.slice(5,7),16)+','+a+')';
+const rnd=(a,b)=>a+Math.random()*(b-a);
+const pick=a=>a[Math.floor(Math.random()*a.length)];
+const pad=n=>String(n).padStart(2,'0');
+const hms=d=>pad(d.getUTCHours())+':'+pad(d.getUTCMinutes())+':'+pad(d.getUTCSeconds());
+const dur=ms=>{const s=Math.floor(ms/1000);return pad(Math.floor(s/3600))+':'+pad(Math.floor(s/60)%60)+':'+pad(s%60);};
+const dp=p=>p>=10?2:p>=1?3:5;
+const fmt=p=>p.toLocaleString('en-US',{minimumFractionDigits:dp(p),maximumFractionDigits:dp(p)});
+const pct=x=>(x>=0?'+':'')+x.toFixed(2)+'%';
+const hex=n=>{let s='';for(let i=0;i<n;i++)s+='0123456789ABCDEF'[Math.floor(Math.random()*16)];return s;};
+function seedCandles(p,n){let c=p;const out=[];for(let i=0;i<n;i++){const v=p*0.007;const o=c+(Math.random()-0.53)*v*2;out.unshift({o,c,h:Math.max(o,c)+Math.random()*v*0.8,l:Math.min(o,c)-Math.random()*v*0.8});c=o;}return out;}
+function walk(p,n){let x=p;const a=[p];for(let i=1;i<n;i++){x=x*(1+(Math.random()-0.5)*0.006);a.unshift(x);}return a;}
+function makeSignal(coins,vol){const c=coins[1+Math.floor(Math.random()*(coins.length-1))];const side=Math.random()<0.55?'LONG':'SHORT';const stop=rnd(0.9,2.9)*3;const st=stop>8?'REFUSED':vol>=67?'SKIPPED':'TAKEN';
+  return {time:hms(new Date()),sym:c.sym,side,strat:pick(STRATS),entryN:c.price,entry:fmt(c.price),stop,stopPct:stop.toFixed(1)+'%',status:st,vol,lev:Math.max(1,Math.ceil(3/stop))};}
+function trace(d){const dir=d.side==='LONG'?1:-1;
+  return ['> scanner   :: '+d.strat+' fired '+d.side+' on '+d.sym+' @ '+d.entry,
+    '> filter    :: btc 30d vol pctl '+d.vol+(d.vol>=67?' >= 67 -> SKIP, replay on paper':' < 67 -> PASS'),
+    '> risk      :: stop 3xATR = '+d.stopPct+(d.stop>8?' > 8% cap -> REFUSED':' -> size 3% wallet @ '+d.lev+'x'),
+    d.stop>8||d.vol>=67?'> exec      :: no trade':'> exec      :: paper fill · stop '+fmt(d.entryN*(1-dir*d.stop/100))+' · target '+fmt(d.entryN*(1+dir*3*d.stop/100)),
+    '> replay    :: queued on 1h bars -> stop | 3R | 7d',
+    '> status    :: '+d.status].join('\n');}
+function rainCols(){return Array.from({length:9},(_,i)=>{const lines=Array.from({length:30},()=>Math.random()<0.25?pick(['BUY ','SELL'])+' '+hex(4):hex(8));const t=lines.join('\n');return {text:t+'\n'+t,dur:(9+Math.random()*10).toFixed(1),col:i%3===0?VIO:UP,op:(0.35+Math.random()*0.5).toFixed(2)};});}
+class Component extends DCLogic {
+  constructor(props){
+    super(props);
+    const coins=COINS.map(([s,p])=>({sym:s,price:p,hist:walk(p,40)}));
+    const vol=44;const seed=[];for(let i=0;i<5;i++){const sg=makeSignal(coins,i===2?72:vol);sg.time=hms(new Date(Date.now()-(5-i)*1000*60*41));seed.unshift(sg);}
+    const P=[[2,'LONG','4h Donchian n=100',-0.018,4.2,2],[1,'LONG','8h Keltner k=2',0.006,5.1,4],[8,'SHORT','4h vol-breakout z=3',0.011,6.3,1],[6,'LONG','8h Ichimoku',-0.004,3.9,5]];
+    this.state={tab:'command',sel:2,coins,candles:seedCandles(coins[2].price,48),feed:seed,t:0,stage:0,now:Date.now(),vol,ask:-1,
+      full:trace(seed[0]),typedN:0,toast:null,rain:rainCols(),rate:412,
+      counts:{TAKEN:seed.filter(s=>s.status==='TAKEN').length,SKIPPED:seed.filter(s=>s.status==='SKIPPED').length,REFUSED:seed.filter(s=>s.status==='REFUSED').length},
+      stratCounts:STRATS.map(()=>Math.floor(rnd(1,7))),
+      positions:P.map(([i,side,strat,off,stop,age])=>({ci:i,side,strat,entry:coins[i].price*(1+off),stop,age})),
+      budgets:[{name:'Groq gpt-oss +search',pct:58},{name:'OpenRouter free',pct:31},{name:'HF Space (own)',pct:12}]};
+  }
+  componentDidMount(){
+    this.iv=setInterval(()=>this.step(),1000);
+    this.ty=setInterval(()=>{const s=this.state;if(s.typedN<s.full.length)this.setState({typedN:Math.min(s.full.length,s.typedN+3)});},40);
+  }
+  componentWillUnmount(){clearInterval(this.iv);clearInterval(this.ty);clearTimeout(this.tt);}
+  step(){
+    const s=this.state;const t=s.t+1;
+    const coins=s.coins.map(c=>{const price=c.price*(1+(Math.random()-0.49)*(c.sym==='BTC'?0.0014:0.0024));return {...c,price,hist:c.hist.slice(1).concat(price)};});
+    const p=coins[s.sel].price;let candles=s.candles.slice();const last={...candles[candles.length-1]};
+    last.c=p;last.h=Math.max(last.h,p);last.l=Math.min(last.l,p);candles[candles.length-1]=last;
+    if(t%6===0)candles=candles.slice(1).concat({o:p,h:p,l:p,c:p});
+    let vol=s.vol;if(t%3===0)vol=Math.max(22,Math.min(84,vol+Math.round(rnd(-4,4.6))));
+    let feed=s.feed,counts=s.counts,stratCounts=s.stratCounts,full=s.full,typedN=s.typedN,toast=s.toast;
+    const stage=(s.stage+1)%8;
+    if(stage===4){const sg=makeSignal(coins,vol);feed=[sg].concat(feed).slice(0,6);counts={...counts,[sg.status]:counts[sg.status]+1};const si=STRATS.indexOf(sg.strat);stratCounts=stratCounts.map((n,i)=>i===si?n+1:n);
+      full=trace(sg);typedN=0;toast={id:t,kicker:sg.status==='TAKEN'?'SIGNAL LOCKED':sg.status==='SKIPPED'?'FILTER BLOCK':'RISK REFUSED',text:sg.sym+' '+sg.side+' · '+sg.strat,bg:sg.status==='TAKEN'?LIME:sg.status==='SKIPPED'?VIO:INK};
+      clearTimeout(this.tt);this.tt=setTimeout(()=>this.setState({toast:null}),2800);}
+    const budgets=t%5===0?s.budgets.map(b=>({...b,pct:Math.min(85,b.pct+(Math.random()<0.5?1:0))})):s.budgets;
+    this.setState({t,stage,coins,candles,vol,feed,counts,stratCounts,budgets,full,typedN,toast,rate:Math.round(380+Math.random()*90),now:Date.now()});
+  }
+  answer(i){
+    const s=this.state;const open=s.vol<67;const sk=s.feed.find(f=>f.status==='SKIPPED');
+    if(i===0)return 'Filter is '+(open?'OPEN':'CLOSED')+'. BTC 30-day vol is at the '+s.vol+'th percentile of its past year; 67 or above skips new swing signals. Backtest: +0.20 → +0.32 R per trade with the filter.';
+    if(i===1)return sk?sk.sym+' '+sk.side+' ('+sk.strat+') at '+sk.time+' was skipped: BTC vol was at the '+sk.vol+'th percentile. It is still replayed on 1h bars.':'Nothing skipped in the recent feed.';
+    if(i===2){const n=s.positions.length;return n+' open trades × 3% risk = −'+(n*3)+'% of the wallet if every stop hits.';}
+    return 'Nothing is live. execution/ (Binance live book) is built and tested but not wired; it needs your explicit go-ahead.';
+  }
+  renderVals(){
+    const s=this.state;const H=280;const selC=s.coins[s.sel];
+    const ks=s.candles,N=ks.length;
+    const ema=[];let e=ks[0].c;ks.forEach((k,i)=>{e=i?e+(k.c-e)*2/21:k.c;ema.push(e);});
+    const atr=[];let a=ks[0].h-ks[0].l;ks.forEach((k,i)=>{const tr=i?Math.max(k.h-k.l,Math.abs(k.h-ks[i-1].c),Math.abs(k.l-ks[i-1].c)):k.h-k.l;a=i?a+(tr-a)/10:tr;atr.push(a);});
+    const up=ema.map((v,i)=>v+2.5*atr[i]),dn=ema.map((v,i)=>v-2.5*atr[i]);
+    let hi=Math.max(...ks.map(k=>k.h),...up),lo=Math.min(...ks.map(k=>k.l),...dn);const pv=(hi-lo)*0.04;hi+=pv;lo-=pv;
+    const y=v=>(hi-v)/(hi-lo)*H;const cw=100/N;const X=i=>((i+0.5)*1000/N).toFixed(1);
+    const ln=arr=>arr.map((v,i)=>X(i)+','+y(v).toFixed(1)).join(' ');
+    const candles=ks.map((k,i)=>({x:(i*cw+cw*0.15).toFixed(3),w:(cw*0.7).toFixed(3),wx:(i*cw+cw/2).toFixed(3),bt:y(Math.max(k.o,k.c)).toFixed(1),bh:Math.max(3,Math.abs(y(k.o)-y(k.c))).toFixed(1),wt:y(k.h).toFixed(1),wh:Math.max(1,y(k.l)-y(k.h)).toFixed(1),col:k.c>=k.o?UP:VIO}));
+    const band=ln(up)+' '+dn.map((v,i)=>X(i)+','+y(v).toFixed(1)).reverse().join(' ');
+    const coins=s.coins.map((c,i)=>{const ch=(c.price/c.hist[0]-1)*100;const act=i===s.sel;return {sym:c.sym,price:fmt(c.price),ch,chg:pct(ch),arrow:ch>=0?'▲':'▼',btnBg:act?LIME:'#0A0A0A',btnFg:act?'#0A0A0A':INK,pick:()=>this.setState({sel:i,candles:seedCandles(c.price,48)})};});
+    const sel=coins[s.sel];sel.chgBg=sel.ch>=0?UP:VIO;
+    const maxCh=Math.max(0.5,...coins.map(c=>Math.abs(c.ch)));
+    const blips=coins.map((c,i)=>{const ang=i*36+12;const r=12+Math.min(1,Math.abs(c.ch)/maxCh)*34;const rad=ang*Math.PI/180;return {sym:c.sym,x:(50+r*Math.sin(rad)).toFixed(1),y:(50-r*Math.cos(rad)).toFixed(1),col:c.ch>=0?UP:VIO,delay:(ang/360*4-4).toFixed(2)};});
+    const open=s.vol<67;const nx=m=>dur(m-(s.now%m));
+    const pos=s.positions.map(p=>{const c=s.coins[p.ci];const dir=p.side==='LONG'?1:-1;const R=dir*(c.price-p.entry)/p.entry*100/p.stop;return {p,c,R};});
+    const metrics=['10 coins live','5 families','vol '+s.vol+'th pctl','8 armed','3% · ≤10x',pos.length+' open','taken vs skipped','Groq '+s.budgets[0].pct+'%'];
+    const agents=AGENTS.map(([name,does],i)=>{const active=i===s.stage;const blocked=i===2&&!open;
+      return {n:'0'+(i+1),name,does,metric:metrics[i],status:blocked?'BLOCKING':active?'WORKING':'READY',
+        bg:active?LIME:blocked?VIO:'#0A0A0A',fg:active||blocked?'#0A0A0A':INK,bd:active?LIME:INK,lift:active?'translate(-3px,-3px)':'none',shadow:active?'6px 6px 0 '+INK:'none'};});
+    const d=s.feed[0];
+    const tabs=[['command','Command'],['book','Book'],['evidence','Evidence'],['system','System']].map(([id,l],i)=>{const on=s.tab===id;return {num:'0'+(i+1),label:l.toUpperCase(),bg:on?LIME:'#0A0A0A',fg:on?'#0A0A0A':INK,go:()=>this.setState({tab:id})};});
+    const askLabels=['Filter open?','Why that skip?','My risk now?','Anything live?'];
+    const P=PALETTES[this.props.palette]||PALETTES['Sage & Lilac'];
+    const pal={acc:P.acc,up:P.up,dn:P.dn,a1:rgba(P.acc,.13),a2:rgba(P.acc,.2),a0:rgba(P.acc,0),glow:rgba(P.acc,.4),faint:rgba(P.acc,.05)};
+    return {
+      pal,tabs,isCommand:s.tab==='command',isBook:s.tab==='book',isEvidence:s.tab==='evidence',isSystem:s.tab==='system',
+      toast:s.toast?{show:true,...s.toast}:{show:false},
+      tape:coins.concat(coins),coins,sel,candles,upper:ln(up),lower:ln(dn),mid:ln(ema),band,lastY:y(selC.price).toFixed(1),blips,
+      clock:hms(new Date(s.now)),next4:nx(4*3600e3),vol:s.vol,gateBg:open?LIME:VIO,gateWord:open?'OPEN':'CLOSED',
+      agents,activeName:AGENTS[s.stage][0].toUpperCase(),flowW:((s.stage+1)/8*100).toFixed(1),
+      dec:{sym:d.sym,side:d.side,status:d.status,stBg:d.status==='TAKEN'?LIME:d.status==='SKIPPED'?VIO:INK},
+      typed:s.full.slice(0,s.typedN),rain:s.rain,rate:s.rate,
+      feed:s.feed.map(f=>({...f,sideBg:f.side==='LONG'?UP:VIO,stCol:f.status==='TAKEN'?UP:f.status==='SKIPPED'?VIO:'#A3A39A'})),
+      asks:askLabels.map((l,i)=>({label:l,bg:s.ask===i?LIME:'#0A0A0A',fg:s.ask===i?'#0A0A0A':INK,go:()=>this.setState({ask:i})})),
+      answer:s.ask<0?'Pick a question. Answers are built from the live state on this page.':this.answer(s.ask),
+      taken:s.counts.TAKEN,skipped:s.counts.SKIPPED,refused:s.counts.REFUSED,openCount:pos.length,worstCase:pos.length*3,
+      positions:pos.map(({p,c,R})=>({sym:c.sym,side:p.side,sideBg:p.side==='LONG'?UP:VIO,strat:p.strat,r:(R>=0?'+':'')+R.toFixed(2)+'R',rCol:R>=0?UP:VIO,prog:((Math.max(-1,Math.min(3,R))+1)/4*100).toFixed(1),entry:fmt(p.entry),mark:fmt(c.price),days:7-p.age})),
+      strats:STRATS.map((n,i)=>({name:n,count:s.stratCounts[i]})),
+      jobs:[{name:'Swing scan (4h)',every:'4h close',next:nx(4*3600e3)},{name:'Swing scan (8h)',every:'8h close',next:nx(8*3600e3)},{name:'Outcome replay',every:'hourly',next:nx(3600e3)},{name:'AI briefing',every:'60 min',next:nx(3600e3)},{name:'Move attribution',every:'3 h',next:nx(3*3600e3)},{name:'Prod health',every:'30 min',next:nx(1800e3)}],
+      budgets:s.budgets.map(b=>({...b,col:b.pct>=75?VIO:LIME}))
+    };
+  }
+}
+</script>
+</body>
+</html>

@@ -3591,7 +3591,7 @@ const TAB_META = {
 
 function switchTab(tab){
   document.querySelectorAll('.tab-btn').forEach(b=>b.classList.toggle('active',b.dataset.tab===tab));
-  const grp = window.hubGroupOf ? window.hubGroupOf('/#'+tab) : null;
+  const grp = window.hubGroupOf ? window.hubGroupOf('/classic#'+tab) : null;
   document.querySelectorAll('.side-item').forEach(b=>b.classList.toggle('active', grp ? b.dataset.group===grp.id : b.dataset.tab===tab));
   document.querySelectorAll('.tab-content').forEach(c=>c.classList.toggle('active',c.id==='tab-'+tab));
   const m = TAB_META[tab];
@@ -7037,15 +7037,15 @@ _HUB_SNIPPET = """
 (function(){
   /* Six groups instead of twenty menu entries. Every page still exists at its own address. */
   var G = [
-    {id:"trading", label:"Trading", items:[["Overview","/#dashboard"],["Paper book","/#paper"],["Session guard","/#guard"]]},
-    {id:"signals", label:"Signals", items:[["Live signals","/#crypto"],["Mirror","/#mirror"],["Accuracy","/#accuracy"],["Audit","/audit"],["History","/#historic"]]},
+    {id:"trading", label:"Trading", items:[["Overview","/classic#dashboard"],["Paper book","/classic#paper"],["Session guard","/classic#guard"]]},
+    {id:"signals", label:"Signals", items:[["Live signals","/classic#crypto"],["Mirror","/classic#mirror"],["Accuracy","/classic#accuracy"],["Audit","/audit"],["History","/classic#historic"]]},
     {id:"market", label:"Market", items:[["Price outlook","/predict"],["Market moves","/moves"],["Chart","/chart"]]},
-    {id:"research", label:"Research", items:[["Pipeline","/pipeline"],["v2 shadow","/v2"],["Simulator","/#simulator"]]},
-    {id:"settings", label:"Settings", items:[["Settings","/settings"],["Keys","/keys"],["Watchlist","/#watchlist"]]},
+    {id:"research", label:"Research", items:[["Pipeline","/pipeline"],["v2 shadow","/v2"],["Simulator","/classic#simulator"]]},
+    {id:"settings", label:"Settings", items:[["Settings","/settings"],["Keys","/keys"],["Watchlist","/classic#watchlist"]]},
     {id:"admin", label:"Admin", items:[["Data","/data"],["Diagnostics","/api/debug/binance"],["API list","/api-docs"],["Journal","/journal"]]}
   ];
   window.HUB_GROUPS = G;
-  function here(){ return location.pathname === "/" ? "/" + (location.hash || "#dashboard") : location.pathname.replace(/\\/$/, ""); }
+  function here(){ return location.pathname === "/classic" ? "/classic" + (location.hash || "#dashboard") : location.pathname.replace(/\\/$/, ""); }
   window.hubGroupOf = function(url){
     for (var i = 0; i < G.length; i++) for (var j = 0; j < G[i].items.length; j++) if (G[i].items[j][1] === url) return G[i];
     return null;
@@ -7058,9 +7058,9 @@ _HUB_SNIPPET = """
       var head = document.querySelector(".main-head");
       if (head && head.parentNode) head.parentNode.insertBefore(el, head); else document.body.insertBefore(el, document.body.firstChild);
     }
-    var onMain = location.pathname === "/";
+    var onMain = location.pathname === "/classic";
     el.innerHTML = "<b>" + g.label + "</b>" + g.items.map(function(it){
-      var tab = onMain && it[1].indexOf("/#") === 0 ? it[1].slice(2) : "";
+      var tab = onMain && it[1].indexOf("/classic#") === 0 ? it[1].slice(9) : "";
       return '<a href="' + it[1] + '"' + (it[1] === cur ? ' class="on" aria-current="page"' : "") + (tab ? ' data-hub-tab="' + tab + '"' : "") + ">" + it[0] + "</a>";
     }).join("");
   };
@@ -7631,7 +7631,10 @@ async def make_app(runner) -> web.Application:
             return await handler_fn(runner, req)
         return _bound
 
-    app.router.add_get("/", _dashboard)
+    # "/" now redirects to the portal (scheduler/portal.py); the old one-page dashboard stays here.
+    app.router.add_get("/classic", _dashboard)
+    from scheduler.portal import register as _register_portal
+    _register_portal(app)
     app.router.add_get("/data", _data_page)
     app.router.add_get("/api/tables", _bind(_api_tables))
     app.router.add_get("/health", _bind(_health))

@@ -1,0 +1,188 @@
+<!doctype html>
+<html lang="en" data-palette="sage">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Signal Engine · Command</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Archivo:wght@500;700;900&family=JetBrains+Mono:wght@400;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/portal/static/portal.css">
+<script>try{var p=localStorage.getItem("portal-palette");if(p)document.documentElement.setAttribute("data-palette",p)}catch(e){}</script>
+</head>
+<body>
+<div class="scan" aria-hidden="true"></div>
+<div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
+
+<div class="tape" aria-label="Prices"><div class="tape-track" id="tape"></div></div>
+
+<div class="wrap">
+  <header class="top">
+    <a class="logo" href="/command" aria-label="Signal Engine home">
+      <span class="logo-a">SIG/</span><span class="logo-b"><span class="gl" id="logoWord" data-text="COMMAND">COMMAND</span><span class="blink acc">_</span></span>
+    </a>
+    <nav class="tabs" aria-label="Hubs">
+      <a class="tab" data-hub="command" href="/command">01 COMMAND</a>
+      <a class="tab" data-hub="book" href="/book">02 BOOK</a>
+      <a class="tab" data-hub="evidence" href="/evidence">03 EVIDENCE</a>
+      <a class="tab" data-hub="system" href="/system">04 SYSTEM</a>
+    </nav>
+    <div class="chips">
+      <div class="chip"><small>UTC</small><b id="clock">--:--:--</b></div>
+      <div class="chip"><small>NEXT 4H CLOSE</small><b id="next4">--:--:--</b></div>
+      <div class="chip swatches" role="group" aria-label="Colour theme">
+        <small>THEME</small>
+        <div class="sw-row">
+          <button class="sw" data-p="sage" title="Sage &amp; Lilac" aria-label="Sage and lilac theme"><i style="background:#A9D3B6"></i><i style="background:#B9AAF2"></i></button>
+          <button class="sw" data-p="champagne" title="Champagne &amp; Teal" aria-label="Champagne and teal theme"><i style="background:#E3C58D"></i><i style="background:#6CC9AE"></i></button>
+          <button class="sw" data-p="ice" title="Ice &amp; Peach" aria-label="Ice and peach theme"><i style="background:#94C5F5"></i><i style="background:#EDA982"></i></button>
+          <button class="sw" data-p="lime" title="Classic lime" aria-label="Classic lime theme"><i style="background:#C6F432"></i><i style="background:#9B8CFF"></i></button>
+        </div>
+      </div>
+    </div>
+  </header>
+
+  <div class="strip" id="strip">
+    <span class="gate" id="stripGate">FILTER …</span>
+    <span id="stripOpen">OPEN TRADES …</span>
+    <span id="stripRisk">WORST CASE …</span>
+    <span id="stripFeed">FEED …</span>
+    <span class="ink" id="stripMode">PAPER ONLY</span>
+  </div>
+
+  <main>
+    <!-- 01 COMMAND -->
+    <section data-view="command" hidden>
+      <div class="panel shadow">
+        <div class="ph"><h2>AGENT PIPELINE</h2><span class="mono dim">HANDOFF → <b class="acc" id="handoff">…</b></span></div>
+        <div class="flow"><div class="flow-fill" id="flowFill"></div></div>
+        <div class="agents" id="agents"></div>
+      </div>
+
+      <div class="row">
+        <div class="panel shadow grow">
+          <div class="chart-head">
+            <div class="col">
+              <span class="mono dim small" id="chartLabel">TARGET :: …</span>
+              <span class="big-price" id="chartPrice">—</span>
+            </div>
+            <span class="chg-pill" id="chartChg">—</span>
+          </div>
+          <div class="chart" id="chart">
+            <svg viewBox="0 0 1000 280" preserveAspectRatio="none" aria-hidden="true">
+              <polygon id="kBand" class="k-band"></polygon>
+              <polyline id="kUp" class="k-line"></polyline>
+              <polyline id="kDn" class="k-line"></polyline>
+              <polyline id="kMid" class="k-mid"></polyline>
+            </svg>
+            <div id="candles"></div>
+            <div class="last-line" id="lastLine"></div>
+            <div class="last-tag" id="lastTag"></div>
+            <div class="chart-msg" id="chartMsg"></div>
+          </div>
+          <div class="coins" id="coinButtons" role="group" aria-label="Pick a coin"></div>
+        </div>
+
+        <div class="side">
+          <div class="panel shadow">
+            <div class="ph mono small"><span>MARKET RADAR · 24H</span><span class="acc">SCANNING <span id="radarN">0</span><span class="blink">_</span></span></div>
+            <div class="radar" id="radar"><div class="radar-x"></div><div class="radar-y"></div><div class="sweep"></div></div>
+            <p class="mono dim tiny center">distance from centre = 24h move · colour = direction</p>
+          </div>
+          <div class="panel shadow gate-panel" id="gatePanel">
+            <span class="mono small strong">MARKET FILTER · BTC 30-DAY VOL</span>
+            <div class="gate-num"><span id="gateVal">—</span><span class="strong">th pctl · threshold <span id="gateMax">67</span></span></div>
+            <div class="gauge"><div class="gauge-fill" id="gateFill"></div><div class="gauge-mark" id="gateMark"></div></div>
+            <div class="gate-word" id="gateWord">—</div>
+            <span class="small" id="gateText"></span>
+          </div>
+        </div>
+      </div>
+
+      <div class="row">
+        <div class="panel shadow grow trace">
+          <div class="trace-head"><h2 id="traceTitle">DECISION TRACE</h2><span class="st-pill" id="traceStatus">—</span></div>
+          <pre class="trace-body" id="trace"></pre>
+        </div>
+        <div class="panel side stream">
+          <div class="stream-cols" id="stream"></div>
+          <div class="stream-foot mono tiny"><span>MARKET STREAM</span><span class="acc" id="streamAge">—</span></div>
+        </div>
+      </div>
+
+      <div class="row">
+        <div class="panel shadow grow" id="feed">
+          <div class="ph"><h2>SIGNAL FEED</h2><span class="mono dim small">SWING BOOK · LAST 14 DAYS</span></div>
+          <div class="scroll-x"><div class="feed" id="feedRows"></div></div>
+        </div>
+        <div class="panel shadow side ask">
+          <h2>ASK THE DESK</h2>
+          <div class="ask-btns" id="askBtns"></div>
+          <div class="ask-answer" id="askAnswer">Pick a question. Answers are built from the live state on this page.</div>
+        </div>
+      </div>
+    </section>
+
+    <!-- 02 BOOK -->
+    <section data-view="book" hidden>
+      <div class="cards" id="positions"></div>
+      <div class="row">
+        <div class="panel shadow grow">
+          <div class="ph"><h2>CLOSED SWING TRADES</h2><span class="mono dim small" id="closedSummary"></span></div>
+          <div class="scroll-x"><div class="table" id="closedRows"></div></div>
+        </div>
+        <div class="panel shadow side">
+          <h2>TAKEN vs SKIPPED</h2>
+          <p class="small dim">Every swing signal, traded or skipped by the market filter, is replayed on 1h bars so the filter can be audited.</p>
+          <div id="takeSkip"></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- 03 EVIDENCE -->
+    <section data-view="evidence" hidden>
+      <div class="hero-band" id="expected"></div>
+      <div class="panel shadow">
+        <div class="ph"><h2>STRATEGIES · LIVE vs BACKTEST</h2><span class="mono dim small" id="stratNote"></span></div>
+        <div class="scroll-x"><div class="table" id="stratRows"></div></div>
+      </div>
+      <div class="panel">
+        <h2>DEEP TOOLS</h2>
+        <div class="links" id="evidenceLinks"></div>
+      </div>
+    </section>
+
+    <!-- 04 SYSTEM -->
+    <section data-view="system" hidden>
+      <div class="row">
+        <div class="panel shadow grow">
+          <div class="ph"><h2>LAST SWING SCAN</h2><span class="mono dim small" id="scanNote"></span></div>
+          <div class="scroll-x"><div class="table" id="scanRows"></div></div>
+        </div>
+        <div class="panel shadow side">
+          <h2>AI BUDGET · TODAY</h2>
+          <div id="budgets"></div>
+          <p class="small dim" id="budgetNote"></p>
+        </div>
+      </div>
+      <div class="row">
+        <div class="panel shadow grow">
+          <h2>ENGINE</h2>
+          <div class="kv" id="engine"></div>
+        </div>
+        <div class="panel side">
+          <h2>SETTINGS &amp; ADMIN</h2>
+          <div class="links" id="systemLinks"></div>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <footer class="foot mono tiny dim">
+    <span>crypto-signal-engine · portal v1</span>
+    <a href="/classic">open the classic dashboard</a>
+  </footer>
+</div>
+<script src="/portal/static/portal.js"></script>
+</body>
+</html>

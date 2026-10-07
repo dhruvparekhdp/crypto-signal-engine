@@ -1,0 +1,142 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Portal Information Architecture</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;700&amp;family=JetBrains+Mono:wght@400;600&amp;display=swap" rel="stylesheet">
+<style>
+body{margin:0;background:#0E0F12}
+a{color:#E8E6E1;text-decoration:none}a:hover{color:#FFFFFF}
+</style>
+</helmet>
+<div style="min-height:100vh;background:#0E0F12;color:#E8E6E1;font-family:'Space Grotesk',sans-serif;box-sizing:border-box;padding:56px 24px">
+<div style="max-width:1320px;margin:0 auto;display:flex;flex-direction:column;gap:40px">
+
+<div style="display:flex;flex-wrap:wrap;justify-content:space-between;align-items:flex-end;gap:24px">
+  <div style="display:flex;flex-direction:column;gap:12px;max-width:760px">
+    <div style="font-family:'JetBrains Mono',monospace;font-size:12px;letter-spacing:.14em;color:#9CA3AF;text-transform:uppercase">crypto-signal-engine · portal revamp</div>
+    <h1 style="margin:0;font-size:56px;line-height:1.02;font-weight:700;letter-spacing:-.03em">11 screens become 4 hubs.</h1>
+    <p style="margin:0;font-size:18px;line-height:1.5;color:#B4B8C0">Every page you have today folds into one of four places, organised around the question you came with: what is happening now, what am I holding, can I trust it, and is the machine healthy.</p>
+  </div>
+  <div style="display:flex;gap:12px;flex-wrap:wrap">
+    <a href="CyberBrutal.dc.html" style="border:1px solid #3A3D45;padding:12px 18px;font-family:'JetBrains Mono',monospace;font-size:13px;min-height:44px;box-sizing:border-box;display:flex;align-items:center">A · Brutalism →</a>
+    <a href="NeonNoir.dc.html" style="border:1px solid #3A3D45;padding:12px 18px;font-family:'JetBrains Mono',monospace;font-size:13px;min-height:44px;box-sizing:border-box;display:flex;align-items:center">B · Neon-Noir →</a>
+    <a href="CommandCenter.dc.html" style="border:1px solid #3A3D45;padding:12px 18px;font-family:'JetBrains Mono',monospace;font-size:13px;min-height:44px;box-sizing:border-box;display:flex;align-items:center">C · Command Center →</a>
+  </div>
+</div>
+
+<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:16px">
+  <sc-for list="{{hubs}}" as="h" hint-placeholder-count="4">
+    <div style="background:#16181D;border:1px solid #2A2D34;padding:24px;display:flex;flex-direction:column;gap:16px">
+      <div style="display:flex;justify-content:space-between;align-items:baseline">
+        <span style="font-family:'JetBrains Mono',monospace;font-size:13px;color:{{h.color}}">{{h.n}}</span>
+        <span style="font-family:'JetBrains Mono',monospace;font-size:11px;color:#9CA3AF">{{h.route}}</span>
+      </div>
+      <div style="font-size:30px;font-weight:700;letter-spacing:-.02em">{{h.name}}</div>
+      <div style="font-size:15px;line-height:1.45;color:#B4B8C0">{{h.q}}</div>
+      <div style="height:1px;background:#2A2D34"></div>
+      <div style="font-family:'JetBrains Mono',monospace;font-size:11px;letter-spacing:.1em;color:#9CA3AF">ABSORBS</div>
+      <div style="display:flex;flex-wrap:wrap;gap:8px">
+        <sc-for list="{{h.old}}" as="o" hint-placeholder-count="3">
+          <span style="border:1px solid #3A3D45;padding:6px 10px;font-size:13px">{{o}}</span>
+        </sc-for>
+      </div>
+      <div style="font-family:'JetBrains Mono',monospace;font-size:11px;letter-spacing:.1em;color:#9CA3AF">ON THE PAGE</div>
+      <div style="display:flex;flex-direction:column;gap:6px">
+        <sc-for list="{{h.parts}}" as="p" hint-placeholder-count="4">
+          <div style="font-size:14px;color:#D4D6DB;display:flex;gap:8px"><span style="color:{{h.color}}">▸</span><span>{{p}}</span></div>
+        </sc-for>
+      </div>
+    </div>
+  </sc-for>
+</div>
+
+<div style="display:flex;flex-wrap:wrap;gap:24px">
+  <div style="flex:999 1 560px;min-width:0;background:#16181D;border:1px solid #2A2D34;padding:24px;display:flex;flex-direction:column;gap:16px">
+    <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px">
+      <h2 style="margin:0;font-size:22px;font-weight:700">Redirects</h2>
+      <span style="font-family:'JetBrains Mono',monospace;font-size:12px;color:#9CA3AF">old links keep working · 301 to the new hub + tab</span>
+    </div>
+    <div style="overflow-x:auto">
+      <div style="min-width:520px;display:flex;flex-direction:column">
+        <div style="display:grid;grid-template-columns:minmax(0,1.1fr) 40px minmax(0,1.4fr);padding:8px 0;border-bottom:1px solid #2A2D34;font-family:'JetBrains Mono',monospace;font-size:11px;letter-spacing:.1em;color:#9CA3AF">
+          <span>TODAY</span><span></span><span>LANDS ON</span>
+        </div>
+        <sc-for list="{{redirects}}" as="r" hint-placeholder-count="11">
+          <div style="display:grid;grid-template-columns:minmax(0,1.1fr) 40px minmax(0,1.4fr);padding:10px 0;border-bottom:1px solid #1F2228;font-size:14px;align-items:center">
+            <span style="color:#B4B8C0">{{r.from}}</span>
+            <span style="color:#6B7280;font-family:'JetBrains Mono',monospace">→</span>
+            <span style="font-family:'JetBrains Mono',monospace;font-size:13px">{{r.to}}</span>
+          </div>
+        </sc-for>
+      </div>
+    </div>
+  </div>
+  <div style="flex:1 1 320px;min-width:0;display:flex;flex-direction:column;gap:16px">
+    <div style="background:#16181D;border:1px solid #2A2D34;padding:24px;display:flex;flex-direction:column;gap:12px">
+      <h2 style="margin:0;font-size:22px;font-weight:700">Always visible</h2>
+      <div style="font-size:14px;line-height:1.5;color:#B4B8C0">A thin status strip sits on every hub so you never have to open Diagnostics to know if things are fine.</div>
+      <sc-for list="{{strip}}" as="s" hint-placeholder-count="5">
+        <div style="display:flex;gap:10px;font-size:14px"><span style="font-family:'JetBrains Mono',monospace;color:#6B7280;width:18px">{{s.n}}</span><span>{{s.t}}</span></div>
+      </sc-for>
+    </div>
+    <div style="background:#16181D;border:1px solid #2A2D34;padding:24px;display:flex;flex-direction:column;gap:12px">
+      <h2 style="margin:0;font-size:22px;font-weight:700">Three directions</h2>
+      <div style="font-size:14px;line-height:1.5;color:#B4B8C0">Same layout, same live data model, three skins. Each demo runs a simulated feed: prices tick, candles build, signals arrive and the market filter opens and closes. Click the hub tabs; they switch.</div>
+    </div>
+  </div>
+</div>
+
+</div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1440,"height":980}}'>
+class Component extends DCLogic {
+  renderVals() {
+    return {
+      hubs: [
+        { n: '01', name: 'Command', route: '/command', color: '#C6F432', q: 'What is the market doing and what did the engine just decide?',
+          old: ['Dashboard', 'Signals', 'Watchlist'],
+          parts: ['Live chart with Keltner band for any coin', 'Market filter gauge (BTC 30-day vol)', 'Signal feed: taken / skipped / refused', 'Watchlist rail with sparklines'] },
+        { n: '02', name: 'Book', route: '/book', color: '#3BF0FF', q: 'What am I holding and how is each trade doing?',
+          old: ['Paper Trading'],
+          parts: ['Open swing positions in R, −1R to +3R', 'Days left on the 7-day limit', 'Taken vs skipped-by-filter comparison', 'Closed trade history'] },
+        { n: '03', name: 'Evidence', route: '/evidence', color: '#FFB547', q: 'Can I trust these strategies?',
+          old: ['Accuracy', 'Historic Data', 'Explorer', 'Lab Monitor'],
+          parts: ['Per-strategy validation checks', 'Live vs backtest R per trade', 'Historic candles explorer', 'Lab runs and findings'] },
+        { n: '04', name: 'System', route: '/system', color: '#FF6FA8', q: 'Is the machine healthy?',
+          old: ['Diagnostics', 'Guard', 'Settings'],
+          parts: ['Scheduler jobs with next run', 'AI provider budgets', 'Guard rules and refusals', 'Settings in a drawer, not a page'] }
+      ],
+      redirects: [
+        { from: 'Dashboard', to: '/command' },
+        { from: 'Signals', to: '/command#feed' },
+        { from: 'Watchlist', to: '/command (right rail)' },
+        { from: 'Paper Trading', to: '/book' },
+        { from: 'Accuracy', to: '/evidence?tab=accuracy' },
+        { from: 'Historic Data', to: '/evidence?tab=history' },
+        { from: 'Explorer', to: '/evidence?tab=history&coin=…' },
+        { from: 'Lab Monitor (:8765)', to: '/evidence?tab=lab' },
+        { from: 'Diagnostics', to: '/system' },
+        { from: 'Guard', to: '/system?tab=guard' },
+        { from: 'Settings', to: '/system (settings drawer)' }
+      ],
+      strip: [
+        { n: '1', t: 'UTC clock and countdown to the next 4h / 8h bar close' },
+        { n: '2', t: 'Market filter: open or closed' },
+        { n: '3', t: 'Open trades and worst-case risk' },
+        { n: '4', t: 'Live trading OFF badge (paper only)' },
+        { n: '5', t: 'Feed heartbeat' }
+      ]
+    };
+  }
+}
+</script>
+</body>
+</html>

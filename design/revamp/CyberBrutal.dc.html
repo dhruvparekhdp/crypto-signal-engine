@@ -1,0 +1,329 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Cyber-Brutalism Command</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Archivo:wght@500;700;900&amp;family=JetBrains+Mono:wght@400;700&amp;display=swap" rel="stylesheet">
+<style>
+body{margin:0;background:#E7E4DB}
+a{color:#0B0B0B}a:hover{color:#3A3A3A}
+@keyframes cbMarq{from{transform:translateX(0)}to{transform:translateX(-50%)}}
+@keyframes cbBlink{0%,49%{opacity:1}50%,100%{opacity:0}}
+@keyframes cbPop{from{background:#C6F432}to{background:#FFFFFF}}
+@keyframes cbPulse{0%{box-shadow:0 0 0 0 rgba(11,11,11,.6)}100%{box-shadow:0 0 0 10px rgba(11,11,11,0)}}
+.cb-marq{display:flex;width:max-content;animation:cbMarq 38s linear infinite}
+.cb-blink{animation:cbBlink 1s steps(1) infinite}
+.cb-new{animation:cbPop 1.6s ease-out}
+.cb-dot{animation:cbPulse 1.4s ease-out infinite}
+.cb-btn{cursor:pointer;transition:transform .08s,box-shadow .08s}
+.cb-btn:hover{transform:translate(-2px,-2px);box-shadow:6px 6px 0 #0B0B0B}
+.cb-btn:active{transform:translate(2px,2px);box-shadow:0 0 0 #0B0B0B}
+</style>
+</helmet>
+<div style="min-height:100vh;background:#E7E4DB;color:#0B0B0B;font-family:'Archivo',sans-serif;box-sizing:border-box">
+
+<div style="background:#0B0B0B;color:#E7E4DB;overflow:hidden;border-bottom:3px solid #0B0B0B;height:40px;display:flex;align-items:center">
+  <div class="cb-marq" style="font-family:'JetBrains Mono',monospace;font-size:13px">
+    <sc-for list="{{tape}}" as="c" hint-placeholder-count="20">
+      <span style="padding:0 22px;display:flex;gap:10px;white-space:nowrap;border-right:1px solid #333"><b style="color:#C6F432">{{c.sym}}</b><span>{{c.price}}</span><span style="color:{{c.tapeCol}}">{{c.chg}}</span></span>
+    </sc-for>
+  </div>
+</div>
+
+<div style="max-width:1400px;margin:0 auto;padding:24px 20px 48px;display:flex;flex-direction:column;gap:24px">
+
+<div style="display:flex;flex-wrap:wrap;gap:16px;align-items:stretch;justify-content:space-between">
+  <div style="display:flex;align-items:center;gap:0;border:3px solid #0B0B0B;box-shadow:6px 6px 0 #0B0B0B;background:#FFFFFF">
+    <span style="background:#C6F432;padding:8px 14px;font-weight:900;font-size:28px;letter-spacing:-.04em;border-right:3px solid #0B0B0B">SIG/</span>
+    <span style="padding:8px 14px;font-weight:900;font-size:28px;letter-spacing:-.04em">ENGINE<span class="cb-blink">_</span></span>
+  </div>
+  <nav style="display:flex;flex-wrap:wrap;gap:10px" aria-label="Hubs">
+    <sc-for list="{{tabs}}" as="t" hint-placeholder-count="4">
+      <button class="cb-btn" onClick="{{t.go}}" style="font-family:'Archivo',sans-serif;font-weight:900;font-size:16px;letter-spacing:.02em;min-height:48px;padding:0 20px;border:3px solid #0B0B0B;box-shadow:4px 4px 0 #0B0B0B;background:{{t.bg}};color:{{t.fg}}">{{t.num}} {{t.label}}</button>
+    </sc-for>
+  </nav>
+  <div style="display:flex;flex-wrap:wrap;gap:10px;font-family:'JetBrains Mono',monospace;font-size:13px">
+    <div style="border:3px solid #0B0B0B;background:#FFFFFF;padding:6px 12px;display:flex;flex-direction:column;justify-content:center"><span style="font-size:10px;letter-spacing:.1em">UTC</span><b style="font-size:18px">{{clock}}</b></div>
+    <div style="border:3px solid #0B0B0B;background:#FFFFFF;padding:6px 12px;display:flex;flex-direction:column;justify-content:center"><span style="font-size:10px;letter-spacing:.1em">NEXT 4H CLOSE</span><b style="font-size:18px">{{next4}}</b></div>
+    <div style="border:3px solid #0B0B0B;background:#0B0B0B;color:#C6F432;padding:6px 12px;display:flex;align-items:center;gap:8px"><span class="cb-dot" style="width:10px;height:10px;background:#C6F432;display:inline-block"></span>SIM FEED</div>
+  </div>
+</div>
+
+<div style="display:flex;flex-wrap:wrap;gap:0;border:3px solid #0B0B0B;background:#FFFFFF;font-family:'JetBrains Mono',monospace;font-size:13px">
+  <span style="padding:10px 14px;border-right:3px solid #0B0B0B;background:{{gateBg}};font-weight:700">FILTER {{gateWord}}</span>
+  <span style="padding:10px 14px;border-right:3px solid #0B0B0B">OPEN TRADES {{openCount}}</span>
+  <span style="padding:10px 14px;border-right:3px solid #0B0B0B">WORST CASE −{{worstCase}}% WALLET</span>
+  <span style="padding:10px 14px;border-right:3px solid #0B0B0B">TAKEN {{taken}} · SKIPPED {{skipped}} · REFUSED {{refused}}</span>
+  <span style="padding:10px 14px;background:#0B0B0B;color:#E7E4DB">LIVE TRADING: OFF · PAPER ONLY</span>
+</div>
+
+<sc-if value="{{isCommand}}" hint-placeholder-val="{{ true }}">
+<div style="display:flex;flex-direction:column;gap:24px">
+  <div style="display:flex;flex-wrap:wrap;gap:24px">
+    <div style="flex:999 1 620px;min-width:0;border:3px solid #0B0B0B;box-shadow:8px 8px 0 #0B0B0B;background:#FFFFFF;display:flex;flex-direction:column">
+      <div style="display:flex;flex-wrap:wrap;justify-content:space-between;align-items:flex-end;gap:12px;padding:20px 20px 12px;border-bottom:3px solid #0B0B0B">
+        <div style="display:flex;flex-direction:column;gap:4px">
+          <span style="font-family:'JetBrains Mono',monospace;font-size:12px;letter-spacing:.12em">{{sel.sym}}/USDT · 4H · KELTNER 20 / 2.5</span>
+          <span style="font-weight:900;font-size:72px;line-height:.9;letter-spacing:-.05em">{{sel.price}}</span>
+        </div>
+        <span style="font-weight:900;font-size:28px;padding:6px 12px;border:3px solid #0B0B0B;background:{{sel.chgBg}};color:{{sel.chgFg}}">{{sel.chg}}</span>
+      </div>
+      <div style="position:relative;height:280px;margin:16px 20px;background-image:linear-gradient(#0B0B0B14 1px,transparent 1px);background-size:100% 56px">
+        <svg viewBox="0 0 1000 280" preserveAspectRatio="none" style="position:absolute;inset:0;width:100%;height:100%">
+          <polygon points="{{band}}" fill="#C6F432" fill-opacity="0.35"></polygon>
+          <polyline points="{{upper}}" fill="none" stroke="#0B0B0B" stroke-width="2" stroke-dasharray="6 5" vector-effect="non-scaling-stroke"></polyline>
+          <polyline points="{{lower}}" fill="none" stroke="#0B0B0B" stroke-width="2" stroke-dasharray="6 5" vector-effect="non-scaling-stroke"></polyline>
+          <polyline points="{{mid}}" fill="none" stroke="#0B0B0B" stroke-width="1" vector-effect="non-scaling-stroke"></polyline>
+        </svg>
+        <sc-for list="{{candles}}" as="k" hint-placeholder-count="48">
+          <div style="position:absolute;left:{{k.wx}}%;top:{{k.wt}}px;height:{{k.wh}}px;width:2px;background:#0B0B0B"></div>
+          <div style="position:absolute;left:{{k.x}}%;width:{{k.w}}%;top:{{k.bt}}px;height:{{k.bh}}px;background:{{k.col}};border:2px solid #0B0B0B;box-sizing:border-box"></div>
+        </sc-for>
+        <div style="position:absolute;left:0;right:0;top:{{lastY}}px;border-top:2px dashed #9B8CFF"></div>
+        <div style="position:absolute;right:0;top:{{lastY}}px;transform:translateY(-50%);background:#0B0B0B;color:#C6F432;font-family:'JetBrains Mono',monospace;font-size:12px;padding:3px 6px">{{sel.price}}</div>
+      </div>
+      <div style="display:flex;flex-wrap:wrap;gap:8px;padding:0 20px 20px">
+        <sc-for list="{{coins}}" as="c" hint-placeholder-count="10">
+          <button class="cb-btn" onClick="{{c.pick}}" style="font-family:'JetBrains Mono',monospace;font-weight:700;font-size:14px;min-height:44px;min-width:64px;border:3px solid #0B0B0B;background:{{c.btnBg}};color:{{c.btnFg}}">{{c.sym}}</button>
+        </sc-for>
+      </div>
+    </div>
+
+    <div style="flex:1 1 340px;min-width:0;display:flex;flex-direction:column;gap:24px">
+      <div style="border:3px solid #0B0B0B;box-shadow:8px 8px 0 #0B0B0B;background:{{gateBg}};padding:20px;display:flex;flex-direction:column;gap:12px">
+        <span style="font-family:'JetBrains Mono',monospace;font-size:12px;letter-spacing:.12em">MARKET FILTER · BTC 30-DAY VOL</span>
+        <div style="display:flex;align-items:baseline;gap:10px"><span style="font-weight:900;font-size:96px;line-height:.85;letter-spacing:-.06em">{{vol}}</span><span style="font-weight:700;font-size:18px">th pctl<br>of its year</span></div>
+        <div style="position:relative;height:28px;border:3px solid #0B0B0B;background:#FFFFFF">
+          <div style="position:absolute;left:0;top:0;bottom:0;width:{{vol}}%;background:#0B0B0B;transition:width .6s"></div>
+          <div style="position:absolute;left:66.7%;top:-8px;bottom:-8px;width:3px;background:#9B8CFF"></div>
+        </div>
+        <div style="font-weight:900;font-size:32px;letter-spacing:-.02em">{{gateWord}}</div>
+        <div style="font-size:14px;line-height:1.4">{{gateText}}</div>
+      </div>
+      <div style="border:3px solid #0B0B0B;box-shadow:8px 8px 0 #0B0B0B;background:#FFFFFF;padding:20px;display:flex;flex-direction:column;gap:12px">
+        <div style="display:flex;justify-content:space-between;font-family:'JetBrains Mono',monospace;font-size:12px;letter-spacing:.1em"><span>15M DETECTORS · {{sel.sym}}</span><span>SHADOW</span></div>
+        <div style="display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:6px">
+          <sc-for list="{{votes}}" as="v" hint-placeholder-count="5">
+            <div style="border:3px solid #0B0B0B;background:{{v.bg}};color:{{v.fg}};padding:10px 4px;display:flex;flex-direction:column;align-items:center;gap:4px;transition:background .4s">
+              <b style="font-size:22px">{{v.arrow}}</b><span style="font-size:10px;font-family:'JetBrains Mono',monospace">{{v.short}}</span>
+            </div>
+          </sc-for>
+        </div>
+        <div style="font-weight:700;font-size:16px">{{confText}}</div>
+      </div>
+    </div>
+  </div>
+
+  <div style="display:flex;flex-wrap:wrap;gap:24px">
+    <div id="feed" style="flex:999 1 620px;min-width:0;border:3px solid #0B0B0B;box-shadow:8px 8px 0 #0B0B0B;background:#FFFFFF">
+      <div style="display:flex;justify-content:space-between;align-items:center;padding:14px 20px;border-bottom:3px solid #0B0B0B;background:#0B0B0B;color:#E7E4DB">
+        <span style="font-weight:900;font-size:20px">SIGNAL FEED</span>
+        <span style="font-family:'JetBrains Mono',monospace;font-size:12px">SWING BOOK · 4H/8H</span>
+      </div>
+      <div style="overflow-x:auto">
+        <div style="min-width:640px">
+          <sc-for list="{{feed}}" as="f" hint-placeholder-count="6">
+            <div class="cb-new" style="display:grid;grid-template-columns:70px 64px 70px minmax(0,1.4fr) minmax(0,1fr) 110px;gap:10px;align-items:center;padding:10px 20px;border-bottom:2px solid #0B0B0B;font-family:'JetBrains Mono',monospace;font-size:13px">
+              <span>{{f.time}}</span>
+              <b style="font-family:'Archivo',sans-serif;font-size:18px">{{f.sym}}</b>
+              <span style="font-weight:700;padding:2px 6px;border:2px solid #0B0B0B;text-align:center;background:{{f.sideBg}}">{{f.side}}</span>
+              <span>{{f.strat}}</span>
+              <span>{{f.entry}} · stop {{f.stopPct}}</span>
+              <span style="font-weight:700;padding:4px 6px;text-align:center;background:{{f.stBg}};color:{{f.stFg}};border:2px solid #0B0B0B">{{f.status}}</span>
+            </div>
+          </sc-for>
+        </div>
+      </div>
+    </div>
+    <div style="flex:1 1 340px;min-width:0;display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px;align-content:start">
+      <sc-for list="{{coins}}" as="c" hint-placeholder-count="10">
+        <button class="cb-btn" onClick="{{c.pick}}" style="text-align:left;font-family:'Archivo',sans-serif;border:3px solid #0B0B0B;background:#FFFFFF;padding:10px;display:flex;flex-direction:column;gap:4px;color:#0B0B0B">
+          <span style="display:flex;justify-content:space-between;width:100%"><b style="font-size:16px">{{c.sym}}</b><span style="font-family:'JetBrains Mono',monospace;font-size:12px;font-weight:700;color:{{c.txtCol}}">{{c.chg}}</span></span>
+          <svg viewBox="0 0 120 30" preserveAspectRatio="none" style="width:100%;height:30px"><polyline points="{{c.pts}}" fill="none" stroke="#0B0B0B" stroke-width="2" vector-effect="non-scaling-stroke"></polyline></svg>
+          <span style="font-family:'JetBrains Mono',monospace;font-size:13px">{{c.price}}</span>
+        </button>
+      </sc-for>
+    </div>
+  </div>
+</div>
+</sc-if>
+
+<sc-if value="{{isBook}}" hint-placeholder-val="{{ false }}">
+<div style="display:flex;flex-direction:column;gap:24px">
+  <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:24px">
+    <sc-for list="{{positions}}" as="p" hint-placeholder-count="4">
+      <div style="border:3px solid #0B0B0B;box-shadow:8px 8px 0 #0B0B0B;background:#FFFFFF;padding:20px;display:flex;flex-direction:column;gap:12px">
+        <div style="display:flex;justify-content:space-between;align-items:center"><b style="font-size:36px;letter-spacing:-.04em">{{p.sym}}</b><span style="font-weight:700;padding:4px 8px;border:2px solid #0B0B0B;background:{{p.sideBg}}">{{p.side}}</span></div>
+        <div style="font-family:'JetBrains Mono',monospace;font-size:12px">{{p.strat}}</div>
+        <div style="font-weight:900;font-size:56px;line-height:.9;letter-spacing:-.04em;color:{{p.rCol}}">{{p.r}}</div>
+        <div style="position:relative;height:24px;border:3px solid #0B0B0B;background:#E7E4DB">
+          <div style="position:absolute;left:0;top:0;bottom:0;width:{{p.prog}}%;background:{{p.barCol}};transition:width .6s"></div>
+          <div style="position:absolute;left:25%;top:-6px;bottom:-6px;width:2px;background:#0B0B0B"></div>
+        </div>
+        <div style="display:flex;justify-content:space-between;font-family:'JetBrains Mono',monospace;font-size:11px"><span>STOP −1R {{p.stopPx}}</span><span>0</span><span>+3R {{p.tgtPx}}</span></div>
+        <div style="display:flex;justify-content:space-between;font-family:'JetBrains Mono',monospace;font-size:13px;border-top:2px solid #0B0B0B;padding-top:10px"><span>entry {{p.entry}}</span><span>mark {{p.mark}}</span><b>{{p.days}}d left</b></div>
+      </div>
+    </sc-for>
+  </div>
+  <div style="border:3px solid #0B0B0B;box-shadow:8px 8px 0 #0B0B0B;background:#FFFFFF;padding:20px;display:flex;flex-wrap:wrap;gap:24px;align-items:center">
+    <div style="flex:1 1 260px;display:flex;flex-direction:column;gap:6px"><span style="font-weight:900;font-size:24px">TAKEN vs SKIPPED</span><span style="font-size:14px;line-height:1.4">Every swing signal, traded or skipped by the filter, is replayed on 1h bars to stop, 3R target or 7 days, so the filter earns its keep in public.</span></div>
+    <div style="flex:2 1 400px;display:flex;flex-direction:column;gap:10px;font-family:'JetBrains Mono',monospace;font-size:13px">
+      <div style="display:flex;align-items:center;gap:10px"><span style="width:90px">TAKEN</span><div style="height:28px;width:{{takenW}}%;background:#0B0B0B;transition:width .6s"></div><b>{{taken}}</b></div>
+      <div style="display:flex;align-items:center;gap:10px"><span style="width:90px">SKIPPED</span><div style="height:28px;width:{{skippedW}}%;background:#9B8CFF;border:2px solid #0B0B0B;transition:width .6s"></div><b>{{skipped}}</b></div>
+    </div>
+  </div>
+</div>
+</sc-if>
+
+<sc-if value="{{isEvidence}}" hint-placeholder-val="{{ false }}">
+<div style="display:flex;flex-direction:column;gap:24px">
+  <div style="border:3px solid #0B0B0B;box-shadow:8px 8px 0 #0B0B0B;background:#C6F432;padding:24px;display:flex;flex-wrap:wrap;gap:16px;align-items:baseline;justify-content:space-between">
+    <span style="font-weight:900;font-size:48px;letter-spacing:-.04em;line-height:.95">+0.20 → +0.32 R / trade</span>
+    <span style="font-size:15px;max-width:460px;line-height:1.4">Backtest effect of the market filter. Every year better; held on 1h, 2h and 12h data and on 56 other strategies.</span>
+  </div>
+  <div style="border:3px solid #0B0B0B;box-shadow:8px 8px 0 #0B0B0B;background:#FFFFFF;overflow-x:auto">
+    <div style="min-width:760px">
+      <div style="display:grid;grid-template-columns:minmax(0,1.6fr) repeat(4,90px) 90px;gap:10px;padding:12px 20px;background:#0B0B0B;color:#E7E4DB;font-family:'JetBrains Mono',monospace;font-size:11px;letter-spacing:.08em">
+        <span>STRATEGY · 5Y BINANCE 1M DATA</span><span>COSTS</span><span>NULL TEST</span><span>WALK-FWD</span><span>2.5× SLIP</span><span>LIVE SIGS</span>
+      </div>
+      <sc-for list="{{strats}}" as="s" hint-placeholder-count="8">
+        <div style="display:grid;grid-template-columns:minmax(0,1.6fr) repeat(4,90px) 90px;gap:10px;padding:12px 20px;border-bottom:2px solid #0B0B0B;align-items:center;font-family:'JetBrains Mono',monospace;font-size:13px">
+          <b style="font-family:'Archivo',sans-serif;font-size:17px">{{s.name}}</b>
+          <span style="background:#C6F432;border:2px solid #0B0B0B;text-align:center;font-weight:700">PASS</span>
+          <span style="background:#C6F432;border:2px solid #0B0B0B;text-align:center;font-weight:700">PASS</span>
+          <span style="background:#C6F432;border:2px solid #0B0B0B;text-align:center;font-weight:700">PASS</span>
+          <span style="background:#C6F432;border:2px solid #0B0B0B;text-align:center;font-weight:700">PASS</span>
+          <b style="font-size:18px">{{s.count}}</b>
+        </div>
+      </sc-for>
+    </div>
+  </div>
+  <div style="font-family:'JetBrains Mono',monospace;font-size:13px">Excluded: BCH, LTC (no edge in 5 years). Exits as tested: stop 3×ATR (refused above 8%), target 3R, 7-day limit.</div>
+</div>
+</sc-if>
+
+<sc-if value="{{isSystem}}" hint-placeholder-val="{{ false }}">
+<div style="display:flex;flex-wrap:wrap;gap:24px">
+  <div style="flex:999 1 560px;min-width:0;border:3px solid #0B0B0B;box-shadow:8px 8px 0 #0B0B0B;background:#FFFFFF">
+    <div style="padding:14px 20px;background:#0B0B0B;color:#E7E4DB;font-weight:900;font-size:20px">SCHEDULER</div>
+    <sc-for list="{{jobs}}" as="j" hint-placeholder-count="6">
+      <div style="display:grid;grid-template-columns:minmax(0,1fr) 120px 100px;gap:10px;padding:12px 20px;border-bottom:2px solid #0B0B0B;align-items:center;font-family:'JetBrains Mono',monospace;font-size:13px">
+        <b style="font-family:'Archivo',sans-serif;font-size:16px">{{j.name}}</b><span>{{j.every}}</span><b style="font-size:16px">{{j.next}}</b>
+      </div>
+    </sc-for>
+  </div>
+  <div style="flex:1 1 340px;min-width:0;display:flex;flex-direction:column;gap:24px">
+    <div style="border:3px solid #0B0B0B;box-shadow:8px 8px 0 #0B0B0B;background:#FFFFFF;padding:20px;display:flex;flex-direction:column;gap:14px">
+      <span style="font-weight:900;font-size:20px">AI BUDGET · DAILY TOKENS</span>
+      <sc-for list="{{budgets}}" as="b" hint-placeholder-count="3">
+        <div style="display:flex;flex-direction:column;gap:4px;font-family:'JetBrains Mono',monospace;font-size:13px">
+          <div style="display:flex;justify-content:space-between"><span>{{b.name}}</span><b>{{b.pct}}%</b></div>
+          <div style="height:20px;border:3px solid #0B0B0B;background:#E7E4DB"><div style="height:100%;width:{{b.pct}}%;background:{{b.col}};transition:width .6s"></div></div>
+        </div>
+      </sc-for>
+      <span style="font-size:13px">Hard stop at 85% of each free-tier limit.</span>
+    </div>
+    <div style="border:3px solid #0B0B0B;box-shadow:8px 8px 0 #0B0B0B;background:#0B0B0B;color:#E7E4DB;padding:20px;display:flex;flex-direction:column;gap:8px;font-family:'JetBrains Mono',monospace;font-size:14px">
+      <b style="color:#C6F432;font-family:'Archivo',sans-serif;font-size:20px">GUARD</b>
+      <span>1,473 tests passing</span>
+      <span>execution/ live book: not wired</span>
+      <span>deploy = push to main</span>
+      <span>BCH / LTC excluded</span>
+    </div>
+  </div>
+</div>
+</sc-if>
+
+</div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1440,"height":1180}}'>
+const COINS=[['BTC',62840.5],['ETH',2465.3],['SOL',148.21],['BNB',571.3],['XRP',0.5412],['DOGE',0.10931],['ADA',0.3521],['AVAX',26.41],['LINK',11.274],['DOT',4.312]];
+const STRATS=['4h vol-breakout z=3','4h Keltner k=2.5','4h Donchian n=100','4h Ichimoku','8h Keltner k=2','8h vol-breakout z=3','8h Donchian n=100','8h Ichimoku'];
+const FAMS=['Trend','Momentum','Volume','Volatility','Structure'];
+const UPC='#C6F432', DNC='#9B8CFF';
+const rnd=(a,b)=>a+Math.random()*(b-a);
+const pick=a=>a[Math.floor(Math.random()*a.length)];
+const pad=n=>String(n).padStart(2,'0');
+const hms=d=>pad(d.getUTCHours())+':'+pad(d.getUTCMinutes())+':'+pad(d.getUTCSeconds());
+const dur=ms=>{const s=Math.floor(ms/1000);return pad(Math.floor(s/3600))+':'+pad(Math.floor(s/60)%60)+':'+pad(s%60);};
+const dp=p=>p>=10?2:p>=1?3:5;
+const fmt=p=>p.toLocaleString('en-US',{minimumFractionDigits:dp(p),maximumFractionDigits:dp(p)});
+const pct=x=>(x>=0?'+':'')+x.toFixed(2)+'%';
+function seedCandles(p,n){let c=p;const out=[];for(let i=0;i<n;i++){const v=p*0.007;const o=c+(Math.random()-0.53)*v*2;out.unshift({o,c,h:Math.max(o,c)+Math.random()*v*0.8,l:Math.min(o,c)-Math.random()*v*0.8});c=o;}return out;}
+function walk(p,n){let x=p;const a=[p];for(let i=1;i<n;i++){x=x*(1+(Math.random()-0.5)*0.006);a.unshift(x);}return a;}
+function spark(h,w,ht){const mn=Math.min(...h),mx=Math.max(...h)||1;return h.map((v,i)=>(i*w/(h.length-1)).toFixed(1)+','+(ht-2-(v-mn)/((mx-mn)||1)*(ht-4)).toFixed(1)).join(' ');}
+function makeSignal(coins,vol){const c=coins[1+Math.floor(Math.random()*(coins.length-1))];const side=Math.random()<0.55?'LONG':'SHORT';const stop=rnd(0.9,2.9)*3;const st=stop>8?'REFUSED':vol>=67?'SKIPPED':'TAKEN';return {id:String(Date.now()),time:hms(new Date()),sym:c.sym,side,strat:pick(STRATS),entry:fmt(c.price),stopPct:stop.toFixed(1)+'%',status:st};}
+class Component extends DCLogic {
+  constructor(props){
+    super(props);
+    const coins=COINS.map(([s,p])=>({sym:s,price:p,hist:walk(p,40)}));
+    const seed=[];let vol=44;for(let i=0;i<6;i++){const sg=makeSignal(coins,i===2?72:vol);sg.time=hms(new Date(Date.now()-(6-i)*1000*60*37));seed.unshift(sg);}
+    const P=[[2,'LONG','4h Donchian n=100',-0.018,4.2,2],[1,'LONG','8h Keltner k=2',0.006,5.1,4],[8,'SHORT','4h vol-breakout z=3',0.011,6.3,1],[6,'LONG','8h Ichimoku',-0.004,3.9,5]];
+    this.state={tab:'command',sel:0,coins,candles:seedCandles(coins[0].price,48),feed:seed,t:0,now:Date.now(),vol,
+      counts:{TAKEN:seed.filter(s=>s.status==='TAKEN').length,SKIPPED:seed.filter(s=>s.status==='SKIPPED').length,REFUSED:seed.filter(s=>s.status==='REFUSED').length},
+      stratCounts:STRATS.map(()=>Math.floor(rnd(1,7))),
+      positions:P.map(([i,side,strat,off,stop,age])=>({ci:i,side,strat,entry:coins[i].price*(1+off),stop,age})),
+      budgets:[{name:'Groq gpt-oss +search',pct:58},{name:'OpenRouter free',pct:31},{name:'HF Space (own)',pct:12}]};
+  }
+  componentDidMount(){this.iv=setInterval(()=>this.step(),1000);}
+  componentWillUnmount(){clearInterval(this.iv);}
+  step(){
+    const s=this.state;const t=s.t+1;
+    const coins=s.coins.map(c=>{const price=c.price*(1+(Math.random()-0.49)*(c.sym==='BTC'?0.0014:0.0024));return {...c,price,hist:c.hist.slice(1).concat(price)};});
+    const p=coins[s.sel].price;let candles=s.candles.slice();const last={...candles[candles.length-1]};
+    last.c=p;last.h=Math.max(last.h,p);last.l=Math.min(last.l,p);candles[candles.length-1]=last;
+    if(t%6===0)candles=candles.slice(1).concat({o:p,h:p,l:p,c:p});
+    let vol=s.vol;if(t%3===0)vol=Math.max(22,Math.min(84,vol+Math.round(rnd(-4,4.6))));
+    let feed=s.feed,counts=s.counts,stratCounts=s.stratCounts;
+    if(t%7===3){const sg=makeSignal(coins,vol);feed=[sg].concat(feed).slice(0,7);counts={...counts,[sg.status]:counts[sg.status]+1};const si=STRATS.indexOf(sg.strat);stratCounts=stratCounts.map((n,i)=>i===si?n+1:n);}
+    const budgets=t%5===0?s.budgets.map(b=>({...b,pct:Math.min(85,b.pct+(Math.random()<0.5?1:0))})):s.budgets;
+    this.setState({t,coins,candles,vol,feed,counts,stratCounts,budgets,now:Date.now()});
+  }
+  renderVals(){
+    const s=this.state;const H=280;const selC=s.coins[s.sel];
+    const ks=s.candles,N=ks.length;
+    const ema=[];let e=ks[0].c;ks.forEach((k,i)=>{e=i?e+(k.c-e)*2/21:k.c;ema.push(e);});
+    const atr=[];let a=ks[0].h-ks[0].l;ks.forEach((k,i)=>{const tr=i?Math.max(k.h-k.l,Math.abs(k.h-ks[i-1].c),Math.abs(k.l-ks[i-1].c)):k.h-k.l;a=i?a+(tr-a)/10:tr;atr.push(a);});
+    const up=ema.map((v,i)=>v+2.5*atr[i]),dn=ema.map((v,i)=>v-2.5*atr[i]);
+    let hi=Math.max(...ks.map(k=>k.h),...up),lo=Math.min(...ks.map(k=>k.l),...dn);const pv=(hi-lo)*0.04;hi+=pv;lo-=pv;
+    const y=v=>(hi-v)/(hi-lo)*H;const cw=100/N;const X=i=>((i+0.5)*1000/N).toFixed(1);
+    const line=arr=>arr.map((v,i)=>X(i)+','+y(v).toFixed(1)).join(' ');
+    const candles=ks.map((k,i)=>({x:(i*cw+cw*0.15).toFixed(3),w:(cw*0.7).toFixed(3),wx:(i*cw+cw/2).toFixed(3),bt:y(Math.max(k.o,k.c)).toFixed(1),bh:Math.max(3,Math.abs(y(k.o)-y(k.c))).toFixed(1),wt:y(k.h).toFixed(1),wh:Math.max(1,y(k.l)-y(k.h)).toFixed(1),col:k.c>=k.o?UPC:DNC}));
+    const band=line(up)+' '+dn.map((v,i)=>X(i)+','+y(v).toFixed(1)).reverse().join(' ');
+    const coins=s.coins.map((c,i)=>{const ch=(c.price/c.hist[0]-1)*100;const act=i===s.sel;return {sym:c.sym,price:fmt(c.price),chg:pct(ch),up:ch>=0,txtCol:ch>=0?'#0B0B0B':'#4B3BCC',tapeCol:ch>=0?'#C6F432':'#B3A8FF',pts:spark(c.hist,120,30),btnBg:act?'#0B0B0B':'#FFFFFF',btnFg:act?'#C6F432':'#0B0B0B',pick:()=>this.setState({sel:i,candles:seedCandles(c.price,48)})};});
+    const sel=coins[s.sel];sel.chgBg=sel.up?'#C6F432':'#9B8CFF';sel.chgFg='#0B0B0B';
+    const r20=ks.slice(-21,-1);const lastK=ks[N-1];
+    const fam=[ema[N-1]<lastK.c, lastK.c>ks[N-6].c, (s.t>>3)%3!==0, (lastK.h-lastK.l)>atr[N-1]*0.8, lastK.c>Math.max(...r20.map(k=>k.h))*0.995];
+    const nUp=fam.filter(Boolean).length;const agree=Math.max(nUp,5-nUp);
+    const votes=FAMS.map((f,i)=>({short:f.slice(0,4).toUpperCase(),arrow:fam[i]?'▲':'▼',bg:fam[i]?'#0B0B0B':'#FFFFFF',fg:fam[i]?'#C6F432':'#0B0B0B'}));
+    const open=s.vol<67;const now=new Date(s.now);
+    const ms4=4*3600e3,ms8=8*3600e3;const nx=m=>dur(m-(s.now%m));
+    const positions=s.positions.map(p=>{const c=s.coins[p.ci];const dir=p.side==='LONG'?1:-1;const R=dir*(c.price-p.entry)/p.entry*100/p.stop;const prog=(Math.max(-1,Math.min(3,R))+1)/4*100;
+      return {sym:c.sym,side:p.side,strat:p.strat,r:(R>=0?'+':'')+R.toFixed(2)+'R',rCol:R>=0?'#0B0B0B':'#4B3BCC',prog:prog.toFixed(1),barCol:R>=0?'#C6F432':'#9B8CFF',sideBg:p.side==='LONG'?'#C6F432':'#9B8CFF',entry:fmt(p.entry),mark:fmt(c.price),stopPx:fmt(p.entry*(1-dir*p.stop/100)),tgtPx:fmt(p.entry*(1+dir*3*p.stop/100)),days:7-p.age};});
+    const tot=Math.max(1,s.counts.TAKEN+s.counts.SKIPPED);
+    const tabs=[['command','Command'],['book','Book'],['evidence','Evidence'],['system','System']].map(([id,l],i)=>({num:'0'+(i+1),label:l.toUpperCase(),bg:s.tab===id?'#0B0B0B':'#FFFFFF',fg:s.tab===id?'#C6F432':'#0B0B0B',go:()=>this.setState({tab:id})}));
+    const feed=s.feed.map(f=>({...f,sideBg:f.side==='LONG'?'#C6F432':'#9B8CFF',stBg:f.status==='TAKEN'?'#0B0B0B':f.status==='SKIPPED'?'#9B8CFF':'#E7E4DB',stFg:f.status==='TAKEN'?'#C6F432':'#0B0B0B'}));
+    return {
+      tabs,isCommand:s.tab==='command',isBook:s.tab==='book',isEvidence:s.tab==='evidence',isSystem:s.tab==='system',
+      tape:coins.concat(coins),coins,sel,candles,upper:line(up),lower:line(dn),mid:line(ema),band,lastY:y(selC.price).toFixed(1),
+      clock:hms(now),next4:nx(ms4),vol:s.vol,gateBg:open?'#C6F432':'#9B8CFF',gateWord:open?'OPEN':'CLOSED',
+      gateText:open?'Below the top third of its past year. Swing signals are traded.':'In the top third of its past year. New swing signals are skipped and replayed on paper only.',
+      votes,confText:agree>=3?agree+' of 5 agree · '+(nUp>=3?'bullish':'bearish')+' confluence':'no confluence',
+      feed,taken:s.counts.TAKEN,skipped:s.counts.SKIPPED,refused:s.counts.REFUSED,takenW:(s.counts.TAKEN/tot*80).toFixed(1),skippedW:(s.counts.SKIPPED/tot*80).toFixed(1),
+      positions,openCount:positions.length,worstCase:positions.length*3,
+      strats:STRATS.map((n,i)=>({name:n,count:s.stratCounts[i]})),
+      jobs:[{name:'Swing scan',every:'4h bar close',next:nx(ms4)},{name:'Swing scan (8h)',every:'8h bar close',next:nx(ms8)},{name:'Outcome replay',every:'hourly',next:nx(3600e3)},{name:'AI briefing',every:'60 min',next:nx(3600e3)},{name:'Move attribution',every:'3 h',next:nx(3*3600e3)},{name:'Prod health',every:'30 min',next:nx(1800e3)}],
+      budgets:s.budgets.map(b=>({...b,col:b.pct>=75?'#9B8CFF':'#0B0B0B'}))
+    };
+  }
+}
+</script>
+</body>
+</html>

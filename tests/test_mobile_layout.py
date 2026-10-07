@@ -417,8 +417,8 @@ class TestEveryDestinationIsReachableOnAPhone(unittest.TestCase):
     def test_every_former_destination_is_in_a_page_group(self):
         """Nothing the old menu reached may become unreachable: every page is listed in HUB_GROUPS."""
         hub = self.html[self.html.index("window.HUB_GROUPS"[:0] + "var G = ["):self.html.index("window.HUB_GROUPS = G")]
-        for url in ("/#dashboard", "/#crypto", "/#mirror", "/#paper", "/#guard", "/#accuracy", "/#historic",
-                    "/#watchlist", "/#simulator", "/audit", "/predict", "/moves", "/chart", "/pipeline", "/v2",
+        for url in ("/classic#dashboard", "/classic#crypto", "/classic#mirror", "/classic#paper", "/classic#guard",
+                    "/classic#accuracy", "/classic#historic", "/classic#watchlist", "/classic#simulator", "/audit", "/predict", "/moves", "/chart", "/pipeline", "/v2",
                     "/settings", "/data", "/api/debug/binance", "/api-docs", "/journal"):
             with self.subTest(url=url):
                 self.assertIn(f'"{url}"]', hub)
@@ -426,7 +426,7 @@ class TestEveryDestinationIsReachableOnAPhone(unittest.TestCase):
     def test_every_in_page_link_has_a_tab_to_open(self):
         import re
         hub = self.html[self.html.index("var G = ["):self.html.index("window.HUB_GROUPS = G")]
-        for tab in re.findall(r'"/#(\w+)"', hub):
+        for tab in re.findall(r'"/classic#(\w+)"', hub):
             with self.subTest(tab=tab):
                 self.assertIn(f'id="tab-{tab}"', self.html)
 

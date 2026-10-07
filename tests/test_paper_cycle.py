@@ -431,7 +431,7 @@ class TestDashboardSurface(unittest.TestCase):
     def test_the_tab_and_its_loader_are_present(self):
         self.assertIn('id="tab-paper"', self.html)
         self.assertIn("async function loadPaper()", self.html)
-        self.assertIn('["Paper book","/#paper"]', self.html)           # reached through the Trading page group
+        self.assertIn('["Paper book","/classic#paper"]', self.html)           # reached through the Trading page group
 
     def test_switching_to_the_tab_loads_it(self):
         """The sidebar rewrite reindented this; the wiring is what matters."""
