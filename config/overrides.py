@@ -402,6 +402,7 @@ def describe(settings, stored: dict) -> list[dict]:
         "key": f.key, "group": f.group, "group_label": GROUPS[f.group],
         "label": f.label, "help": f.help, "kind": f.kind, "live": f.live,
         "lo": f.lo, "hi": f.hi,
+        "choices": list(f.choices) if f.choices else None,
         "value": None if f.kind == "secret" else getattr(settings, f.key, None),
         "is_set": _is_set(settings, f.key) if f.kind == "secret" else None,
         "source": "saved" if f.key in stored else "default",

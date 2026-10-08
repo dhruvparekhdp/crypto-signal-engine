@@ -470,6 +470,14 @@ function control(f){const v=f.value, id='f-'+f.key;
     +'spellcheck="false" style="width:230px;padding:9px 11px;font-size:12px" placeholder="https://..." value="'+esc(v||'')+'" '
     +'oninput="mark(\''+f.key+'\',this.value.trim())" '
     +'onchange="mark(\''+f.key+'\',this.value.trim())">';
+  if(f.kind==='choice'){
+    const opts=(f.choices||[]);
+    const cur=String(v==null?'':v);
+    return '<select class="inset" id="'+id+'" style="width:170px;padding:9px 11px;font-size:12px" '
+      +'onchange="mark(\''+f.key+'\',this.value)">'
+      +opts.map(o=>'<option value="'+esc(o)+'"'+(String(o)===cur?' selected':'')+'>'+esc(o)+'</option>').join('')
+      +'</select>';
+  }
   const utcHour=f.key.endsWith('_utc');
   return '<input class="num inset" id="'+id+'" type="number" step="'+(f.kind==='int'?1:0.01)+'"'
     +(f.lo!=null?' min="'+f.lo+'"':'')+(f.hi!=null?' max="'+f.hi+'"':'')+' value="'+esc(v)
