@@ -12,8 +12,13 @@ h2 .num{background:var(--acc);color:var(--bg);border-radius:99px;width:20px;heig
 @media (prefers-color-scheme:light){.running{background:#dcefff}.done{background:#dff3e8}.failed,.stalled\?,.waitingforworkers{background:#fbe3e2}}
 .bar{height:8px;background:var(--line);border-radius:5px;overflow:hidden;margin:8px 0 4px}.bar i{display:block;height:100%;background:var(--acc);transition:width .6s}
 .bar.big{height:16px;border-radius:8px}.bar.big i{background:linear-gradient(90deg,var(--acc),var(--ok))}
+.bar.sm{height:6px;margin:3px 0 2px}.mbar{margin:8px 0 2px}.mbar .lbl{display:flex;justify-content:space-between;font-size:11.5px;color:var(--mut);gap:8px}
+.mbar .lbl b{color:var(--fg);font-weight:600}
+.livebox{border:2px solid var(--acc);box-shadow:0 0 0 3px rgba(91,182,232,.15);animation:glow 2.2s infinite}
+@keyframes glow{50%{box-shadow:0 0 0 6px rgba(91,182,232,.08)}}
+.dot{display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--acc);margin-right:6px;animation:pulse 1.2s infinite;vertical-align:1px}
 .segs{display:flex;gap:3px;margin:8px 0 4px}.segs span{flex:1;height:10px;border-radius:3px;background:var(--line)}
-.segs .s-done{background:var(--ok)}.segs .s-failed{background:var(--bad)}.segs .s-running{background:var(--acc);animation:pulse 1.4s infinite}
+.segs .s-done{background:var(--ok)}.segs .s-failed{background:var(--bad)}.segs .s-running{background:var(--acc);animation:pulse 1.4s infinite}.segs .s-waiting{background:var(--line)}
 @keyframes pulse{50%{opacity:.45}}
 .coins{display:flex;flex-wrap:wrap;gap:4px;margin-top:6px}.coin{font-size:10.5px;padding:1px 6px;border-radius:5px;background:var(--soft);color:var(--mut)}.coin.ok{background:#173a2b;color:var(--ok)}
 @media (prefers-color-scheme:light){.coin.ok{background:#dff3e8}}
@@ -37,6 +42,7 @@ svg text{fill:var(--mut);font-size:10px;font-family:system-ui,sans-serif}
 .inp{background:var(--soft);color:var(--fg);border:1px solid var(--line);border-radius:8px;padding:4px 8px;font:inherit;font-size:12px;cursor:pointer}
 </style></head><body>
 <h1>Lab Monitor</h1><div class="sub" id="upd">loading…</div>
+<div id="live"></div>
 <div id="prod"></div>
 <div id="banner"></div>
 <h2><span class="num">1</span>Backtest progress</h2><div id="progress"></div>
@@ -139,19 +145,45 @@ function research(r){if(!r||!r.items)return '';const col=v=>/reject|off|not/.tes
  return `<div class="card"><b>Research verdicts</b> <span class="sub">newest first · updated ${esc(r.updated)}</span>${r.items.map(i=>`<details id="rs-${esc(i.name).slice(0,30).replace(/\W/g,'')}" style="border-top:1px solid var(--line);padding:6px 0"><summary><b>${esc(i.name)}</b> <span class="pill ${col(i.verdict)==='pos'?'done':col(i.verdict)==='neg'?'failed':'running'}">${esc(i.verdict)}</span> <span class="sub">${esc(i.date)}</span></summary><div class="sub" style="margin:6px 0 0 14px"><b>Evidence:</b> ${esc(i.evidence)}<br><b>Decision:</b> ${esc(i.decision)}</div></details>`).join('')}</div>`}
 
 /* ---------- 1 · progress ---------- */
-const WORD={done:'finished',running:'running',failed:'stopped','stalled?':'no heartbeat'};
-function progress(s){const o=s.overall||{},J=(s.jobs||[]).filter(j=>j.kind!=='tests');if(!J.length)return '<div class="card sub">no backtest jobs yet</div>';
+const WORD={done:'finished',running:'RUNNING NOW',failed:'stopped','stalled?':'no heartbeat',waiting:'waiting'};
+function mbars(bars,st){if(!bars||!bars.length)return '';
+ return bars.map(b=>{const col=st==='failed'?'var(--bad)':st==='done'?'var(--ok)':(b.id==='overall'?'linear-gradient(90deg,var(--acc),var(--ok))':'var(--acc)');
+  return `<div class="mbar"><div class="lbl"><span>${esc(b.label)}</span><span><b>${Math.round(b.pct||0)}%</b> · ${esc(b.detail||'')}</span></div>
+  <div class="bar sm"><i style="width:${b.pct||0}%;background:${col}"></i></div></div>`}).join('')}
+function livebox(s){const q=s.queue, L=s.live||(s.jobs||[]).filter(j=>j.state==='running'||j.state==='stalled?');
+ const pull=s.pull||{}, lag=pull.age_s!=null&&pull.age_s>45, bad=pull.ok===false;
+ const lagBanner=(lag||bad)?`<div class="sub ${bad||lag?'warn':''}" style="margin:6px 0;padding:6px 8px;background:var(--soft);border-radius:8px">
+ ${bad?`⚠ ThinkPad sync failed (${esc((pull.error||'').slice(0,80))}) · fail #${pull.fail_streak||'?'} · showing last good numbers`:`⚠ ThinkPad sync lag ${pull.age_s}s · Tailscale/Wi‑Fi slow · numbers may look frozen while the laptop still works`}
+ </div>`:'';
+ if(!q&&!L.length)return `<div class="card"><div class="row"><b>Nothing running right now</b><span class="pill done">idle</span></div>
+ ${lagBanner}<div class="sub">When the ThinkPad queue is active, this box turns blue and lists every live test with its own progress bars.</div></div>`;
+ const on=q&&q.state==='running', done=q&&q.state==='done';
+ const head=on?`<span class="dot"></span><b style="font-size:17px">RUNNING · non-AI queue on ${esc(q.host||'ThinkPad')}</b>`
+  :done?`<b style="font-size:17px" class="pos">✔ ALL non-AI tests finished</b> <span class="pill done">done</span>`
+  :`<b style="font-size:17px">${L.length} live test${L.length>1?'s':''}</b>`;
+ const qbar=q?`<div class="sub" style="margin-top:6px">Queue ${esc(q.stage||'')} · ${q.jobs_done||0}/${q.jobs_total||'?'} jobs done · ${q.age_s!=null?'status '+q.age_s+'s old':'—'}${q.elapsed_s!=null?' · elapsed '+fmt(q.elapsed_s):''}</div>
+ <div class="bar big"><i style="width:${q.pct||0}%"></i></div>
+ <div class="segs">${(q.stages||[]).map(st=>`<span class="s-${st.state}" title="${esc(st.id+' '+st.label)} · ${esc(st.detail)}"></span>`).join('')}</div>
+ <div class="legend">${(q.stages||[]).map(st=>`<span><i style="background:${st.state==='done'?'var(--ok)':st.state==='running'?'var(--acc)':st.state==='failed'?'var(--bad)':'var(--line)'}"></i>${esc(st.id)} ${esc(st.label.split(' ')[0])}</span>`).join('')}</div>
+ ${(q.stages||[]).map(st=>`<div class="mbar"><div class="lbl"><span>${esc(st.id)} · ${esc(st.label)}</span><span><b>${Math.round(st.pct||0)}%</b> · ${esc(st.detail||'')}</span></div>
+ <div class="bar sm"><i style="width:${st.pct||0}%;background:${st.state==='done'?'var(--ok)':st.state==='running'?'var(--acc)':st.state==='failed'?'var(--bad)':'var(--line)'}"></i></div></div>`).join('')}`:'';
+ const act=(L.length?L:(q&&q.active||[])).map(j=>`<div style="margin-top:12px;padding-top:10px;border-top:1px solid var(--line)">
+ <div class="row"><b>▶ ${esc(j.title||j.name)}</b><span class="pill running">${esc(WORD[j.state]||j.state||'running')}</span></div>
+ <div class="sub">${esc(j.host||'')} · ${j.pct!=null||j.progress_pct!=null?Math.round(j.progress_pct??j.pct):'—'}%</div>
+ ${mbars(j.bars||[{id:'overall',label:'This test',pct:j.progress_pct||0,detail:j.name}], j.state||'running')}</div>`).join('');
+ return `<div class="card livebox">${head}${lagBanner}${qbar||''}${act||'<div class="sub" style="margin-top:8px">Queue is up; waiting for the next job to start…</div>'}</div>`}
+function progress(s){const o=s.overall||{},J=(s.jobs||[]).filter(j=>j.kind!=='tests');if(!J.length&&!s.queue)return '<div class="card sub">no backtest jobs yet — if the ThinkPad is working, wait ~15s for status to sync</div>';
  const order=j=>({running:0,'stalled?':1,failed:2,done:3}[j.state]??4);
  J.sort((a,b)=>order(a)-order(b)||(b.finished||b.started)-(a.finished||a.started));
  const run=J.filter(j=>j.state==='running'),fin=J.filter(j=>j.state==='done').length,bad=J.filter(j=>j.state==='failed'||j.state==='stalled?').length;
- const pc=J.length?J.reduce((t,j)=>t+(j.state==='running'?(j.progress_pct||0):100),0)/J.length:0;
- const head=`<div class="card"><div class="row"><b style="font-size:16px">${run.length?`${run.length} backtest${run.length>1?'s':''} running`:'All backtests finished'}</b><span class="v">${Math.round(pc)}%</span></div>
+ const pc=J.length?J.reduce((t,j)=>t+(j.state==='running'?(j.progress_pct||0):100),0)/J.length:(s.queue&&s.queue.pct)||0;
+ const head=`<div class="card"><div class="row"><b style="font-size:16px">${run.length?`<span class="dot"></span>${run.length} backtest${run.length>1?'s':''} running`:(s.queue&&s.queue.state==='running'?'Queue active':'All backtests finished')}</b><span class="v">${Math.round(pc)}%</span></div>
  <div class="bar big"><i style="width:${pc}%"></i></div>
  <div class="segs">${J.map(j=>`<span class="s-${j.state==='stalled?'?'failed':j.state}" title="${esc(j.title)} · ${WORD[j.state]||j.state}"></span>`).join('')}</div>
- <div class="grid" style="margin-top:10px"><div class="kpi"><div class="k">jobs finished</div><div class="v pos">${fin}<span class="sub"> / ${J.length}</span></div></div>
+ <div class="grid" style="margin-top:10px"><div class="kpi"><div class="k">jobs finished</div><div class="v pos">${fin}<span class="sub"> / ${J.length||'?'}</span></div></div>
  <div class="kpi"><div class="k">running now</div><div class="v">${run.length}</div><div class="sub">${o.eta_s?'about '+fmt(o.eta_s)+' left':run.length?'estimating…':'nothing queued'}</div></div>
  <div class="kpi"><div class="k">stopped / failed</div><div class="v ${bad?'neg':''}">${bad}</div><div class="sub">${bad?'see the red rows below':'none'}</div></div>
- <div class="kpi"><div class="k">trades simulated</div><div class="v">${big(o.trades)}</div><div class="sub">5 years, 12 coins, 1-minute fills</div></div></div>
+ <div class="kpi"><div class="k">trades simulated</div><div class="v">${big(o.trades)}</div><div class="sub">5 years · 1-minute fills</div></div></div>
  <div class="legend"><span><i style="background:var(--ok)"></i>finished</span><span><i style="background:var(--acc)"></i>running</span><span><i style="background:var(--bad)"></i>stopped</span><span>one block = one job</span></div></div>`;
  const D=J.filter(j=>j.state==='done'),A=J.filter(j=>j.state!=='done');
  const done=D.length?`<div class="card"><details id="donejobs"><summary><b>${D.length} finished jobs</b> <span class="sub">tap to list · newest first</span></summary><div class="wrap"><table><tr><th>job</th><th class="n">coins</th><th class="n">settings</th><th class="n">trades</th><th class="n">took</th><th class="n">finished</th></tr>${D.map(j=>{const p=j.progress||{};
@@ -163,11 +195,11 @@ function jobcard(j){const p=j.progress||{},pc=j.progress_pct??0,st=j.state==='st
   j.state==='running'?`running ${fmt(j.elapsed_s)}`:j.finished?`took ${fmt(j.elapsed_s)}`:'',j.finished?`finished ${clock(j.finished)}`:`started ${clock(j.started)}`,p.eta_s?`<b>~${fmt(p.eta_s)} left</b>`:'',p.phase||''].filter(Boolean).join(' · ');
  const wk=j.workers?`<div class="sub ${j.workers.busy?'':'neg'}">${j.workers.busy?`⚙ ${j.workers.busy} of ${j.workers.processes} worker processes busy · ${j.workers.cpu_pct}% CPU: working`:`no busy worker processes: check it, it may be stuck`}</div>`:'';
  const why=j.state==='failed'?`<div class="sub neg">${typeof j.exit_code==='string'?'stopped: '+esc(j.exit_code):'stopped with exit code '+(j.exit_code??'?')}${j.errors&&j.errors.length?' · '+esc(j.errors[j.errors.length-1]):''}</div>`:'';
- const body=`<div class="row"><b>${esc(j.title)}</b><span class="pill ${st}">${esc(WORD[j.state]||j.state)}</span></div>
- <div class="bar"><i style="width:${pc}%;${st==='failed'?'background:var(--bad)':st==='done'?'background:var(--ok)':''}"></i></div>
- <div class="sub">${Math.round(pc)}% · ${facts}</div>${wk}${why}${j.state==='running'?coins:''}`;
+ const nested=mbars(j.bars||[{id:'overall',label:'This test',pct:pc,detail:facts}], st);
+ const body=`<div class="row"><b>${j.state==='running'?'<span class="dot"></span>':''}${esc(j.title)}</b><span class="pill ${st}">${esc(WORD[j.state]||j.state)}</span></div>
+ ${nested}<div class="sub">${facts}</div>${wk}${why}${j.state==='running'?coins:''}`;
  return j.state==='done'?`<div class="card" style="padding:10px 14px"><details id="job-${esc(j.name)}"><summary style="display:block">${body}</summary>${coins}<div class="sub mono" style="margin-top:6px">${esc(j.name)} on ${esc(j.host)}: ${esc(j.cmd)}</div><pre>${esc((j.tail||[]).join('\n'))}</pre></details></div>`
-  :`<div class="card">${body}<details id="log-${esc(j.name)}"><summary class="sub">log</summary><div class="sub mono">${esc(j.cmd)}</div><pre>${esc((j.tail||[]).join('\n'))}</pre></details></div>`}
+  :`<div class="card ${j.state==='running'?'livebox':''}">${body}<details id="log-${esc(j.name)}"><summary class="sub">log</summary><div class="sub mono">${esc(j.cmd)}</div><pre>${esc((j.tail||[]).join('\n'))}</pre></details></div>`}
 
 /* ---------- 2 · findings ---------- */
 function findings(n){const T=n.timeframes||[],b=n.breakdown||{};if(!T.length)return '<div class="card sub">no results yet</div>';
@@ -313,23 +345,47 @@ const _last={};
 const set=(id,h)=>{const el=document.getElementById(id);if(!el||_last[id]===h)return;_last[id]=h;
   const open=[...el.querySelectorAll('details[open][id]')].map(d=>d.id);el.innerHTML=h;
   open.forEach(i=>{const d=document.getElementById(i);if(d)d.open=true})};
-async function tick(){let s;try{s=await (await fetch('/api/state',{cache:'no-store'})).json();}catch(e){document.getElementById('upd').textContent='cannot reach the server · retrying';return}
-
+let _fullAt=0,_liveCache=null,_miss=0;
+async function tick(){
  try{
- set('upd','live · '+new Date().toLocaleTimeString()+' · refreshes every 6s');
- set('banner',banner(s.banner));
- set('prod',prod(s.prod));
- set('research',research(s.research));
- set('progress',progress(s));
- _S=s;const n=s.noai||{};
- if(!_U&&!_N.u){_N.u=1;fetch('/api/trades').then(r=>r.json()).then(u=>{_U=u;rw()}).catch(()=>{_N.u=0})}
- set('find',findings(n));set('wallet',wallet(n));set('where',where(n));
- const G=s.ai.filter(x=>x.kind==='gate'),Q=s.ai.filter(x=>x.kind!=='gate');
- set('gate',G.length?G.map(gate).join(''):'<div class="card sub">AI test paused until the ThinkPad is connected</div>');
- set('ai',Q.map(ai).join(''));
- set('mach',s.machines.map(mach).join(''));
- const T=s.jobs.filter(j=>j.kind==='tests');set('tests',T.map(testrun).join(''));
- set('res',s.results.length?s.results.map(res).join(''):'<div class="card sub">no finished runs yet</div>');}
- catch(e){document.getElementById('upd').textContent='display error: '+e.message}}
-tick();setInterval(tick,6000);
+  let live;
+  try{
+   const ac=new AbortController(); const t=setTimeout(()=>ac.abort(),8000);
+   live=await (await fetch('/api/live',{cache:'no-store',signal:ac.signal})).json();
+   clearTimeout(t); _liveCache=live; _miss=0;
+  }catch(e){
+   _miss++;
+   if(_liveCache){
+    document.getElementById('upd').textContent=`● last good · dash blip #${_miss} · retrying · `+new Date().toLocaleTimeString();
+    return;
+   }
+   document.getElementById('upd').textContent='cannot reach the server · retrying';
+   return;
+  }
+  const nLive=(live.live||[]).length, q=live.queue||{}, qOn=q.state==='running', qDone=q.state==='done';
+  const pull=live.pull||{}, lagNote=pull.ok===false?` · sync fail #${pull.fail_streak||'?'}`:(pull.age_s>45?` · sync lag ${pull.age_s}s`:'');
+  set('upd',(qOn||nLive?`● LIVE · ${nLive} running`:qDone?`✔ non-AI queue finished (${q.jobs_done||0}/${q.jobs_total||0})`:'○ idle')
+    +lagNote+' · '+new Date().toLocaleTimeString()+' · http://127.0.0.1:8765/');
+  set('live',livebox(live));
+  set('progress',progress(live));
+  if(live.machines&&live.machines.length) set('mach',live.machines.map(mach).join(''));
+  if(Date.now()-_fullAt>12000){
+   _fullAt=Date.now();
+   let s;try{
+    const ac=new AbortController(); const t=setTimeout(()=>ac.abort(),10000);
+    s=await (await fetch('/api/state',{cache:'no-store',signal:ac.signal})).json();
+    clearTimeout(t);
+   }catch(e){return}
+   _S=s;const n=s.noai||{};
+   set('banner',banner(s.banner));set('prod',prod(s.prod));set('research',research(s.research));
+   if(!_U&&!_N.u){_N.u=1;fetch('/api/trades').then(r=>r.json()).then(u=>{_U=u;rw()}).catch(()=>{_N.u=0})}
+   set('find',findings(n));set('wallet',wallet(n));set('where',where(n));
+   const G=(s.ai||[]).filter(x=>x.kind==='gate'),Q=(s.ai||[]).filter(x=>x.kind!=='gate');
+   set('gate',G.length?G.map(gate).join(''):'<div class="card sub">AI gate starts after non-AI queue</div>');
+   set('ai',Q.map(ai).join(''));
+   const T=(s.jobs||[]).filter(j=>j.kind==='tests');set('tests',T.map(testrun).join(''));
+   set('res',(s.results||[]).length?s.results.map(res).join(''):'<div class="card sub">no finished runs yet</div>');
+  }
+ }catch(e){document.getElementById('upd').textContent='display error: '+e.message}}
+tick();setInterval(tick,4000);
 </script></body></html>

@@ -117,9 +117,14 @@ def work_symbol(args) -> dict:
     return {"symbol": symbol, "trades": trades, "null": null}
 
 
-def _null_verdict(p: float, p_normal: float, trials: int, n_tried: int) -> str | None:
+MIN_TRADES_FOR_VERDICT = 30
+
+
+def _null_verdict(p: float, p_normal: float, trials: int, n_tried: int, n_trades: int | None = None) -> str | None:
     if p != p:
         return None
+    if n_trades is not None and n_trades < MIN_TRADES_FOR_VERDICT:
+        return "too few trades"          # 7 Oct: a 2-trade config "beat random" on the normal approximation
     if trials >= min_trials(n_tried) or p_normal != p_normal:
         return judge(p, n_tried, trials)
     return judge(p_normal, n_tried) + " (normal approx)"
@@ -196,8 +201,9 @@ def run_lab(spec: RunSpec, workers: int = 6, out_dir: str | None = None, wallets
     if "null_p" in summary:
         summary["n_tried"] = n_tried
         # exact permutation p when there were enough draws to reach the Bonferroni line, else the normal approx
-        summary["null_verdict"] = [_null_verdict(p, pn, t, n_tried)
-                                   for p, pn, t in zip(summary["null_p"], summary["null_p_normal"], summary["null_trials"])]
+        summary["null_verdict"] = [_null_verdict(p, pn, t, n_tried, int(n))
+                                   for p, pn, t, n in zip(summary["null_p"], summary["null_p_normal"],
+                                                          summary["null_trials"], summary["n"])]
     out = {"spec": {**asdict(spec), "exits": [asdict(e) for e in spec.exits]}, "summary": summary, "trades": trades,
            "elapsed_s": time.time() - t0}
 

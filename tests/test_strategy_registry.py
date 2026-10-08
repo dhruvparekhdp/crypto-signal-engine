@@ -110,3 +110,83 @@ async def test_swing_api_shows_each_specs_forward_clock():
     by = {x["spec"]: x for x in d["registry"]}
     assert by["4h@donchian"]["forward_trades"] == 2 and by["4h@donchian"]["forward_total_r"] == pytest.approx(1.0)
     assert by["4h@donchian"]["alarm_at_r"] == 28.7 and by["8h@ichimoku"]["live_from"] is None
+
+
+@pytest.mark.asyncio
+async def test_spec_is_promoted_after_enough_good_forward_trades_only():
+    sm = await _db()
+    async with sm() as s:
+        await reg.sync(s, [("4h", "donchian", {"n": 100})])
+        await reg.stamp_live_from(s, "4h@donchian", T0)
+        good = [_trade(2 if i % 2 else -1, i) for i in range(29)]          # mean +0.5R but only 29 trades
+        assert await reg.check_promotions(s, good) == []
+        good.append(_trade(2, 30))
+        msgs = await reg.check_promotions(s, good)
+        assert len(msgs) == 1 and (await reg.load(s))["4h@donchian"].status == "trusted"
+
+
+def test_trusted_weak_spec_gets_full_risk_and_cards_explain_risk(monkeypatch):
+    from analysis import swing_book as sb
+    from config.settings import settings
+    for k, v in dict(swing_risk_pct=0.03, swing_risk_min=0.01, swing_adaptive_risk=True,
+                     swing_weak_specs="4h@ichimoku", swing_weak_spec_factor=0.5).items():
+        monkeypatch.setattr(settings, k, v)
+    assert sb.risk_for("swing_ichimoku", "4h", 0.0, 0) == pytest.approx(0.015)
+    assert sb.risk_for("swing_ichimoku", "4h", 0.0, 0, trusted=True) == pytest.approx(0.03)
+    assert sb.risk_reason("swing_donchian", "4h", 0.0, 0) == "full risk"
+    why = sb.risk_reason("swing_ichimoku", "4h", 0.25, 3)
+    assert "25% below its peak" in why and "3 losses" in why and "half risk" in why and "floor" in why
+
+
+def test_weekly_report_reads_like_a_summary():
+    from analysis.weekly_report import format_weekly_report
+    row = SimpleNamespace(spec_key="4h@donchian", status="incubating", live_from=T0)
+    trades = [_trade(2, 1), _trade(-1, 2)]
+    txt = format_weekly_report({"4h@donchian": row}, trades, equity=5400, start=5000, withdrawn=0,
+                               week_trades=trades, skips={"below_min_notional": 3, "regime_wild": 1})
+    assert "Equity ₹5,400" in txt and "2 closed, 1 won, +1.0R" in txt
+    assert "4h@donchian · incubating · 2 · +1.0R (+0.50)" in txt and "28.7R" in txt
+    assert "below_min_notional 3" in txt
+
+
+@pytest.mark.asyncio
+async def test_weekly_report_job_sends_one_message():
+    from unittest.mock import AsyncMock, patch
+
+    from scheduler.runner import AppRunner
+    from storage.repository import Repository
+    sm = await _db()
+    async with sm() as s:
+        await Repository(s).start_cycle(starting_wallet=5000, target_wallet=1e7, leverage=10, stop_pct_of_margin=0.2,
+                                        reward_risk=2, min_confidence=0.7, trailing_enabled=False, scaled_sizing=False,
+                                        scaled_leverage=False, ladder_enabled=False, ladder_tight=False,
+                                        sizing_floor_pct=0.25, sizing_ceiling_pct=0.25)
+        await reg.sync(s, [("4h", "donchian", {"n": 100})])
+    runner = AppRunner()
+    runner.notifier = AsyncMock()
+    with patch("scheduler.runner.AsyncSessionFactory", sm):
+        await runner._weekly_forward_report_job()
+    txt = runner.notifier.send_text.call_args[0][0]
+    assert "Weekly swing report" in txt and "4h@donchian" in txt and "Equity ₹5,000" in txt
+
+
+def test_shortfall_is_positive_when_the_entry_is_worse():
+    from analysis import swing_book as sb
+    assert sb.shortfall(+1, 100.5, 100.0, 0, 15 * 60_000) == (pytest.approx(50.0), 15.0)   # long paid 0.5% more
+    assert sb.shortfall(-1, 100.5, 100.0, 0, 0)[0] == pytest.approx(-50.0)                # short sold higher: better
+
+
+@pytest.mark.asyncio
+async def test_opened_swing_trade_card_records_the_shortfall():
+    from sqlalchemy import select
+
+    from storage.models import TradeEvent
+    sm_holder = {}
+
+    async def seed(sm):
+        sm_holder["sm"] = sm
+    rows, _ = await run([("SOLUSDT", "vol_breakout", +1)], cap=0, seed=seed)
+    assert len(rows) == 1
+    async with sm_holder["sm"]() as s:
+        notes = (await s.execute(select(TradeEvent.note).where(TradeEvent.kind == "opened"))).scalars().all()
+    assert any("shortfall=" in n and "late=" in n for n in notes)

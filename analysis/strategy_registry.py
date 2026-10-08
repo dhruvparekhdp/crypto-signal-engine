@@ -128,3 +128,33 @@ async def check_alarms(session, trades: list, factor: float = 1.0) -> list[str]:
     if msgs:
         await session.commit()
     return msgs
+
+
+def forward_t(rs: list[float]) -> float:
+    """t-statistic of the forward mean R (0 when it cannot be computed)."""
+    import math
+    n = len(rs)
+    if n < 2:
+        return 0.0
+    m = sum(rs) / n
+    sd = math.sqrt(sum((r - m) ** 2 for r in rs) / (n - 1))
+    return m / (sd / math.sqrt(n)) if sd > 0 else 0.0
+
+
+async def check_promotions(session, trades: list, min_trades: int = 30, t_line: float = 1.645) -> list[str]:
+    """Roadmap F-3 / plan B1: incubating -> trusted once the spec has min_trades forward trades and its forward
+    mean R is above zero at one-sided 95% (t >= t_line). Trusted is never automatic in the other direction:
+    the drawdown alarm pauses, the owner retires."""
+    msgs = []
+    for row in (await session.execute(select(StrategyRegistry))).scalars():
+        if row.status != "incubating":
+            continue
+        rs = forward(trades, row)
+        t = forward_t(rs)
+        if len(rs) >= min_trades and t >= t_line:
+            row.status, row.updated_at = "trusted", _now()
+            row.note = f"promoted: {len(rs)} forward trades, mean {sum(rs) / len(rs):+.2f}R, t {t:.2f}"
+            msgs.append(f"{row.spec_key}: {row.note}")
+    if msgs:
+        await session.commit()
+    return msgs

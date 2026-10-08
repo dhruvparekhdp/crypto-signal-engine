@@ -118,8 +118,13 @@ class MarketReplayEngine:
                         df_5m = merged
                         break
 
+        if (df_5m is None or len(df_5m) < 50) and not getattr(self, "allow_synthetic", False):
+            # R5: never invent candles silently. A missing symbol is skipped (an empty frame makes the caller
+            # return no trades); random-walk data only when a caller sets allow_synthetic=True on purpose.
+            logging.getLogger(__name__).warning("replay_no_lake_data symbol=%s: skipped, not synthesised", symbol)
+            return pd.DataFrame(columns=["open", "high", "low", "close", "volume"])
         if df_5m is None or len(df_5m) < 50:
-            # Fallback realistic generator if parquet is absent
+            # Synthetic generator: only with allow_synthetic=True (tests, demos), never for results
             np.random.seed(abs(hash(symbol)) % (2**31))
             days = int(self.window_years * 365.25)
             periods = min(150000, days * 288)
@@ -254,7 +259,7 @@ class MarketReplayEngine:
                     100.0, max(0.0, (active_trade.peak_gain_pct / max(target_dist_pct, 0.001) * 100.0))
                 )
 
-                if hit_tp:
+                if hit_tp and not hit_sl:            # R4: both touched in one bar -> the stop counts
                     active_trade.exit_price = active_trade.tp_price
                     active_trade.exit_time = str(c_time)
                     active_trade.pnl_pct = target_dist_pct if is_long else target_dist_pct

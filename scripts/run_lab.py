@@ -28,6 +28,15 @@ EXITS = {
     "trail": ExitModel(stop_atr=2.0, rr=8.0, be_trigger_r=1.0, trail_atr=2.0, max_hold_min=4320),
     "partial": ExitModel(stop_atr=1.5, rr=3.0, partial_r=1.0, partial_frac=0.5, be_trigger_r=1.0),
     "swing": ExitModel(stop_atr=3.0, rr=3.0, max_hold_min=10080),
+    # Roadmap Q-4 / blueprint B5 exit variants on the swing book (7-day limit kept so only the exit rule changes)
+    "b5_tight": ExitModel(stop_atr=1.75, rr=3.0, max_hold_min=10080),
+    "b5_partial": ExitModel(stop_atr=3.0, rr=6.0, partial_r=1.5, partial_frac=0.5, be_trigger_r=1.5,
+                            trail_atr=3.0, trail_after_r=1.5, max_hold_min=10080),
+    "b5_nnfx": ExitModel(stop_atr=1.5, rr=6.0, partial_r=0.667, partial_frac=0.5, be_trigger_r=0.667,
+                         trail_atr=1.5, trail_after_r=0.667, max_hold_min=10080),
+    "daily_trend": ExitModel(stop_atr=3.0, rr=3.0, max_hold_min=43200),     # Q-7: daily bars need a 30-day limit
+    "swing_trail": ExitModel(stop_atr=3.0, rr=10.0, be_trigger_r=1.0, trail_atr=3.0, trail_after_r=1.0,
+                             max_hold_min=10080),
 }
 
 

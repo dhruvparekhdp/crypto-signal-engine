@@ -146,8 +146,8 @@ def virtual_outcome(direction: str, entry: float, stop: float, target: float, t_
         return None
     cost_r = ROUND_TRIP_COST_PCT / risk
     for t, h, lo, c in zip(t_ms, high, low, close):
-        if t < start_ms - 3_600_000 + 1:                    # the bar the signal was logged in counts from its open
-            continue
+        if t < start_ms:                                     # R8: only bars that open after the signal; the bar
+            continue                                         # containing it holds pre-signal highs and lows
         if t > start_ms + hold_ms:
             return "expired", sgn * (c - entry) / entry * 100 / risk - cost_r
         hit_stop = lo <= stop if sgn > 0 else h >= stop

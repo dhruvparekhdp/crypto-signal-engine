@@ -161,7 +161,7 @@ def to_signal(setup: SwingSetup, price: float, now: datetime) -> CryptoSignal | 
         return None
     stop, target = lv
     stop_pct = abs(price - stop) / price * 100
-    return CryptoSignal(
+    sig = CryptoSignal(
         symbol=setup.symbol.lower(), signal_type=f"swing_{setup.strategy}",
         direction="long" if setup.side > 0 else "short",
         trigger_description=(f"{REGISTRY[setup.strategy].name} fired on the {setup.tf} bar closed at "
@@ -171,6 +171,16 @@ def to_signal(setup: SwingSetup, price: float, now: datetime) -> CryptoSignal | 
         edge_pct=0.0, stake_pct=0.0, timeframe=setup.tf, sentiment_score=0.0,
         indicators_summary=f"atr{setup.tf}={setup.atr:.6g} bar_close={setup.close:.6g}",
         timestamp=now, trade_mode="swing", leverage_suggested=1.0)
+    # roadmap Q-9: the backtest fills at the first price after this bar's close; keep it to measure the shortfall
+    sig.bar_close_price = setup.close
+    sig.bar_close_ms = setup.bar_open_ms + INTERVAL_MS[setup.tf]
+    return sig
+
+
+def shortfall(side: int, entry: float, bar_close: float, bar_close_ms: int, now_ms: int) -> tuple[float, float]:
+    """(bps worse than the backtest's fill at the bar close, minutes after the close). Positive bps = paid more."""
+    bps = side * (entry - bar_close) / bar_close * 1e4 if bar_close > 0 else 0.0
+    return bps, (now_ms - bar_close_ms) / 60_000
 
 
 def adaptive_risk(base: float, dd: float, losing_streak: int,
@@ -184,7 +194,7 @@ def adaptive_risk(base: float, dd: float, losing_streak: int,
     return base * max(f, floor)
 
 
-def risk_for(signal_type: str, timeframe: str, dd: float, streak: int) -> float:
+def risk_for(signal_type: str, timeframe: str, dd: float, streak: int, trusted: bool = False) -> float:
     """Risk per trade between swing_risk_min and swing_risk_pct (owner, 7 Oct 2026): cut in book drawdowns and
     after losing streaks (adaptive_risk), halved for specs whose random-entry test was inconclusive, never below
     the minimum. Backtested as variant F in scripts/wallet_plan_backtest."""
@@ -193,9 +203,26 @@ def risk_for(signal_type: str, timeframe: str, dd: float, streak: int) -> float:
     risk = adaptive_risk(top, dd, streak) if settings.swing_adaptive_risk else top
     key = f"{timeframe}@{signal_type.removeprefix('swing_')}"
     weak = {k.strip() for k in settings.swing_weak_specs.split(",") if k.strip()}
-    if key in weak:
+    if key in weak and not trusted:          # a weak spec that earned "trusted" on forward results gets full risk
         risk *= settings.swing_weak_spec_factor
     return max(risk, min(settings.swing_risk_min, top))
+
+
+def risk_reason(signal_type: str, timeframe: str, dd: float, streak: int, trusted: bool = False) -> str:
+    """Plain-English why for the trade card (roadmap F-5)."""
+    from config.settings import settings
+    parts = []
+    if settings.swing_adaptive_risk and dd >= 0.10:
+        parts.append(f"book {dd * 100:.0f}% below its peak")
+    if settings.swing_adaptive_risk and streak >= 3:
+        parts.append(f"{streak} losses in a row")
+    key = f"{timeframe}@{signal_type.removeprefix('swing_')}"
+    if key in {k.strip() for k in settings.swing_weak_specs.split(",")} and not trusted:
+        parts.append("strategy not yet proven vs random (half risk)")
+    r = risk_for(signal_type, timeframe, dd, streak, trusted)
+    if r <= settings.swing_risk_min + 1e-12 and parts:
+        parts.append("floor reached")
+    return "full risk" if not parts else ", ".join(parts)
 
 
 def size(wallet: float, free: float, risk_pct: float, entry: float, stop: float, costs: float,

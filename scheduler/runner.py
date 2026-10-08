@@ -858,6 +858,37 @@ class AppRunner:
         except Exception:
             log.exception("paper_trading_job_failed")
 
+    async def _weekly_forward_report_job(self) -> None:
+        """Roadmap F-2: forward results per strategy, wallet, withdrawals and skip reasons, every Monday."""
+        try:
+            from sqlalchemy import func, select
+
+            from analysis import strategy_registry as reg_mod
+            from analysis.weekly_report import format_weekly_report
+            from storage.models import CryptoSignalLog, PaperWithdrawal
+            week_ago = datetime.now(UTC).replace(tzinfo=None) - timedelta(days=7)
+            async with AsyncSessionFactory() as session:
+                repo = Repository(session)
+                cycle = await repo.get_running_cycle()
+                if cycle is None:
+                    return
+                trades = [t for t in await repo.get_cycle_trades(cycle.id)
+                          if str(getattr(t, "signal_type", "")).startswith("swing_")]
+                rows = await repo.get_open_positions(cycle.id)
+                registry = await reg_mod.load(session)
+                withdrawn = (await session.execute(select(func.coalesce(func.sum(PaperWithdrawal.amount), 0.0))
+                                                   .where(PaperWithdrawal.cycle_id == cycle.id))).scalar() or 0.0
+                skips = dict((await session.execute(
+                    select(CryptoSignalLog.skip_reason, func.count()).where(
+                        CryptoSignalLog.signal_type.like("swing_%"), CryptoSignalLog.timestamp >= week_ago,
+                        CryptoSignalLog.skip_reason != "").group_by(CryptoSignalLog.skip_reason))).all())
+            equity = cycle.wallet + sum(r.margin for r in rows)
+            week = [t for t in trades if t.closed_at and t.closed_at.replace(tzinfo=None) >= week_ago]
+            await self.notifier.send_text(format_weekly_report(registry, trades, equity, cycle.starting_wallet,
+                                                               withdrawn, week, skips))
+        except Exception:
+            log.exception("weekly_forward_report_failed")
+
     async def _maybe_sweep(self, repo, cycle, cstate, wallet: float, pcfg) -> float:
         """Withdraw paper_sweep_amount when equity >= paper_sweep_at and free cash covers it. Returns the wallet."""
         at, amount = settings.paper_sweep_at, settings.paper_sweep_amount
@@ -1086,6 +1117,13 @@ class AppRunner:
             from analysis import strategy_registry as reg_mod
             try:
                 async with AsyncSessionFactory() as session:
+                    for msg in await reg_mod.check_promotions(session, closed, settings.swing_promote_min_trades,
+                                                              settings.swing_promote_t):
+                        log.info("swing_spec_promoted", note=msg)
+                        try:
+                            await self.notifier.send_text("✅ Swing strategy promoted on forward results\n" + msg)
+                        except Exception:  # noqa: BLE001
+                            pass
                     for msg in await reg_mod.check_alarms(session, closed, settings.swing_dd_alarm_factor):
                         log.warning("swing_spec_paused", note=msg)
                         try:
@@ -1159,7 +1197,8 @@ class AppRunner:
             dist = abs(sig.current_price - sig.stop_loss)
             stop, target = price - side * dist, price + side * sb.REWARD_RISK * dist
             equity = cstate.wallet + sum(p.margin for p in cstate.positions)
-            risk = sb.risk_for(sig.signal_type, sig.timeframe, dd, streak)
+            trusted = reg_row is not None and reg_row.status == "trusted"
+            risk = sb.risk_for(sig.signal_type, sig.timeframe, dd, streak, trusted)
             sized = sb.size(equity, cstate.wallet, risk, price, stop, stop_out_costs(sig.symbol, cfg),
                             settings.swing_max_leverage, settings.swing_max_margin_frac)
             if sized is None:
@@ -1189,12 +1228,18 @@ class AppRunner:
             cstate.wallet -= pos.margin
             row = await repo.open_position_atomic(cycle.id, pos, cstate.wallet)
             risk_pct = abs(price - stop) / price * 100
+            sf_txt = ""
+            if getattr(sig, "bar_close_price", None):
+                sf_bps, late_min = sb.shortfall(side, pos.entry_price, sig.bar_close_price, sig.bar_close_ms,
+                                                int(now.timestamp() * 1000))
+                sf_txt = f" · shortfall={sf_bps:+.1f}bps late={late_min:.0f}m vs the backtest fill at the bar close"
             await repo.add_trade_events([_event(
                 pos, cycle.id, now, "opened", "entry", new=f"{price:.6g}",
                 note=(f"SWING {sig.timeframe} {pos.side.value} {sig.signal_type} · stop {stop:.6g} ({risk_pct:.2f}% away, 3xATR {sig.timeframe}) · "
                       f"target {target:.6g} (3R) · {leverage:.1f}x · margin {pos.margin:.0f} · "
-                      f"risking {risk * 100:.2f}% of the wallet (book drawdown {dd * 100:.0f}%, losing streak {streak}) · "
-                      f"closes only at stop, target or after 7 days"
+                      f"risking {risk * 100:.2f}% of the wallet ({sb.risk_reason(sig.signal_type, sig.timeframe, dd, streak, trusted)}; "
+                      f"range {settings.swing_risk_min * 100:g}-{settings.swing_risk_pct * 100:g}%) · "
+                      f"closes only at stop, target or after 7 days" + sf_txt
                       + (f" · {verdict.tag()} ({settings.swing_regime_filter})" if verdict is not None else "")))])
             cstate.position_ids[len(cstate.positions)] = row.id
             cstate.positions.append(pos)
@@ -3213,6 +3258,15 @@ class AppRunner:
             id="daily_trend",
             max_instances=1,
             next_run_time=datetime.now(UTC) + timedelta(seconds=30),
+        )
+        self.scheduler.add_job(
+            self._weekly_forward_report_job,
+            "cron",
+            day_of_week="mon",
+            hour=3,
+            minute=30,          # 09:00 IST
+            id="weekly_forward_report",
+            max_instances=1,
         )
         self.scheduler.add_job(
             self._v2_backtest_job,
