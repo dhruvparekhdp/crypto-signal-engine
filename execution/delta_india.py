@@ -119,8 +119,30 @@ class DeltaIndia:
                             pass
         return 0.0
 
-    async def positions(self) -> list[dict]:
-        got = await self._request("GET", "/v2/positions")
+    async def positions(self, underlying: str | None = None,
+                        product_id: int | None = None) -> list[dict]:
+        """Delta requires product_id or underlying_asset_symbol on this route."""
+        params: dict[str, Any] = {}
+        if product_id is not None:
+            params["product_id"] = int(product_id)
+        elif underlying:
+            params["underlying_asset_symbol"] = underlying.upper()
+        else:
+            # Pull open positions across the major underlyings we trade.
+            out: list[dict] = []
+            for u in ("BTC", "ETH", "SOL", "XRP", "DOGE", "BNB", "ADA", "AVAX", "LINK", "SUI"):
+                try:
+                    got = await self._request(
+                        "GET", "/v2/positions",
+                        params={"underlying_asset_symbol": u})
+                except DeltaError:
+                    continue
+                if isinstance(got, list):
+                    out.extend(got)
+                elif isinstance(got, dict) and got:
+                    out.append(got)
+            return out
+        got = await self._request("GET", "/v2/positions", params=params)
         return got if isinstance(got, list) else []
 
     async def product(self, symbol: str) -> Product | None:

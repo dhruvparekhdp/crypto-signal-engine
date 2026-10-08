@@ -376,9 +376,11 @@ class CryptoStateStore:
             # history filled; the socket keeps owning current_price.
             # Own the price when candles are the sole live feed (Binance-only
             # without WS, or Delta-only — Delta has no WS collector yet).
+            # `is True` so a test MagicMock does not accidentally look enabled.
+            delta_only = getattr(settings, "delta_only_mode", False) is True
             sole_candle_feed = (
                 (settings.binance_only_mode and not settings.binance_ws_enabled)
-                or bool(getattr(settings, "delta_only_mode", False))
+                or delta_only
             )
             if state.current_price <= 0 or sole_candle_feed:
                 state.current_price = state.candles_1m[-1].close
