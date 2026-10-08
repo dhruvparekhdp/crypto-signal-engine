@@ -115,8 +115,58 @@ def bars_from_klines(symbol: str, rows: list, now_ms: int, tf: str = TF) -> Bars
     return Bars(symbol.upper(), tf, a[:, 0].astype(np.int64), a[:, 1], a[:, 2], a[:, 3], a[:, 4], a[:, 5], a[:, 6])
 
 
+def bars_from_delta(symbol: str, rows: list, now_ms: int, tf: str = TF) -> Bars | None:
+    """Delta /v2/history/candles rows -> Bars of CLOSED bars only."""
+    iv = INTERVAL_MS[tf]
+    closed = []
+    for r in rows if isinstance(rows, list) else []:
+        if not isinstance(r, dict):
+            continue
+        try:
+            t = int(r["time"])
+            if t > 1e12:
+                t //= 1000
+            open_ms = t * 1000
+            if open_ms + iv > now_ms:
+                continue
+            closed.append([
+                open_ms, float(r["open"]), float(r["high"]), float(r["low"]),
+                float(r["close"]), float(r.get("volume") or 0.0), 0.0,  # no taker-buy
+            ])
+        except (KeyError, TypeError, ValueError):
+            continue
+    closed.sort(key=lambda x: x[0])
+    if len(closed) < 150:
+        return None
+    a = np.array(closed)
+    return Bars(symbol.upper(), tf, a[:, 0].astype(np.int64), a[:, 1], a[:, 2], a[:, 3],
+                a[:, 4], a[:, 5], a[:, 6])
+
+
 async def fetch_bars(client, symbol: str, now_ms: int, tf: str = TF, limit: int = 500) -> Bars | None:
-    r = await client.get(FAPI_KLINES, params={"symbol": symbol.upper(), "interval": tf, "limit": limit}, timeout=15)
+    """Fetch closed bars. Uses Delta India when delta_only_mode is on, else Binance USD-M."""
+    from config.settings import settings
+    if getattr(settings, "delta_only_mode", False):
+        from collectors.delta_market import TF_SECONDS, TF_TO_RES
+        from execution.delta_india import INDIA_URL, USER_AGENT, binance_to_delta_symbol
+        res = TF_TO_RES.get(tf, tf)
+        secs = TF_SECONDS.get(res, INTERVAL_MS[tf] // 1000)
+        end = now_ms // 1000
+        start = end - secs * min(limit, 2000)
+        base = (getattr(settings, "delta_india_base_url", None) or INDIA_URL).rstrip("/")
+        r = await client.get(
+            f"{base}/v2/history/candles",
+            params={"symbol": binance_to_delta_symbol(symbol), "resolution": res,
+                    "start": start, "end": end},
+            headers={"User-Agent": USER_AGENT, "Accept": "application/json"},
+            timeout=15,
+        )
+        r.raise_for_status()
+        body = r.json()
+        rows = body.get("result") if isinstance(body, dict) else body
+        return bars_from_delta(symbol, rows or [], now_ms, tf)
+    r = await client.get(FAPI_KLINES, params={"symbol": symbol.upper(), "interval": tf, "limit": limit},
+                         timeout=15)
     r.raise_for_status()
     return bars_from_klines(symbol, r.json(), now_ms, tf)
 

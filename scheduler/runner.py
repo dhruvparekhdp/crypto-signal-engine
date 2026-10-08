@@ -60,6 +60,7 @@ from collectors.binance_klines import BinanceKlines
 from collectors.binance_ws import BinanceWSCollector
 from collectors.coindcx import CoinDCXCollector
 from collectors.coingecko import CoinGeckoCollector
+from collectors.delta_market import DeltaMarket
 from collectors.cryptopanic import CryptoPanicCollector
 from collectors.llm_client import should_call_again
 from collectors.macro_sentinel import GroqSentinel
@@ -212,6 +213,7 @@ class AppRunner:
         self.coingecko = CoinGeckoCollector(self.crypto_store)
         self.binance_ws = BinanceWSCollector(self.crypto_store)
         self.klines = BinanceKlines(self.crypto_store)
+        self.delta_market = DeltaMarket(self.crypto_store)
         self.twelvedata_ws = TwelveDataWSCollector(self.commodity_store)
         self.cryptopanic = CryptoPanicCollector()
         self.sentiment = SentimentAnalyzer()
@@ -269,13 +271,16 @@ class AppRunner:
 
 
     def sync_collectors(self) -> None:
-        """Collector switches from settings. Binance-only turns the others off."""
-        only = settings.binance_only_mode
+        """Collector switches from settings. Delta-only / Binance-only force others off."""
+        delta_only = bool(getattr(settings, "delta_only_mode", False))
+        only = settings.binance_only_mode and not delta_only
         self.collector_enabled.update({
-            "coindcx": settings.coindcx_enabled and not only,
-            "coingecko": settings.coingecko_enabled and not only,
-            "binance_ws": settings.binance_ws_enabled,
-            "twelvedata_ws": settings.twelvedata_enabled and not only,
+            "delta": (settings.delta_india_data_enabled or delta_only) and True,
+            "coindcx": settings.coindcx_enabled and not only and not delta_only,
+            "coingecko": settings.coingecko_enabled and not only and not delta_only,
+            "binance_ws": settings.binance_ws_enabled and not delta_only,
+            "binance_klines": settings.binance_klines_enabled and not delta_only,
+            "twelvedata_ws": settings.twelvedata_enabled and not only and not delta_only,
         })
 
     def _sync_binance_ws(self) -> None:
@@ -359,15 +364,20 @@ class AppRunner:
 
     async def _klines_job(self) -> None:
         """
-        Pull real 1-minute bars and depth, replacing the poll-aggregated ones.
+        Pull real 1-minute bars, replacing the poll-aggregated ones.
 
-        This is the job that decides whether any signal means anything. With
-        sampled bars the ATR came out roughly a third of the real figure, the
-        cost floor beat the volatility term every time, and every card on the
-        board showed the same 0.505% target — a constant wearing the costume
-        of a forecast.
+        Venue: Delta India when delta_only_mode (or delta data) is on; else Binance.
         """
-        if not settings.binance_klines_enabled:
+        self.sync_collectors()
+        if self.collector_enabled.get("delta") and (
+                settings.delta_only_mode or settings.delta_india_data_enabled):
+            try:
+                await self.delta_market.fetch()
+            except Exception:
+                log.exception("delta_klines_job_failed")
+            if settings.delta_only_mode:
+                return  # hold Binance entirely
+        if not self.collector_enabled.get("binance_klines", settings.binance_klines_enabled):
             return
         try:
             await self.klines.fetch()
@@ -965,10 +975,22 @@ class AppRunner:
         return None
 
     async def _perp_prices(self) -> dict:
-        """Binance USD-M last prices for every symbol, one call, cached 10 s. Empty dict on failure."""
+        """Mark/last prices for every symbol, one call, cached 10 s.
+
+        Delta India when delta_only_mode is on; else Binance USD-M. Keys are
+        Binance-shaped (BTCUSDT) either way so callers stay unchanged.
+        """
         import time as _t
         cache = self.__dict__.setdefault("_perp_cache", {"t": 0.0, "v": {}})
         if _t.time() - cache["t"] < 10 and cache["v"]:
+            return cache["v"]
+        if getattr(settings, "delta_only_mode", False):
+            try:
+                v = await self.delta_market.fetch_mark_prices()
+                if v:
+                    cache.update(t=_t.time(), v=v)
+            except Exception as e:  # noqa: BLE001
+                log.warning("delta_perp_prices_failed", error=str(e)[:120])
             return cache["v"]
         try:
             import httpx
@@ -3083,6 +3105,8 @@ class AppRunner:
 
     async def _binance_oi_job(self) -> None:
         """Poll Binance Futures Open Interest for crypto perpetuals."""
+        if getattr(settings, "delta_only_mode", False):
+            return  # hold Binance
         if not getattr(settings, "binance_oi_enabled", True):
             return
         try:
@@ -3366,7 +3390,7 @@ class AppRunner:
             id="crypto_snapshot",
             max_instances=1,
         )
-        if getattr(settings, "binance_oi_enabled", True):
+        if getattr(settings, "binance_oi_enabled", True) and not getattr(settings, "delta_only_mode", False):
             self.scheduler.add_job(
                 self._binance_oi_job,
                 "interval",
@@ -3407,7 +3431,11 @@ class AppRunner:
         await HistoricalDataService.preload_states(self.crypto_store)
 
         crypto_count = await self.crypto_store.count()
-        if settings.binance_only_mode:
+        if getattr(settings, "delta_only_mode", False):
+            sources = (f"Data: <b>Delta India only</b> — candles + marks every "
+                       f"{settings.delta_klines_seconds}s for {crypto_count} symbols\n"
+                       "Binance / CoinDCX / CoinGecko / Twelve Data: held off")
+        elif settings.binance_only_mode:
             sources = (f"Data: <b>Binance only</b> — klines every "
                        f"{settings.binance_klines_seconds}s carry candles, depth and price "
                        f"for {crypto_count} symbols\n"

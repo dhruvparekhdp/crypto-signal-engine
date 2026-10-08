@@ -453,6 +453,12 @@ class Settings(BaseSettings):
     twelvedata_enabled: bool = True
     binance_klines_enabled: bool = True
     binance_klines_seconds: int = 60
+    # Delta Exchange India as the live market-data venue (INR-settled futures).
+    # When delta_only_mode is on, Binance/CoinDCX/CoinGecko/Twelve Data collectors
+    # are forced off and candles + mark prices + swing bars come from Delta only.
+    delta_india_data_enabled: bool = True
+    delta_klines_seconds: int = 60
+    delta_only_mode: bool = True              # hold Binance live data; use Delta only
 
     # One source of truth, for measuring the engine rather than the plumbing.
     # Binance klines carry candles, depth and — in this mode — the price too,
@@ -460,7 +466,7 @@ class Settings(BaseSettings):
     # target because a ticker feed wrote $0.00004 over a $4,341 price and
     # poisoned the candle the ATR was measured from; one source removes that
     # whole class of failure. Turns off CoinDCX, CoinGecko, Twelve Data and
-    # the news feeds.
+    # the news feeds. Ignored when delta_only_mode is on.
     binance_only_mode: bool = False
 
     # A tick further than this from the running price is a feed fault, not a
