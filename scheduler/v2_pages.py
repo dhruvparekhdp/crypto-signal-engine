@@ -86,11 +86,17 @@ def backtest_api(runner):
 
     async def run(request: web.Request) -> web.Response:
         import asyncio
+
+        from config.settings import settings
         denied = await _admin(request)
         if denied is not None:
             return denied
         if (getattr(runner, "_v2_bt_state", {}) or {}).get("running"):
             return web.json_response({"ok": False, "error": "already running"}, status=409)
+        if not settings.v2_backtest_enabled:
+            # R12: the job returns at once when disabled, so "started" was a lie and the page kept the old report
+            return web.json_response({"ok": False, "error": "v2 backtest is switched off (v2_backtest_enabled); "
+                                      "turn it on in Settings first"}, status=409)
         asyncio.create_task(runner._v2_backtest_job())
         return web.json_response({"ok": True, "started": True})
 

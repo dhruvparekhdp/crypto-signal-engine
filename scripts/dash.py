@@ -77,6 +77,8 @@ def _describe(name: str, cmd: str) -> tuple[str, str]:
     tf = tf.group(1) if tf else ""
     if "pytest" in cmd:
         return "tests", "Full test suite"
+    if "ai_gate" in cmd or name.startswith("gate_live"):
+        return "ai_gate", "AI gate: with-AI vs without-AI on swing trades"
     if "portfolio_wallet" in cmd:
         m = re.search(r"--months (\d+)", cmd)
         return "wallet", f"25 USDT wallet simulation, {m.group(1) if m else '?'}-month horizon"
@@ -93,16 +95,18 @@ def _describe(name: str, cmd: str) -> tuple[str, str]:
     return "other", name
 
 
-def run_progress(lines: list[str], state: str, elapsed: float) -> dict:
-    """Detailed progress of a scripts.run_lab log: coins done of total, per-coin times, ETA and the result."""
+def run_progress(lines: list[str], state: str, elapsed: float, cmd: str = "") -> dict:
+    """Detailed progress of a scripts.run_lab log: coins done of total, per-coin times, ETA and nested bars."""
     head = next((re.search(r"lab: (\d+) strategies x (\d+) symbols", l) for l in lines if l.startswith("lab: ")), None)
     coins = [(m.group(1), int(m.group(2))) for l in lines if (m := re.search(r"^\s+([A-Z0-9]+USDT) done \((\d+)s\)", l))]
     total = int(head.group(2)) if head else None
-    out = {"strategies": int(head.group(1)) if head else None, "total": total, "done": len(coins),
+    n_strat = int(head.group(1)) if head else None
+    out = {"strategies": n_strat, "total": total, "done": len(coins),
            "coins": [{"symbol": c.replace("USDT", ""), "at_s": t} for c, t in coins]}
     fin = next((re.search(r"([\d,]+) trades in (\d+)s", l) for l in reversed(lines) if " trades in " in l), None)
     if fin:
         out["trades"] = int(fin.group(1).replace(",", ""))
+    coin_pct = 100.0 if state == "done" else (round(100 * len(coins) / total, 1) if total else 0.0)
     if total:
         frac = len(coins) / total
         if state == "done":
@@ -111,8 +115,33 @@ def run_progress(lines: list[str], state: str, elapsed: float) -> dict:
         if state == "running" and coins and len(coins) < total:
             last = coins[-1][1]
             out["eta_s"] = max(0, last / len(coins) * total - elapsed)
-    if state == "running" and coins and len(coins) == total and not fin:
+    scoring = state == "running" and total and len(coins) == total and not fin
+    if scoring:
         out["phase"] = "all coins done, scoring the results"
+        out["pct"] = 95.0
+        coin_pct = 100.0
+    # Nested bars the UI draws inside each test card
+    bars = [{"id": "overall", "label": "This test", "pct": out.get("pct") or (100 if state == "done" else 0),
+             "detail": (f"{out['trades']:,} trades" if out.get("trades") else (
+                 out.get("phase") or (f"{len(coins)}/{total} coins" if total else state)))}]
+    if total:
+        bars.append({"id": "coins", "label": "Coins finished", "pct": coin_pct,
+                     "detail": f"{len(coins)} / {total}" + (f" · next after ~{coins[-1][1] // max(len(coins), 1)}s/coin" if coins and state == "running" and len(coins) < total else "")})
+    if n_strat:
+        bars.append({"id": "settings", "label": "Strategy settings", "pct": 100 if state == "done" else (coin_pct if total else 0),
+                     "detail": f"{n_strat} settings on each coin"})
+    if "--null-trials" in (cmd or ""):
+        m = re.search(r"--null-trials\s+(\d+)", cmd or "")
+        n_null = int(m.group(1)) if m else 0
+        null_pct = 100 if state == "done" else (90 if scoring else max(0, coin_pct - 5))
+        bars.append({"id": "null", "label": "Null / random test", "pct": null_pct,
+                     "detail": f"{n_null} random-entry trials per setting" + (" · running after coins" if scoring else "")})
+    em = re.search(r"--exits\s+(\S+)", cmd or "")
+    if em and "," in em.group(1):
+        exits = em.group(1).split(",")
+        bars.append({"id": "exits", "label": "Exit models", "pct": coin_pct if total else (100 if state == "done" else 0),
+                     "detail": f"{len(exits)} exits: {', '.join(exits)}"})
+    out["bars"] = bars
     return out
 
 
@@ -128,19 +157,57 @@ def job_view(st, logdir):
     failed = re.findall(r"(\d+) failed", raw)
     failures = [l for l in lines if l.startswith("FAILED ")][-12:]
     kind, title = _describe(st["name"], st.get("cmd", ""))
+    if st.get("kind_hint") == "ai_gate":
+        kind, title = "ai_gate", "AI gate: with-AI vs without-AI on swing trades"
     elapsed = round(now - st["started"])
     state = "stalled?" if stale else st["state"]
-    prog = run_progress(lines, st["state"], elapsed) if kind == "backtest" else {}
+    prog = run_progress(lines, st["state"], elapsed, st.get("cmd", "")) if kind == "backtest" else {}
     if kind == "tests":
         p = 100 if st["state"] == "done" else (pct[-1] if pct else 0)
+        bars = [{"id": "pytest", "label": "Test suite", "pct": p or 0,
+                 "detail": (f"{passed[-1]} passed" if passed else "running") + (f" · {failed[-1]} failed" if failed else "")}]
+    elif kind == "ai_gate":
+        # Prefer fields mirrored from status/ai_gate_live.json (scripts.job has no progress of its own)
+        done_n, total_n = st.get("done"), st.get("total")
+        if done_n is None or total_n is None:
+            try:
+                ai = json.loads((Path(logdir).parent / "status" / "ai_gate_live.json").read_text())
+                done_n, total_n = ai.get("done"), ai.get("total")
+                if ai.get("state") == "running" and state == "stalled?":
+                    state = "running"   # beat file may lag; AI status is authoritative
+            except (OSError, json.JSONDecodeError, TypeError):
+                pass
+        p = st.get("progress_pct")
+        if p is None and total_n:
+            p = round(100 * float(done_n or 0) / float(total_n), 1)
+        if p is None:
+            p = 100 if st["state"] == "done" else 0
+        # Parse last log line like: [qwen3:8b 79/150] SOLUSDT skip ...
+        last = next((re.search(r"\[(\S+)\s+(\d+)/(\d+)\]\s+(\S+)\s+(\S+)", l) for l in reversed(lines)
+                     if re.search(r"\[\S+\s+\d+/\d+\]", l)), None)
+        detail = f"{done_n or '?'}/{total_n or '?'} decisions"
+        if last:
+            detail = f"{last.group(2)}/{last.group(3)} · last {last.group(4).replace('USDT','')} → {last.group(5)} · {last.group(1)}"
+            done_n, total_n = int(last.group(2)), int(last.group(3))
+            p = round(100 * done_n / total_n, 1)
+        bars = [
+            {"id": "overall", "label": "AI gate sample", "pct": p or 0, "detail": detail},
+            {"id": "model", "label": "Model (thinking)", "pct": p or 0,
+             "detail": "~3 min per trade · Ollama qwen3:8b"},
+        ]
+        prog = {"done": done_n, "total": total_n, "pct": p, "bars": bars,
+                "eta_s": (max(0, (total_n - done_n) * 180) if (done_n is not None and total_n) else None)}
     elif kind == "backtest":
         p = prog.get("pct", 100 if st["state"] == "done" else 0)
+        bars = prog.get("bars") or [{"id": "overall", "label": "This test", "pct": p or 0, "detail": state}]
     else:
         p = 100 if st["state"] in ("done", "failed") else None
+        bars = [{"id": "overall", "label": title, "pct": p or 0, "detail": state}]
     errors = [l for l in lines if re.search(r"Error|Traceback|Killed", l)][-4:]
     return {"name": st["name"], "title": title, "host": st.get("host"), "state": state,
             "elapsed_s": elapsed, "started": st["started"], "finished": st.get("finished"),
             "symbols_done": progress_from_log(lines), "progress": prog, "progress_pct": p,
+            "bars": bars, "live": state == "running",
             "tail": lines[-8:], "cmd": st.get("cmd", "")[:160], "kind": kind,
             "exit_code": st.get("exit_code"), "errors": errors,
             "pct": pct[-1] if pct else None, "passed": int(passed[-1]) if passed else None,
@@ -327,6 +394,66 @@ def banner_view():
         return None
 
 
+# Known non-AI queue stages (must match scripts.queue_non_ai.STAGES order)
+QUEUE_STAGES = (
+    ("N1", "Null tests (4h + 8h)", ("swing_null_4h", "swing_null_8h")),
+    ("N2", "Timeframe sweep 1h→12h", ("tf_sweep_1h", "tf_sweep_2h", "tf_sweep_4h", "tf_sweep_8h", "tf_sweep_12h")),
+    ("N3", "Exit variants", ("exits_4h", "exits_8h")),
+    ("N4", "Cost stress", ("stress_swing_4h",)),
+    ("N5", "Daily BTC/ETH", ("daily_trend",)),
+    ("N6", "Wallet + sizing", ("wallet_plan", "sizing_backtest")),
+    ("N7", "Edge report", ("edge_report",)),
+    ("N8", "Broader grid search", ("breakout_grid_4h",)),
+)
+
+
+def queue_view(jobs: list[dict] | None = None) -> dict | None:
+    """Live non-AI queue card: stage bars + which job is active. Reads status/non_ai_queue.json (local or remote)."""
+    path = None
+    for base in [ROOT] + [p for p in (ROOT / "remote").glob("*") if p.is_dir()]:
+        f = base / "status" / "non_ai_queue.json"
+        if f.exists() and (path is None or f.stat().st_mtime > path.stat().st_mtime):
+            path = f
+    if path is None:
+        return None
+    try:
+        d = json.loads(path.read_text())
+    except (OSError, json.JSONDecodeError):
+        return None
+    done = set(d.get("done") or [])
+    jobs = jobs or []
+    by_name = {j["name"]: j for j in jobs}
+    stages = []
+    for sid, label, names in QUEUE_STAGES:
+        finished = sum(1 for n in names if n in done or by_name.get(n, {}).get("state") == "done")
+        running = [n for n in names if by_name.get(n, {}).get("state") in ("running", "stalled?")]
+        failed = [n for n in names if by_name.get(n, {}).get("state") == "failed"]
+        pct = round(100 * finished / len(names), 1) if names else 0
+        if running:
+            pct = max(pct, round(100 * (finished + 0.45) / len(names), 1))
+        stages.append({"id": sid, "label": label, "pct": 100 if d.get("state") == "done" and sid <= (d.get("stage") or "") else pct,
+                       "detail": (f"running: {', '.join(running)}" if running else
+                                  (f"failed: {', '.join(failed)}" if failed else f"{finished}/{len(names)} jobs")),
+                       "state": ("running" if running else ("failed" if failed else ("done" if finished == len(names) else "waiting")))})
+    # Fix stage pct when queue reports current stage letter
+    cur = d.get("stage") or ""
+    for s in stages:
+        if s["id"] < cur and s["state"] == "waiting":
+            s["state"], s["pct"], s["detail"] = "done", 100, s["detail"]
+        if d.get("state") == "done":
+            s["state"], s["pct"] = "done", 100
+    active = [j for j in jobs if j.get("state") in ("running", "stalled?")]
+    n_jobs = sum(len(n) for _, _, n in QUEUE_STAGES)
+    n_done = len(done)
+    return {"state": d.get("state", "unknown"), "stage": cur, "host": d.get("host"),
+            "done": sorted(done), "elapsed_s": d.get("elapsed_s"),
+            "pct": round(100 * n_done / n_jobs, 1) if n_jobs else 0,
+            "jobs_done": n_done, "jobs_total": n_jobs,
+            "stages": stages, "active": [{"name": j["name"], "title": j.get("title"), "pct": j.get("progress_pct"),
+                                          "host": j.get("host"), "bars": j.get("bars") or []} for j in active],
+            "age_s": round(time.time() - path.stat().st_mtime), "source": str(path)}
+
+
 def noai_view():
     """Rules-only findings written by scripts.portfolio_wallet and scripts.breakdown on the Mac."""
     out = {"wallet": {}, "breakdown": {}, "timeframes": []}
@@ -489,7 +616,10 @@ def state():
             return default
 
     jobs = safe(load_jobs, [])
+    queue = safe(lambda: queue_view(jobs), None)
+    live = [j for j in jobs if j.get("state") in ("running", "stalled?")]
     return {"now": time.time(), "machines": machines, "jobs": jobs, "overall": safe(lambda: overall(jobs), {}),
+            "queue": queue, "live": live,
             "ai": safe(ai_view, []) + safe(work_view, []), "results": safe(results_view, []),
             "noai": safe(noai_view, {"wallet": {}, "breakdown": {}, "timeframes": []}), "banner": safe(banner_view, None),
             "prod": safe(prod_health_view, None), "research": safe(research_view, None)}
@@ -504,7 +634,42 @@ class H(BaseHTTPRequestHandler):
 
     def do_GET(self):
         here = Path(__file__).parent
-        if self.path.startswith("/api/state"):
+        if self.path.startswith("/api/live"):
+            # Fast path for the top "is it running?" card — skips heavy wallet/result JSON and slow mac `top`
+            def live_state():
+                jobs = load_jobs()
+                live = [j for j in jobs if j.get("state") in ("running", "stalled?") and j.get("kind") != "other"]
+                machines = []
+                for p in (ROOT / "remote").glob("*/machine.json"):
+                    try:
+                        m = json.loads(p.read_text())
+                        m["age_s"] = round(time.time() - m.get("ts", 0))
+                        machines.append(m)
+                    except (OSError, json.JSONDecodeError):
+                        pass
+                pull = None
+                for p in (ROOT / "remote").glob("*/pull.json"):
+                    try:
+                        pull = json.loads(p.read_text())
+                        pull["age_s"] = round(time.time() - pull.get("ts", 0))
+                        pull["path"] = str(p)
+                    except (OSError, json.JSONDecodeError):
+                        pass
+                return {"now": time.time(), "queue": queue_view(jobs), "live": live, "pull": pull,
+                        "jobs": [{"name": j["name"], "title": j.get("title"), "state": j["state"],
+                                  "host": j.get("host"), "progress_pct": j.get("progress_pct"),
+                                  "bars": j.get("bars"), "kind": j.get("kind"), "elapsed_s": j.get("elapsed_s"),
+                                  "progress": j.get("progress"), "finished": j.get("finished"),
+                                  "started": j.get("started"), "cmd": j.get("cmd"), "tail": j.get("tail"),
+                                  "workers": j.get("workers"), "errors": j.get("errors"),
+                                  "exit_code": j.get("exit_code")} for j in jobs if j.get("kind") != "tests"],
+                        "machines": machines}
+            try:
+                body = json.dumps(scrub(live_state()), allow_nan=False).encode()
+            except Exception as e:  # noqa: BLE001
+                body = json.dumps({"error": str(e)[:200]}).encode()
+            ct = "application/json"
+        elif self.path.startswith("/api/state"):
             body, ct = json.dumps(scrub(state()), allow_nan=False).encode(), "application/json"
         elif self.path.startswith("/api/wallet_ledger"):
             from urllib.parse import parse_qs, urlparse

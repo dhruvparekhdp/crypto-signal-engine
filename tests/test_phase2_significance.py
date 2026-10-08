@@ -74,6 +74,12 @@ def test_null_verdict_uses_normal_approx_when_draws_cannot_reach_the_line():
     assert _null_verdict(1 / 4001, 1e-9, 4000, 10) == "beats random"          # enough draws: exact p used
 
 
+def test_a_config_with_few_trades_gets_no_verdict():
+    from analysis.lab.runner import _null_verdict
+    assert _null_verdict(1 / 101, 1e-9, 100, 579, n_trades=2) == "too few trades"
+    assert _null_verdict(1 / 101, 1e-9, 100, 579, n_trades=300) == "beats random (normal approx)"
+
+
 def test_v2_report_takes_n_from_the_ledger(tmp_path, monkeypatch):
     from analysis import v2_report
     monkeypatch.setattr(ledger, "LEDGER", tmp_path / "l.jsonl")
