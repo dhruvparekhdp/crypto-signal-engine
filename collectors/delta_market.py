@@ -24,6 +24,7 @@ from execution.delta_india import INDIA_URL, USER_AGENT, binance_to_delta_symbol
 log = structlog.get_logger()
 
 # Delta resolutions we use. Full set: 5s,1m,3m,5m,15m,30m,1h,2h,4h,6h,1d,1w
+# (no 8h — swing_book aggregates 4h→8h when needed)
 RES_1M = "1m"
 TF_TO_RES = {
     "1m": "1m", "3m": "3m", "5m": "5m", "15m": "15m", "30m": "30m",

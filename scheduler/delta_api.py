@@ -49,7 +49,7 @@ def register(app: web.Application, runner) -> None:
         results = []
         async with AsyncSessionFactory() as session:
             repo = Repository(session)
-            cycle = await repo.get_active_cycle()
+            cycle = await repo.get_running_cycle()
             if cycle is None:
                 return web.json_response(
                     {"ok": False, "error": "no active paper cycle"}, status=400)

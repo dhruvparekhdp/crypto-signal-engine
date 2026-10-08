@@ -4,7 +4,7 @@ from __future__ import annotations
 import unittest
 from datetime import UTC, datetime
 
-from analysis.swing_book import bars_from_delta
+from analysis.swing_book import _aggregate_delta_rows, bars_from_delta
 from collectors.delta_market import parse_delta_candles
 from execution.delta_india import binance_to_delta_symbol
 
@@ -39,6 +39,22 @@ class SwingBarsTests(unittest.TestCase):
         self.assertIsNotNone(b)
         self.assertGreaterEqual(len(b.c), 150)
         self.assertNotIn(9.0, list(b.c[-1:]))  # forming close discarded
+
+    def test_aggregate_4h_to_8h(self):
+        # two complete 4h bars -> one 8h; incomplete trailing bucket dropped
+        rows = [
+            {"time": 0, "open": 1, "high": 3, "low": 0.5, "close": 2, "volume": 10},
+            {"time": 4 * 3600, "open": 2, "high": 4, "low": 1.5, "close": 3.5, "volume": 20},
+            {"time": 8 * 3600, "open": 3.5, "high": 5, "low": 3, "close": 4, "volume": 5},  # incomplete
+        ]
+        out = _aggregate_delta_rows(rows, src_secs=4 * 3600, dst_secs=8 * 3600)
+        self.assertEqual(len(out), 1)
+        self.assertEqual(out[0]["time"], 0)
+        self.assertEqual(out[0]["open"], 1)
+        self.assertEqual(out[0]["high"], 4)
+        self.assertEqual(out[0]["low"], 0.5)
+        self.assertEqual(out[0]["close"], 3.5)
+        self.assertEqual(out[0]["volume"], 30)
 
 
 if __name__ == "__main__":

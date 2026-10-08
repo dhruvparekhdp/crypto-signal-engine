@@ -143,16 +143,56 @@ def bars_from_delta(symbol: str, rows: list, now_ms: int, tf: str = TF) -> Bars 
                 a[:, 4], a[:, 5], a[:, 6])
 
 
+def _aggregate_delta_rows(rows: list, src_secs: int, dst_secs: int) -> list:
+    """Merge lower-TF Delta candles into dst_secs bars (UTC-aligned). Delta has no 8h."""
+    if dst_secs <= src_secs or dst_secs % src_secs:
+        return list(rows) if isinstance(rows, list) else []
+    buckets: dict[int, dict] = {}
+    for r in rows if isinstance(rows, list) else []:
+        if not isinstance(r, dict):
+            continue
+        try:
+            t = int(r["time"])
+            if t > 1e12:
+                t //= 1000
+            open_t = (t // dst_secs) * dst_secs
+            o, h, l, c = float(r["open"]), float(r["high"]), float(r["low"]), float(r["close"])
+            v = float(r.get("volume") or 0.0)
+        except (KeyError, TypeError, ValueError):
+            continue
+        b = buckets.get(open_t)
+        if b is None:
+            buckets[open_t] = {"time": open_t, "open": o, "high": h, "low": l, "close": c, "volume": v,
+                               "_n": 1}
+        else:
+            b["high"] = max(b["high"], h)
+            b["low"] = min(b["low"], l)
+            b["close"] = c
+            b["volume"] += v
+            b["_n"] += 1
+    need = dst_secs // src_secs
+    out = []
+    for t in sorted(buckets):
+        b = buckets[t]
+        if b["_n"] < need:
+            continue  # incomplete bucket
+        out.append({k: b[k] for k in ("time", "open", "high", "low", "close", "volume")})
+    return out
+
+
 async def fetch_bars(client, symbol: str, now_ms: int, tf: str = TF, limit: int = 500) -> Bars | None:
     """Fetch closed bars. Uses Delta India when delta_only_mode is on, else Binance USD-M."""
     from config.settings import settings
     if getattr(settings, "delta_only_mode", False):
         from collectors.delta_market import TF_SECONDS, TF_TO_RES
         from execution.delta_india import INDIA_URL, USER_AGENT, binance_to_delta_symbol
-        res = TF_TO_RES.get(tf, tf)
-        secs = TF_SECONDS.get(res, INTERVAL_MS[tf] // 1000)
+        # Delta India has no 8h — pull 4h and aggregate (UTC 00/08/16).
+        native_tf = "4h" if tf == "8h" else tf
+        res = TF_TO_RES.get(native_tf, native_tf)
+        secs = TF_SECONDS.get(res, INTERVAL_MS[native_tf] // 1000)
+        fetch_limit = min(limit * (2 if tf == "8h" else 1), 2000)
         end = now_ms // 1000
-        start = end - secs * min(limit, 2000)
+        start = end - secs * fetch_limit
         base = (getattr(settings, "delta_india_base_url", None) or INDIA_URL).rstrip("/")
         r = await client.get(
             f"{base}/v2/history/candles",
@@ -164,6 +204,8 @@ async def fetch_bars(client, symbol: str, now_ms: int, tf: str = TF, limit: int 
         r.raise_for_status()
         body = r.json()
         rows = body.get("result") if isinstance(body, dict) else body
+        if tf == "8h":
+            rows = _aggregate_delta_rows(rows or [], src_secs=4 * 3600, dst_secs=8 * 3600)
         return bars_from_delta(symbol, rows or [], now_ms, tf)
     r = await client.get(FAPI_KLINES, params={"symbol": symbol.upper(), "interval": tf, "limit": limit},
                          timeout=15)
