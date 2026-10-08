@@ -38,6 +38,7 @@ GROUPS = {
     "protect": "Protections",
     "ai": "AI",
     "v2": "v2 strategy",
+    "delta": "Delta India (INR futures)",
     "storage": "Storage",
     "keys": "API keys",
 }
@@ -52,27 +53,40 @@ SECRET_STR_KEYS = frozenset({
 
 FIELDS: tuple[Field, ...] = (
     # Market data
+    Field("delta_only_mode", "data", "Delta India only (hold Binance live data)",
+          "ON = all live candles, mark prices and swing bars from Delta Exchange India. "
+          "Turns Binance klines/WS/OI, CoinDCX, CoinGecko and Twelve Data OFF. "
+          "Paper signals still use the same strategies; only the venue changes.",
+          kind="bool"),
+    Field("delta_india_data_enabled", "data", "Delta India candles + marks",
+          "Poll Delta India for 1m candles and mark prices. Forced on when Delta-only is on.",
+          kind="bool"),
+    Field("delta_klines_seconds", "data", "Delta candle poll (seconds)",
+          "How often Delta candles are refreshed.", kind="int", lo=15, hi=300, live=False),
     Field("binance_only_mode", "data", "Binance only [turns off CoinDCX, CoinGecko, Twelve Data]",
-          "Use Binance for all prices and candles. Turns CoinDCX, CoinGecko and Twelve Data "
-          "off so sources cannot disagree. Recommended."),
-    Field("binance_klines_enabled", "data", "Binance candles (main source)",
-          "Real 1-minute candles, depth and price from Binance every minute. Everything "
-          "else depends on it."),
+          "Use Binance for all prices and candles. Ignored when Delta-only is on.",
+          depends_on={"delta_only_mode": False}),
+    Field("binance_klines_enabled", "data", "Binance candles",
+          "Real 1-minute candles from Binance. Forced OFF when Delta-only is on.",
+          depends_on={"delta_only_mode": False}),
     Field("binance_klines_seconds", "data", "Binance candle poll (seconds)",
-          "How often candles are refreshed.", kind="int", lo=15, hi=300, live=False),
+          "How often Binance candles are refreshed.", kind="int", lo=15, hi=300, live=False,
+          depends_on={"delta_only_mode": False}),
     Field("binance_ws_enabled", "data", "Binance live stream",
-          "Tick-by-tick WebSocket on top of the candles. Optional."),
-    Field("binance_oi_enabled", "data", "Open interest",
-          "Binance futures open interest every 2 minutes.", live=False),
+          "Tick-by-tick WebSocket. Forced OFF when Delta-only is on.",
+          depends_on={"delta_only_mode": False}),
+    Field("binance_oi_enabled", "data", "Open interest (Binance)",
+          "Binance futures open interest. Forced OFF when Delta-only is on.", live=False,
+          depends_on={"delta_only_mode": False}),
     Field("coindcx_enabled", "data", "CoinDCX prices",
-          "INR exchange prices. Ignored when Binance only is on.",
-          depends_on={"binance_only_mode": False}),
+          "INR exchange prices. Off when Delta-only or Binance-only is on.",
+          depends_on={"delta_only_mode": False, "binance_only_mode": False}),
     Field("coingecko_enabled", "data", "CoinGecko prices",
-          "Fallback prices. Ignored when Binance only is on.",
-          depends_on={"binance_only_mode": False}),
+          "Fallback prices. Off when Delta-only or Binance-only is on.",
+          depends_on={"delta_only_mode": False, "binance_only_mode": False}),
     Field("twelvedata_enabled", "data", "Twelve Data (gold, silver, oil)",
-          "Commodity prices; needs a key. Ignored when Binance only is on.",
-          live=False, depends_on={"binance_only_mode": False}),
+          "Commodity prices. Off when Delta-only or Binance-only is on.",
+          live=False, depends_on={"delta_only_mode": False, "binance_only_mode": False}),
     Field("news_sentiment_enabled", "data", "News sentiment",
           "Scored headlines feed the sentiment score and news pauses."),
     # Signals & Modes
@@ -266,6 +280,32 @@ FIELDS: tuple[Field, ...] = (
           kind="secret"),
     Field("binance_testnet_api_secret", "keys", "Binance testnet secret", "Pairs with the testnet key.",
           kind="secret"),
+    Field("delta_india_api_key", "keys", "Delta India API key",
+          "INR-settled futures on delta.exchange. Create under API Keys; whitelist server IP. "
+          "Start with Read only; enable Trading only when ready for live orders.",
+          kind="secret"),
+    Field("delta_india_api_secret", "keys", "Delta India API secret",
+          "Shown once at creation. Pairs with the Delta India key above.", kind="secret"),
+    # Delta India behaviour (editable on /settings)
+    Field("delta_india_mode", "delta", "Delta India mode",
+          "off = ignore. shadow = when a paper swing opens, log the Delta order we WOULD place "
+          "(no real order; works with a Read key). live = place real orders — also needs "
+          "'Allow live orders' below AND a Trading key.",
+          kind="choice", choices=("off", "shadow", "live")),
+    Field("delta_india_live_orders", "delta", "Allow live Delta orders (second gate)",
+          "Even when mode is live, orders are blocked until this is ON. Keep OFF until you "
+          "explicitly want real INR futures fills.", kind="bool"),
+    Field("delta_india_risk_pct", "delta", "Delta risk per trade (of INR wallet)",
+          "Fraction of available INR balance risked to the stop on each mirrored trade.",
+          kind="float", lo=0.002, hi=0.03),
+    Field("delta_india_max_open", "delta", "Delta max open positions",
+          "Cap on mirrored Delta positions. 0 = no limit.", kind="int", lo=0, hi=20),
+    Field("delta_india_usd_inr", "delta", "USD→INR rate for Delta sizing",
+          "Delta quotes notionals in USD; wallet is INR. Used only for sizing.",
+          kind="float", lo=60.0, hi=120.0),
+    Field("delta_india_base_url", "delta", "Delta India API base URL",
+          "Production: https://api.india.delta.exchange — not api.delta.exchange (Global).",
+          kind="str"),
 )
 BY_KEY = {f.key: f for f in FIELDS}
 
@@ -362,6 +402,7 @@ def describe(settings, stored: dict) -> list[dict]:
         "key": f.key, "group": f.group, "group_label": GROUPS[f.group],
         "label": f.label, "help": f.help, "kind": f.kind, "live": f.live,
         "lo": f.lo, "hi": f.hi,
+        "choices": list(f.choices) if f.choices else None,
         "value": None if f.kind == "secret" else getattr(settings, f.key, None),
         "is_set": _is_set(settings, f.key) if f.kind == "secret" else None,
         "source": "saved" if f.key in stored else "default",

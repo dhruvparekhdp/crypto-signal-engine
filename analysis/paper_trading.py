@@ -91,6 +91,15 @@ class FeeModel:
     # the whole margin; set False to keep the exact residual.
     liquidation_consumes_margin: bool = True
 
+    def __post_init__(self):
+        # plan Q10: refuse nonsense before it prices a single trade (an AI-proposed sweep could pass anything)
+        for name in ("taker_pct", "maker_pct", "maintenance_margin_pct"):
+            v = getattr(self, name)
+            if not 0 <= v < 0.05:
+                raise ValueError(f"FeeModel.{name}={v} is outside [0, 0.05)")
+        if not 0 <= self.gst_pct <= 1:
+            raise ValueError(f"FeeModel.gst_pct={self.gst_pct} is outside [0, 1]")
+
     @property
     def effective_taker_pct(self) -> float:
         """What actually leaves the wallet, GST included."""

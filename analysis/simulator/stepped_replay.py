@@ -252,6 +252,11 @@ class SteppedMarketReplayEngine:
                     },
                 )
 
+                # R3: these two were never defined, so the first closed trade raised NameError
+                from analysis.simulator.cycle_challenge import run_cycle_simulation
+                sorted_trades = sorted(self.all_simulated_trades, key=lambda t: str(t.entry_time))
+                cycle_results = run_cycle_simulation(sorted_trades)
+
                 # Save full cycle statements to disk for detailed audits
                 cycle_report_path = Path("data/simulator/reports/cycle_statements.json")
                 cycle_report_path.parent.mkdir(parents=True, exist_ok=True)
@@ -387,7 +392,7 @@ class SteppedMarketReplayEngine:
                     hit_tp = c_low <= active_trade.tp_price
                     hit_sl = c_high >= active_trade.sl_price
 
-                if hit_tp:
+                if hit_tp and not hit_sl:            # R4: both touched in one bar -> the stop counts
                     active_trade.exit_time = c_time.isoformat()
                     active_trade.exit_price = active_trade.tp_price
                     active_trade.exit_reason = f"TAKE_PROFIT_{self.tp_r}R"

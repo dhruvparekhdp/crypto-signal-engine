@@ -179,9 +179,27 @@ class Settings(BaseSettings):
     swing_risk_pct: float = 0.03
     # Backtest (scripts/portfolio_wallet, fixed vs adaptive): cutting risk in drawdowns barely reduced the
     # worst drawdown but halved the profit, so fixed risk is the default.
-    swing_adaptive_risk: bool = False
+    # 7 Oct 2026, owner: risk moves between swing_risk_min and swing_risk_pct. Backtest (scripts/wallet_plan_backtest,
+    # variant F): median 12-month x2.08, typical worst fall 23% vs 29% at flat 3%.
+    swing_adaptive_risk: bool = True
+    swing_risk_min: float = 0.01
+    # Specs whose random-entry test was inconclusive at N=579 (7 Oct) trade at this share of the risk
+    swing_weak_specs: str = "4h@ichimoku,8h@ichimoku"
+    swing_weak_spec_factor: float = 0.5
     swing_max_open: int = 0                   # 0 = no limit: free margin and leverage decide how many fit
     swing_max_leverage: float = 10.0          # a ceiling: each trade uses the lowest leverage its margin needs
+    # One trade's margin is capped at this share of the wallet (0 = no cap). Without it the first trade took
+    # nearly all free margin at 1x and the book froze (7 Oct 2026). 0.15 leaves room for ~6 trades.
+    swing_max_margin_frac: float = 0.15
+    # Size swing trades to Binance USD-M rules (step size, min quantity, min order value: analysis/binance_filters)
+    swing_binance_rules: bool = True
+    # Strategy registry (analysis/strategy_registry.py): forward clock per spec, only incubating/trusted specs trade,
+    # and a spec pauses when its forward drawdown passes factor x its own 5-year backtest worst (0 = alarm off).
+    swing_registry: bool = True
+    swing_dd_alarm_factor: float = 1.0
+    # Roadmap F-3: incubating -> trusted after this many forward trades with forward mean R > 0 at t >= line
+    swing_promote_min_trades: int = 30
+    swing_promote_t: float = 1.645
     swing_hold_minutes: int = 10080
     swing_signal_max_age_minutes: int = 60
     # Regime check (analysis/regime_gate.py): skip swing signals when Bitcoin's 30-day volatility is in the top
@@ -222,6 +240,17 @@ class Settings(BaseSettings):
     live_max_leverage: int = 10
     live_daily_loss_pct: float = 0.06         # no new entries after losing this share of the capped balance today
     live_respect_regime_filter: bool = True   # real money skips wild-market / strong-trend signals even in shadow
+    # Delta Exchange India (INR-settled perpetuals). Prefer this over Binance for tax (INR futures).
+    # Modes: "off" | "shadow" (log intents from paper signals, no orders — works with Read key) | "live".
+    # Live also requires delta_india_live_orders=True AND a Trading-permission key. Default is off.
+    delta_india_mode: str = "off"
+    delta_india_api_key: SecretStr | None = None
+    delta_india_api_secret: SecretStr | None = None
+    delta_india_base_url: str = "https://api.india.delta.exchange"
+    delta_india_live_orders: bool = False     # second gate: even in mode=live, no orders until this is True
+    delta_india_risk_pct: float = 0.01        # risk per mirrored trade of INR wallet
+    delta_india_max_open: int = 3
+    delta_india_usd_inr: float = 83.0         # Delta quotes USD notionals; INR wallet conversion for sizing
     paper_open_families: str = "swing"
     # The 60-minute "flat or losing -> close" rule cut trades at small losses; off unless asked for.
     smart_60m_enabled: bool = False
@@ -424,6 +453,12 @@ class Settings(BaseSettings):
     twelvedata_enabled: bool = True
     binance_klines_enabled: bool = True
     binance_klines_seconds: int = 60
+    # Delta Exchange India as the live market-data venue (INR-settled futures).
+    # When delta_only_mode is on, Binance/CoinDCX/CoinGecko/Twelve Data collectors
+    # are forced off and candles + mark prices + swing bars come from Delta only.
+    delta_india_data_enabled: bool = True
+    delta_klines_seconds: int = 60
+    delta_only_mode: bool = True              # hold Binance live data; use Delta only
 
     # One source of truth, for measuring the engine rather than the plumbing.
     # Binance klines carry candles, depth and — in this mode — the price too,
@@ -431,7 +466,7 @@ class Settings(BaseSettings):
     # target because a ticker feed wrote $0.00004 over a $4,341 price and
     # poisoned the candle the ATR was measured from; one source removes that
     # whole class of failure. Turns off CoinDCX, CoinGecko, Twelve Data and
-    # the news feeds.
+    # the news feeds. Ignored when delta_only_mode is on.
     binance_only_mode: bool = False
 
     # A tick further than this from the running price is a feed fault, not a
@@ -508,8 +543,12 @@ class Settings(BaseSettings):
 
     # Paper Trading defaults (Dynamically managed in DB via PaperTradingConfig)
     paper_trading_enabled: bool = True
-    paper_starting_wallet: float = 3000.0
-    paper_target_wallet: float = 20000.0
+    paper_starting_wallet: float = 5000.0
+    paper_target_wallet: float = 10_000_000.0      # effectively never: profit is withdrawn instead (sweep below)
+    # Owner plan (7 Oct 2026): each time paper equity reaches paper_sweep_at, withdraw paper_sweep_amount (INR) from
+    # free cash and keep trading. 0 = off. Withdrawals are rows in paper_withdrawals.
+    paper_sweep_at: float = 10000.0
+    paper_sweep_amount: float = 2500.0
     paper_leverage: float = 10.0
     paper_stop_pct_of_margin: float = 0.20
     paper_reward_risk: float = 2.0

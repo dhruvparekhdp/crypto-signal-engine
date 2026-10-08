@@ -384,7 +384,7 @@ def simulate_multi_year_strategy(
             hit_tp = (highs[i] >= pos_tp) if pos_dir == 1 else (lows[i] <= pos_tp)
             hit_sl = (lows[i] <= pos_sl) if pos_dir == 1 else (highs[i] >= pos_sl)
 
-            if hit_tp:
+            if hit_tp and not hit_sl:            # R4: both touched in one bar -> the stop counts
                 pnl_pct = (pos_tp - pos_entry) / pos_entry * 100 if pos_dir == 1 else (pos_entry - pos_tp) / pos_entry * 100
                 trades.append({
                     "symbol": symbol,

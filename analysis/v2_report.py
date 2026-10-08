@@ -47,7 +47,16 @@ SETUP_VARIANTS = {
                      "swing_alternate": True, "min_swing_atr": 0.75, "regime_routing": True},
                     "All filters together (not entry depth)"),
 }
-TRIALS = 6 + len(SETUP_VARIANTS)       # execution variants + setup variants
+TRIALS = 6 + len(SETUP_VARIANTS)       # execution variants + setup variants (this report's own count)
+
+
+def n_trials() -> int:
+    """Plan 2.1: deflated Sharpe uses N from the trial ledger (family 'v2'), never less than this report's own."""
+    try:
+        from analysis.lab.ledger import trial_count
+        return max(TRIALS, trial_count("v2"))
+    except Exception:  # noqa: BLE001 - a missing or unreadable ledger must not stop the report
+        return TRIALS
 
 VARIANT_LABELS = {
     "base": "Limit entry, full target",
@@ -152,22 +161,22 @@ def run_backtest(symbols: list[str], years: float = 2.0, cfg: V2Config = V2Confi
                                                    if t.setup == c and t.side == s],
                                                   mc=False))
                           for c in cfg.setups for s in ("long", "short")},
-        "overall": grade(all_trades, n_trials=TRIALS),
+        "overall": grade(all_trades, n_trials=n_trials()),
         # The same candidates under each execution variant: what the limit
         # entry costs (vs taker), and what breakeven / partial exits do to
         # win rate AND expectancy. Every variant counts as a trial.
         "variants": {name: {
             "label": VARIANT_LABELS[name],
-            "overall": _small(grade(vt, mc=False, n_trials=TRIALS)),
+            "overall": _small(grade(vt, mc=False, n_trials=n_trials())),
             "setups": {c: grade([t for t in vt if t.setup == c], mc=False,
-                                n_trials=TRIALS)["stats"] for c in cfg.setups}}
+                                n_trials=n_trials())["stats"] for c in cfg.setups}}
             for name, vt in variant_trades.items()},
         # One research filter at a time (and all together), base execution.
         "setup_variants": {name: {
             "label": SETUP_VARIANTS[name][1],
-            "overall": _small(grade(vt, mc=False, n_trials=TRIALS)),
+            "overall": _small(grade(vt, mc=False, n_trials=n_trials())),
             "setups": {c: grade([t for t in vt if t.setup == c], mc=False,
-                                n_trials=TRIALS)["stats"] for c in cfg.setups}}
+                                n_trials=n_trials())["stats"] for c in cfg.setups}}
             for name, vt in setup_trades.items()},
         # Every exit style per coin, with the coin's volatility class relative
         # to the rest of the watchlist: which coins suit the profit lock.

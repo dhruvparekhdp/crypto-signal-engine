@@ -71,3 +71,13 @@ html.pc-on #sec-themes,html.pc-on a[href="#sec-themes"],html.pc-on body>div.sub>
 html.pc-on .app{display:block}
 html.pc-on .main{min-height:auto}
 @media (max-width:640px){ html.pc-on .main-body{padding-bottom:16px!important} }
+
+/* Tool pages style bare <a>/<nav> (e.g. the soft-UI settings page rounds and shadows them); the header
+   keeps its own shape whatever the page underneath does. */
+.pc-bar a,.pc-bar button,.pc-bar nav{border-radius:0!important}
+.pc-bar nav{background:transparent!important;box-shadow:none!important;padding:0!important;margin:0!important}
+.pc-tab{box-shadow:3px 3px 0 var(--pc-acc)!important;background:#0A0A0A!important}
+.pc-tab.on{background:var(--pc-acc)!important}
+.pc-sub{box-shadow:none!important;background:transparent!important;margin:0!important}
+.pc-sub.on{background:#E8E6DF!important}
+.pc-sub:hover{background:#ffffff10!important}

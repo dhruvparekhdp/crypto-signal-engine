@@ -31,13 +31,28 @@ def chat(model: str, system: str, user: str, schema: dict | None = None, think: 
     req = urllib.request.Request(f"{host}/api/chat", data=json.dumps(body).encode(),
                                  headers={"Content-Type": "application/json"})
     t0 = time.time()
-    try:
-        with urllib.request.urlopen(req, timeout=timeout) as r:
-            out = json.loads(r.read())
-    except urllib.error.HTTPError as e:
-        raise OllamaError(f"{e.code}: {e.read().decode(errors='replace')[:200]}") from e
-    except (urllib.error.URLError, TimeoutError) as e:
-        raise OllamaError(str(e)) from e
+    # Tailscale / Wi‑Fi lag: retry transient network failures a few times before giving up the trade
+    last_err: Exception | None = None
+    out = None
+    for attempt in range(1, 4):
+        try:
+            with urllib.request.urlopen(req, timeout=timeout) as r:
+                out = json.loads(r.read())
+            break
+        except urllib.error.HTTPError as e:
+            body_txt = e.read().decode(errors="replace")[:200]
+            if e.code in (502, 503, 504) and attempt < 3:
+                time.sleep(min(2 ** attempt, 8))
+                last_err = e
+                continue
+            raise OllamaError(f"{e.code}: {body_txt}") from e
+        except (urllib.error.URLError, TimeoutError, ConnectionResetError, BrokenPipeError, OSError) as e:
+            last_err = e
+            if attempt >= 3:
+                raise OllamaError(f"network after {attempt} tries: {e}") from e
+            time.sleep(min(2 ** attempt, 10))
+    if out is None:
+        raise OllamaError(f"network: {last_err}")
     msg = out.get("message", {})
     ev, evd = out.get("eval_count", 0), out.get("eval_duration", 0)
     return {"text": msg.get("content", ""), "thinking": msg.get("thinking", "") or "",

@@ -4,6 +4,39 @@ Everything below is dev / proof of concept: **paper trading only**. No real-mone
 
 ---
 
+## 7 Oct 2026 (evening): Binance verified, sizing fixed, strategy registry, honest null tests — NOT DEPLOYED
+
+All on branch `phase1-protect-production`, tested on the Mac and the local dev server only (owner rule: no
+production changes tonight). Full suite: 1,555 passed. Details: docs/BINANCE_PLAN.md, audit/FINDINGS.md.
+
+**Binance (read-only key, Mac):** 500/500 public calls and 679/679 calls of every read-only endpoint for 60 s
+(peak weight 1,531/2,400) OK from India. The owner's account has USD-M futures access. Futures WebSocket moved:
+mark price / trades / candles only on `/market/stream`.
+
+**Fixes and features**
+| What | Why | Setting |
+|---|---|---|
+| Margin per swing trade capped at 15% of the wallet | One 1x SOL trade took ₹1,238 of ₹1,735 and froze the book | `swing_max_margin_frac` 0.15 |
+| Paper orders follow Binance USD-M rules (step, min qty, $5/$20/$50 min order) | Old lot table was CoinDCX's and missed most coins | `swing_binance_rules` on |
+| Strategy registry: per-strategy "live from" clock, resets on code/param change; only incubating/trusted trade; drawdown alarm at each strategy's own 5-year worst (8.6-28.7R) | Forward results are the only clean evidence | `swing_registry`, `swing_dd_alarm_factor` 1.0 |
+| Paper tab card "Strategies · forward evidence" (phone-friendly) | See each strategy's clock, forward R, drawdown vs alarm | — |
+| Null test: z-score + normal-approx p at Bonferroni N (≥ 579 configs tried); `run_lab --ledger-family` | Old p = 0.000 from 30 draws, no correction | — |
+| v2 report: N from the trial ledger | Was hard-coded | — |
+| Input guards: lake clock must be epoch ms on the grid; negative fees / GST outside [0,1] refused | Silent mis-pricing | — |
+| Lab = paper cost check (both 0.188% per stop-out) | Plan L10 | — |
+
+**Backtests run on the Mac (in-sample, read with care)**
+- Swing null test, real exits, 100 random draws each, judged at N = 579: **6 of 8 live specs beat random**
+  (z 3.9-6.3); **4h and 8h Ichimoku inconclusive** (z 3.3-3.7). Caveat: z overstates because trades cluster.
+- Sizing (12-month windows, monthly starts): 3% risk → median x2.2-2.5 a year, median worst fall ~29%;
+  1% risk → x1.3-1.7, fall 7-17%. (Earlier "~65%" was a lab metric bug, fixed: audit R15.) The cap does not raise
+  returns; it unfreezes the book. data/lab/sizing_backtest.json.
+
+**Owner decisions waiting:** deploy this branch; paper wallet size + reset; risk 3% vs 1%; pause the two Ichimoku
+specs (set status "paused" in the registry) or keep watching them.
+
+---
+
 ## 7 Oct 2026: Phase 1 protection, our own AI model online, honest statistics (Phase 2 start)
 
 ### 1. Production safety (Phase 1 of docs/INTEGRATION_PLAN.md) — live since commit 7364dde
@@ -66,8 +99,7 @@ race in the lab work queue). All fixed.
 - Local dev server (`scripts/dev_server.sh`, port 8090, own database, no AI keys): all 20 pages checked.
 
 ### Known issues
-- The Space hardware still says ZeroGPU (works now, but switch to **CPU Basic** in the Space settings: it is the
-  free always-on tier; changing it through the API asks for payment).
+- The Space runs on ZeroGPU hardware (moving to CPU Basic needs PRO). It works, but may sleep when idle.
 - Move explanations from the small model get cut at 600 tokens (0/6 in the eval for both models): next fine-tune.
 - The paper wallet still carries the old 15-minute losses (1,735 of 3,000).
 
@@ -75,14 +107,16 @@ race in the lab work queue). All fixed.
 
 ## Plan: pending work (this evening)
 
-### A. Owner actions (5–10 min each, no code)
-1. Space settings → hardware → **CPU Basic**.
-2. Rotate the OpenRouter, Hugging Face and Gemini keys; paste the new ones on `/keys`.
-3. GitHub → Settings → Secrets → update `EC2_SSH_KEY` with the new key; then I remove the old key from the server.
-4. Close port 8080 to the internet (AWS security group), use Tailscale.
-5. Binance-from-home test on a laptop (decides home server vs Sydney):
-   `curl -s "https://fapi.binance.com/fapi/v1/klines?symbol=BTCUSDT&interval=4h&limit=2"`
-6. Decide: reset the paper wallet now so forward results start clean (recommended, pairs with task C2).
+### A. Owner actions (decided 7 Oct)
+- Space hardware: **stays on ZeroGPU**. Hugging Face blocks the move to CPU Basic without PRO. It runs fine on
+  ZeroGPU because our code only uses the CPU (no-op `@spaces.GPU` stub). If it sleeps when idle, the engine falls
+  back to Groq until it wakes.
+- Key rotation: deferred by the owner.
+- GitHub secret `EC2_SSH_KEY`: not needed now. Deploys work because the old key is still on the server; update it
+  only before that old key is removed.
+- Home server / Binance-from-home test: later (home Wi-Fi 2-3 days away). Production stays on EC2 Sydney.
+- Still open: close port 8080 to the internet (Tailscale); decide on the paper wallet reset (recommended, pairs
+  with task C2).
 
 ### B. Finish Phase 2 statistics (me, ~2 h)
 1. Run the swing book's real null test on the Mac lake: 4h/8h specs, 3×ATR stop / 3R / 7 days, ledger family

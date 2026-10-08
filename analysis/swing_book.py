@@ -115,8 +115,100 @@ def bars_from_klines(symbol: str, rows: list, now_ms: int, tf: str = TF) -> Bars
     return Bars(symbol.upper(), tf, a[:, 0].astype(np.int64), a[:, 1], a[:, 2], a[:, 3], a[:, 4], a[:, 5], a[:, 6])
 
 
+def bars_from_delta(symbol: str, rows: list, now_ms: int, tf: str = TF) -> Bars | None:
+    """Delta /v2/history/candles rows -> Bars of CLOSED bars only."""
+    iv = INTERVAL_MS[tf]
+    closed = []
+    for r in rows if isinstance(rows, list) else []:
+        if not isinstance(r, dict):
+            continue
+        try:
+            t = int(r["time"])
+            if t > 1e12:
+                t //= 1000
+            open_ms = t * 1000
+            if open_ms + iv > now_ms:
+                continue
+            closed.append([
+                open_ms, float(r["open"]), float(r["high"]), float(r["low"]),
+                float(r["close"]), float(r.get("volume") or 0.0), 0.0,  # no taker-buy
+            ])
+        except (KeyError, TypeError, ValueError):
+            continue
+    closed.sort(key=lambda x: x[0])
+    if len(closed) < 150:
+        return None
+    a = np.array(closed)
+    return Bars(symbol.upper(), tf, a[:, 0].astype(np.int64), a[:, 1], a[:, 2], a[:, 3],
+                a[:, 4], a[:, 5], a[:, 6])
+
+
+def _aggregate_delta_rows(rows: list, src_secs: int, dst_secs: int) -> list:
+    """Merge lower-TF Delta candles into dst_secs bars (UTC-aligned). Delta has no 8h."""
+    if dst_secs <= src_secs or dst_secs % src_secs:
+        return list(rows) if isinstance(rows, list) else []
+    buckets: dict[int, dict] = {}
+    for r in rows if isinstance(rows, list) else []:
+        if not isinstance(r, dict):
+            continue
+        try:
+            t = int(r["time"])
+            if t > 1e12:
+                t //= 1000
+            open_t = (t // dst_secs) * dst_secs
+            o, h, l, c = float(r["open"]), float(r["high"]), float(r["low"]), float(r["close"])
+            v = float(r.get("volume") or 0.0)
+        except (KeyError, TypeError, ValueError):
+            continue
+        b = buckets.get(open_t)
+        if b is None:
+            buckets[open_t] = {"time": open_t, "open": o, "high": h, "low": l, "close": c, "volume": v,
+                               "_n": 1}
+        else:
+            b["high"] = max(b["high"], h)
+            b["low"] = min(b["low"], l)
+            b["close"] = c
+            b["volume"] += v
+            b["_n"] += 1
+    need = dst_secs // src_secs
+    out = []
+    for t in sorted(buckets):
+        b = buckets[t]
+        if b["_n"] < need:
+            continue  # incomplete bucket
+        out.append({k: b[k] for k in ("time", "open", "high", "low", "close", "volume")})
+    return out
+
+
 async def fetch_bars(client, symbol: str, now_ms: int, tf: str = TF, limit: int = 500) -> Bars | None:
-    r = await client.get(FAPI_KLINES, params={"symbol": symbol.upper(), "interval": tf, "limit": limit}, timeout=15)
+    """Fetch closed bars. Uses Delta India when delta_only_mode is on, else Binance USD-M."""
+    from config.settings import settings
+    if getattr(settings, "delta_only_mode", False):
+        from collectors.delta_market import TF_SECONDS, TF_TO_RES
+        from execution.delta_india import INDIA_URL, USER_AGENT, binance_to_delta_symbol
+        # Delta India has no 8h — pull 4h and aggregate (UTC 00/08/16).
+        native_tf = "4h" if tf == "8h" else tf
+        res = TF_TO_RES.get(native_tf, native_tf)
+        secs = TF_SECONDS.get(res, INTERVAL_MS[native_tf] // 1000)
+        fetch_limit = min(limit * (2 if tf == "8h" else 1), 2000)
+        end = now_ms // 1000
+        start = end - secs * fetch_limit
+        base = (getattr(settings, "delta_india_base_url", None) or INDIA_URL).rstrip("/")
+        r = await client.get(
+            f"{base}/v2/history/candles",
+            params={"symbol": binance_to_delta_symbol(symbol), "resolution": res,
+                    "start": start, "end": end},
+            headers={"User-Agent": USER_AGENT, "Accept": "application/json"},
+            timeout=15,
+        )
+        r.raise_for_status()
+        body = r.json()
+        rows = body.get("result") if isinstance(body, dict) else body
+        if tf == "8h":
+            rows = _aggregate_delta_rows(rows or [], src_secs=4 * 3600, dst_secs=8 * 3600)
+        return bars_from_delta(symbol, rows or [], now_ms, tf)
+    r = await client.get(FAPI_KLINES, params={"symbol": symbol.upper(), "interval": tf, "limit": limit},
+                         timeout=15)
     r.raise_for_status()
     return bars_from_klines(symbol, r.json(), now_ms, tf)
 
@@ -161,7 +253,7 @@ def to_signal(setup: SwingSetup, price: float, now: datetime) -> CryptoSignal | 
         return None
     stop, target = lv
     stop_pct = abs(price - stop) / price * 100
-    return CryptoSignal(
+    sig = CryptoSignal(
         symbol=setup.symbol.lower(), signal_type=f"swing_{setup.strategy}",
         direction="long" if setup.side > 0 else "short",
         trigger_description=(f"{REGISTRY[setup.strategy].name} fired on the {setup.tf} bar closed at "
@@ -171,6 +263,16 @@ def to_signal(setup: SwingSetup, price: float, now: datetime) -> CryptoSignal | 
         edge_pct=0.0, stake_pct=0.0, timeframe=setup.tf, sentiment_score=0.0,
         indicators_summary=f"atr{setup.tf}={setup.atr:.6g} bar_close={setup.close:.6g}",
         timestamp=now, trade_mode="swing", leverage_suggested=1.0)
+    # roadmap Q-9: the backtest fills at the first price after this bar's close; keep it to measure the shortfall
+    sig.bar_close_price = setup.close
+    sig.bar_close_ms = setup.bar_open_ms + INTERVAL_MS[setup.tf]
+    return sig
+
+
+def shortfall(side: int, entry: float, bar_close: float, bar_close_ms: int, now_ms: int) -> tuple[float, float]:
+    """(bps worse than the backtest's fill at the bar close, minutes after the close). Positive bps = paid more."""
+    bps = side * (entry - bar_close) / bar_close * 1e4 if bar_close > 0 else 0.0
+    return bps, (now_ms - bar_close_ms) / 60_000
 
 
 def adaptive_risk(base: float, dd: float, losing_streak: int,
@@ -184,15 +286,52 @@ def adaptive_risk(base: float, dd: float, losing_streak: int,
     return base * max(f, floor)
 
 
+def risk_for(signal_type: str, timeframe: str, dd: float, streak: int, trusted: bool = False) -> float:
+    """Risk per trade between swing_risk_min and swing_risk_pct (owner, 7 Oct 2026): cut in book drawdowns and
+    after losing streaks (adaptive_risk), halved for specs whose random-entry test was inconclusive, never below
+    the minimum. Backtested as variant F in scripts/wallet_plan_backtest."""
+    from config.settings import settings
+    top = settings.swing_risk_pct
+    risk = adaptive_risk(top, dd, streak) if settings.swing_adaptive_risk else top
+    key = f"{timeframe}@{signal_type.removeprefix('swing_')}"
+    weak = {k.strip() for k in settings.swing_weak_specs.split(",") if k.strip()}
+    if key in weak and not trusted:          # a weak spec that earned "trusted" on forward results gets full risk
+        risk *= settings.swing_weak_spec_factor
+    return max(risk, min(settings.swing_risk_min, top))
+
+
+def risk_reason(signal_type: str, timeframe: str, dd: float, streak: int, trusted: bool = False) -> str:
+    """Plain-English why for the trade card (roadmap F-5)."""
+    from config.settings import settings
+    parts = []
+    if settings.swing_adaptive_risk and dd >= 0.10:
+        parts.append(f"book {dd * 100:.0f}% below its peak")
+    if settings.swing_adaptive_risk and streak >= 3:
+        parts.append(f"{streak} losses in a row")
+    key = f"{timeframe}@{signal_type.removeprefix('swing_')}"
+    if key in {k.strip() for k in settings.swing_weak_specs.split(",")} and not trusted:
+        parts.append("strategy not yet proven vs random (half risk)")
+    r = risk_for(signal_type, timeframe, dd, streak, trusted)
+    if r <= settings.swing_risk_min + 1e-12 and parts:
+        parts.append("floor reached")
+    return "full risk" if not parts else ", ".join(parts)
+
+
 def size(wallet: float, free: float, risk_pct: float, entry: float, stop: float, costs: float,
-         max_leverage: float) -> tuple[float, float] | None:
+         max_leverage: float, max_margin_frac: float = 0.0) -> tuple[float, float] | None:
     """(margin, leverage) so that a stop-out costs risk_pct of the wallet, at the lowest leverage the free
-    margin allows (capped at max_leverage). None if it cannot be funded."""
+    margin allows (capped at max_leverage). None if it cannot be funded.
+
+    max_margin_frac > 0 caps one trade's margin at that share of the wallet, so one trade can no longer lock the
+    whole wallet (7 Oct 2026: a 1x SOL trade took Rs1,238 of Rs1,735 and every later signal was skipped).
+    Leverage rises to fit the cap; the stop-out risk is unchanged, only less margin is tied up."""
     move = abs(entry - stop) / entry + max(costs, 0.0)
     if move <= 0 or wallet <= 0:
         return None
     notional = wallet * risk_pct / move
     usable = free * 0.9
+    if max_margin_frac > 0:
+        usable = min(usable, wallet * max_margin_frac)
     if usable <= 0:
         return None
     leverage = min(max(1.0, notional / usable), max_leverage)

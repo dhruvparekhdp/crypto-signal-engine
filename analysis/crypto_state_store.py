@@ -374,8 +374,15 @@ class CryptoStateStore:
             # by however much price moved in between (the SOL/BCH gap the
             # owner saw). REST's job in that case is only to keep the candle
             # history filled; the socket keeps owning current_price.
-            if state.current_price <= 0 or (settings.binance_only_mode
-                                            and not settings.binance_ws_enabled):
+            # Own the price when candles are the sole live feed (Binance-only
+            # without WS, or Delta-only — Delta has no WS collector yet).
+            # `is True` so a test MagicMock does not accidentally look enabled.
+            delta_only = getattr(settings, "delta_only_mode", False) is True
+            sole_candle_feed = (
+                (settings.binance_only_mode and not settings.binance_ws_enabled)
+                or delta_only
+            )
+            if state.current_price <= 0 or sole_candle_feed:
                 state.current_price = state.candles_1m[-1].close
             recalculate_indicators(state)
 

@@ -30,6 +30,7 @@ import structlog
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from telegram.constants import ParseMode
 
+from analysis import binance_filters as bfilters
 from analysis.crypto_engine import CryptoEngine
 from analysis.crypto_signal import CryptoSignal, make_mirror_signal
 from analysis.crypto_state_store import CommodityStateStore, CryptoStateStore
@@ -59,6 +60,7 @@ from collectors.binance_klines import BinanceKlines
 from collectors.binance_ws import BinanceWSCollector
 from collectors.coindcx import CoinDCXCollector
 from collectors.coingecko import CoinGeckoCollector
+from collectors.delta_market import DeltaMarket
 from collectors.cryptopanic import CryptoPanicCollector
 from collectors.llm_client import should_call_again
 from collectors.macro_sentinel import GroqSentinel
@@ -211,6 +213,7 @@ class AppRunner:
         self.coingecko = CoinGeckoCollector(self.crypto_store)
         self.binance_ws = BinanceWSCollector(self.crypto_store)
         self.klines = BinanceKlines(self.crypto_store)
+        self.delta_market = DeltaMarket(self.crypto_store)
         self.twelvedata_ws = TwelveDataWSCollector(self.commodity_store)
         self.cryptopanic = CryptoPanicCollector()
         self.sentiment = SentimentAnalyzer()
@@ -268,13 +271,16 @@ class AppRunner:
 
 
     def sync_collectors(self) -> None:
-        """Collector switches from settings. Binance-only turns the others off."""
-        only = settings.binance_only_mode
+        """Collector switches from settings. Delta-only / Binance-only force others off."""
+        delta_only = bool(getattr(settings, "delta_only_mode", False))
+        only = settings.binance_only_mode and not delta_only
         self.collector_enabled.update({
-            "coindcx": settings.coindcx_enabled and not only,
-            "coingecko": settings.coingecko_enabled and not only,
-            "binance_ws": settings.binance_ws_enabled,
-            "twelvedata_ws": settings.twelvedata_enabled and not only,
+            "delta": (settings.delta_india_data_enabled or delta_only) and True,
+            "coindcx": settings.coindcx_enabled and not only and not delta_only,
+            "coingecko": settings.coingecko_enabled and not only and not delta_only,
+            "binance_ws": settings.binance_ws_enabled and not delta_only,
+            "binance_klines": settings.binance_klines_enabled and not delta_only,
+            "twelvedata_ws": settings.twelvedata_enabled and not only and not delta_only,
         })
 
     def _sync_binance_ws(self) -> None:
@@ -358,15 +364,20 @@ class AppRunner:
 
     async def _klines_job(self) -> None:
         """
-        Pull real 1-minute bars and depth, replacing the poll-aggregated ones.
+        Pull real 1-minute bars, replacing the poll-aggregated ones.
 
-        This is the job that decides whether any signal means anything. With
-        sampled bars the ATR came out roughly a third of the real figure, the
-        cost floor beat the volatility term every time, and every card on the
-        board showed the same 0.505% target — a constant wearing the costume
-        of a forecast.
+        Venue: Delta India when delta_only_mode (or delta data) is on; else Binance.
         """
-        if not settings.binance_klines_enabled:
+        self.sync_collectors()
+        if self.collector_enabled.get("delta") and (
+                settings.delta_only_mode or settings.delta_india_data_enabled):
+            try:
+                await self.delta_market.fetch()
+            except Exception:
+                log.exception("delta_klines_job_failed")
+            if settings.delta_only_mode:
+                return  # hold Binance entirely
+        if not self.collector_enabled.get("binance_klines", settings.binance_klines_enabled):
             return
         try:
             await self.klines.fetch()
@@ -833,6 +844,9 @@ class AppRunner:
 
                 await repo.update_cycle_wallet(cycle.id, wallet)
 
+                # 2b. Owner's profit sweep: withdraw from free cash when equity reaches the line
+                wallet = await self._maybe_sweep(repo, cycle, cstate, wallet, pcfg)
+
                 # 3. Has the cycle finished?
                 outcome = cycle_outcome(wallet + sum(p.margin for p in cstate.positions),
                                         cfg, len(cstate.positions))
@@ -853,6 +867,57 @@ class AppRunner:
             cache.invalidate("paper_db_snapshot", "pipeline_db_read")
         except Exception:
             log.exception("paper_trading_job_failed")
+
+    async def _weekly_forward_report_job(self) -> None:
+        """Roadmap F-2: forward results per strategy, wallet, withdrawals and skip reasons, every Monday."""
+        try:
+            from sqlalchemy import func, select
+
+            from analysis import strategy_registry as reg_mod
+            from analysis.weekly_report import format_weekly_report
+            from storage.models import CryptoSignalLog, PaperWithdrawal
+            week_ago = datetime.now(UTC).replace(tzinfo=None) - timedelta(days=7)
+            async with AsyncSessionFactory() as session:
+                repo = Repository(session)
+                cycle = await repo.get_running_cycle()
+                if cycle is None:
+                    return
+                trades = [t for t in await repo.get_cycle_trades(cycle.id)
+                          if str(getattr(t, "signal_type", "")).startswith("swing_")]
+                rows = await repo.get_open_positions(cycle.id)
+                registry = await reg_mod.load(session)
+                withdrawn = (await session.execute(select(func.coalesce(func.sum(PaperWithdrawal.amount), 0.0))
+                                                   .where(PaperWithdrawal.cycle_id == cycle.id))).scalar() or 0.0
+                skips = dict((await session.execute(
+                    select(CryptoSignalLog.skip_reason, func.count()).where(
+                        CryptoSignalLog.signal_type.like("swing_%"), CryptoSignalLog.timestamp >= week_ago,
+                        CryptoSignalLog.skip_reason != "").group_by(CryptoSignalLog.skip_reason))).all())
+            equity = cycle.wallet + sum(r.margin for r in rows)
+            week = [t for t in trades if t.closed_at and t.closed_at.replace(tzinfo=None) >= week_ago]
+            await self.notifier.send_text(format_weekly_report(registry, trades, equity, cycle.starting_wallet,
+                                                               withdrawn, week, skips))
+        except Exception:
+            log.exception("weekly_forward_report_failed")
+
+    async def _maybe_sweep(self, repo, cycle, cstate, wallet: float, pcfg) -> float:
+        """Withdraw paper_sweep_amount when equity >= paper_sweep_at and free cash covers it. Returns the wallet."""
+        at, amount = settings.paper_sweep_at, settings.paper_sweep_amount
+        equity = wallet + sum(p.margin for p in cstate.positions)
+        if not at or amount <= 0 or equity < at or wallet < amount:
+            return wallet
+        from storage.models import PaperWithdrawal
+        wallet -= amount
+        cstate.wallet = wallet
+        repo.session.add(PaperWithdrawal(cycle_id=cycle.id, amount=amount, equity_before=equity, wallet_after=wallet))
+        await repo.update_cycle_wallet(cycle.id, wallet)
+        log.info("paper_profit_withdrawn", amount=amount, equity_before=round(equity, 2), wallet=round(wallet, 2))
+        if pcfg.alert_telegram:
+            try:
+                await self.notifier.send_text(f"💰 Paper profit withdrawn: ₹{amount:,.0f} (equity was ₹{equity:,.0f}, "
+                                              f"free cash now ₹{wallet:,.0f})")
+            except Exception:  # noqa: BLE001
+                pass
+        return wallet
 
     async def _candle_refresh_job(self) -> None:
         """Keep market_candles current. Nothing live reads it (trading uses in-memory candles), but the
@@ -910,10 +975,22 @@ class AppRunner:
         return None
 
     async def _perp_prices(self) -> dict:
-        """Binance USD-M last prices for every symbol, one call, cached 10 s. Empty dict on failure."""
+        """Mark/last prices for every symbol, one call, cached 10 s.
+
+        Delta India when delta_only_mode is on; else Binance USD-M. Keys are
+        Binance-shaped (BTCUSDT) either way so callers stay unchanged.
+        """
         import time as _t
         cache = self.__dict__.setdefault("_perp_cache", {"t": 0.0, "v": {}})
         if _t.time() - cache["t"] < 10 and cache["v"]:
+            return cache["v"]
+        if getattr(settings, "delta_only_mode", False):
+            try:
+                v = await self.delta_market.fetch_mark_prices()
+                if v:
+                    cache.update(t=_t.time(), v=v)
+            except Exception as e:  # noqa: BLE001
+                log.warning("delta_perp_prices_failed", error=str(e)[:120])
             return cache["v"]
         try:
             import httpx
@@ -981,6 +1058,14 @@ class AppRunner:
                 if settings.swing_config_fail_closed:
                     return
             specs = sb.parse_specs(settings.swing_strategies)
+            if settings.swing_registry:                       # plan 2.3: one registry row + forward clock per spec
+                try:
+                    from analysis import strategy_registry as reg_mod
+                    async with AsyncSessionFactory() as session:
+                        for note in await reg_mod.sync(session, specs):
+                            log.info("strategy_registry", note=note)
+                except Exception as e:  # noqa: BLE001 - registry trouble must not stop the scan
+                    log.warning("strategy_registry_sync_failed", error=str(e)[:160])
             states = {st.symbol: st for st in await self.crypto_store.get_all()}
             symbols = [s_ for s_ in CRYPTO if s_.lower() in states]
             now = datetime.now(UTC)
@@ -1049,6 +1134,27 @@ class AppRunner:
                          if str(getattr(t, "signal_type", "")).startswith("swing_")],
                         key=lambda t: t.closed_at)
         dd, streak = sb.book_state(closed)
+        registry = {}
+        if settings.swing_registry:                           # plan 2.4: drawdown alarm, then who may trade
+            from analysis import strategy_registry as reg_mod
+            try:
+                async with AsyncSessionFactory() as session:
+                    for msg in await reg_mod.check_promotions(session, closed, settings.swing_promote_min_trades,
+                                                              settings.swing_promote_t):
+                        log.info("swing_spec_promoted", note=msg)
+                        try:
+                            await self.notifier.send_text("✅ Swing strategy promoted on forward results\n" + msg)
+                        except Exception:  # noqa: BLE001
+                            pass
+                    for msg in await reg_mod.check_alarms(session, closed, settings.swing_dd_alarm_factor):
+                        log.warning("swing_spec_paused", note=msg)
+                        try:
+                            await self.notifier.send_text("⏸️ Swing strategy paused by its drawdown alarm\n" + msg)
+                        except Exception:  # noqa: BLE001
+                            pass
+                    registry = await reg_mod.load(session)
+            except Exception as e:  # noqa: BLE001
+                log.warning("strategy_registry_unavailable", error=str(e)[:160])
         open_syms = {p.symbol for p in cstate.positions}
         n_swing = sum(1 for p in cstate.positions if getattr(p, "trade_mode", "") == "swing")
         equity0 = cstate.wallet + sum(p.margin for p in cstate.positions)
@@ -1062,6 +1168,10 @@ class AppRunner:
                 continue
             if sig.symbol in excluded:
                 await self._mark_skipped(log_id, "coin_without_edge")
+                continue
+            reg_row = registry.get(reg_mod.key_of_signal(sig.signal_type, sig.timeframe)) if registry else None
+            if reg_row is not None and reg_row.status not in reg_mod.TRADING:
+                await self._mark_skipped(log_id, f"spec_{reg_row.status}")
                 continue
             if settings.swing_max_open and n_swing >= settings.swing_max_open:
                 await self._mark_skipped(log_id, "swing_book_full")
@@ -1109,15 +1219,23 @@ class AppRunner:
             dist = abs(sig.current_price - sig.stop_loss)
             stop, target = price - side * dist, price + side * sb.REWARD_RISK * dist
             equity = cstate.wallet + sum(p.margin for p in cstate.positions)
-            risk = (sb.adaptive_risk(settings.swing_risk_pct, dd, streak) if settings.swing_adaptive_risk
-                    else settings.swing_risk_pct)
+            trusted = reg_row is not None and reg_row.status == "trusted"
+            risk = sb.risk_for(sig.signal_type, sig.timeframe, dd, streak, trusted)
             sized = sb.size(equity, cstate.wallet, risk, price, stop, stop_out_costs(sig.symbol, cfg),
-                            settings.swing_max_leverage)
+                            settings.swing_max_leverage, settings.swing_max_margin_frac)
             if sized is None:
                 await self._mark_skipped(log_id, "no_free_margin")
                 continue
             margin, leverage = sized
             spec = spec_for(sig.symbol)
+            rules = bfilters.rules_for(sig.symbol) if settings.swing_binance_rules else None
+            lot_step = rules.step if rules is not None else spec.lot_step
+            if rules is not None:
+                qty = bfilters.round_qty(sig.symbol, margin * leverage / (pcfg.usdt_inr * price))   # margin is INR
+                why = bfilters.check_order(sig.symbol, qty, price)
+                if why:
+                    await self._mark_skipped(log_id, why)
+                    continue
             pos = open_position(
                 symbol=sig.symbol, side=Side.LONG if side > 0 else Side.SHORT, entry_price=price,
                 margin=margin, leverage=leverage, fees=fees_for(sig.symbol),
@@ -1125,24 +1243,37 @@ class AppRunner:
                 stop_price=stop, target_price=target, opened_at=now, signal_type=sig.signal_type,
                 timeframe=sig.timeframe, confidence=sig.confidence,
                 expires_at=now + timedelta(minutes=settings.swing_hold_minutes),
-                usdt_inr=pcfg.usdt_inr, lot_step=spec.lot_step, slippage=cfg.slippage, trade_mode="swing")
+                usdt_inr=pcfg.usdt_inr, lot_step=lot_step, slippage=cfg.slippage, trade_mode="swing")
             if pos.coin_qty <= 0:
                 await self._mark_skipped(log_id, "below_one_lot")
                 continue
             cstate.wallet -= pos.margin
             row = await repo.open_position_atomic(cycle.id, pos, cstate.wallet)
             risk_pct = abs(price - stop) / price * 100
+            sf_txt = ""
+            if getattr(sig, "bar_close_price", None):
+                sf_bps, late_min = sb.shortfall(side, pos.entry_price, sig.bar_close_price, sig.bar_close_ms,
+                                                int(now.timestamp() * 1000))
+                sf_txt = f" · shortfall={sf_bps:+.1f}bps late={late_min:.0f}m vs the backtest fill at the bar close"
             await repo.add_trade_events([_event(
                 pos, cycle.id, now, "opened", "entry", new=f"{price:.6g}",
                 note=(f"SWING {sig.timeframe} {pos.side.value} {sig.signal_type} · stop {stop:.6g} ({risk_pct:.2f}% away, 3xATR {sig.timeframe}) · "
                       f"target {target:.6g} (3R) · {leverage:.1f}x · margin {pos.margin:.0f} · "
-                      f"risking {risk * 100:.2f}% of the wallet (book drawdown {dd * 100:.0f}%, losing streak {streak}) · "
-                      f"closes only at stop, target or after 7 days"
+                      f"risking {risk * 100:.2f}% of the wallet ({sb.risk_reason(sig.signal_type, sig.timeframe, dd, streak, trusted)}; "
+                      f"range {settings.swing_risk_min * 100:g}-{settings.swing_risk_pct * 100:g}%) · "
+                      f"closes only at stop, target or after 7 days" + sf_txt
                       + (f" · {verdict.tag()} ({settings.swing_regime_filter})" if verdict is not None else "")))])
             cstate.position_ids[len(cstate.positions)] = row.id
             cstate.positions.append(pos)
             open_syms.add(sig.symbol)
             n_swing += 1
+            if reg_row is not None and reg_row.live_from is None:     # first trade of this exact code + params
+                try:
+                    async with AsyncSessionFactory() as session:
+                        await reg_mod.stamp_live_from(session, reg_row.spec_key, now)
+                    reg_row.live_from = now.replace(tzinfo=None)
+                except Exception as e:  # noqa: BLE001
+                    log.warning("live_from_not_stamped", spec=reg_row.spec_key, error=str(e)[:120])
             log.info("swing_trade_opened", symbol=pos.symbol, side=pos.side.value, strategy=sig.signal_type,
                      margin=round(pos.margin, 2), leverage=round(leverage, 2), risk_pct=round(risk * 100, 2))
             if pcfg.alert_telegram:
@@ -1153,6 +1284,40 @@ class AppRunner:
                     f"Entry <b>${price:,.4f}</b> · Stop <b>${stop:,.4f}</b> · Target <b>${target:,.4f}</b>\n"
                     f"Risk {risk * 100:.2f}% of wallet · {leverage:.1f}x · closes at stop, target or 7 days",
                     parse_mode=ParseMode.HTML)
+            # Delta India mirror (shadow by default — no real order unless both live gates are on)
+            try:
+                await self._mirror_delta_india(pos.symbol, pos.side.value, price, stop, target,
+                                              sig.signal_type, usdt_inr=pcfg.usdt_inr)
+            except Exception as e:  # noqa: BLE001
+                log.warning("delta_india_mirror_failed", symbol=pos.symbol, error=str(e)[:160])
+
+    async def _mirror_delta_india(self, symbol: str, side_word: str, entry: float, stop: float,
+                                  target: float, signal_type: str, usdt_inr: float = 83.0) -> None:
+        """Copy a paper swing open to Delta India (shadow log or live order — see settings)."""
+        mode = (settings.delta_india_mode or "off").lower()
+        if mode == "off":
+            return
+        key = settings.delta_india_api_key.get_secret_value() if settings.delta_india_api_key else ""
+        secret = settings.delta_india_api_secret.get_secret_value() if settings.delta_india_api_secret else ""
+        if not key or not secret:
+            log.info("delta_india_skipped", reason="no_api_key", mode=mode, symbol=symbol)
+            return
+        import httpx
+        from execution.delta_book import DeltaBook
+        from execution.delta_india import DeltaIndia
+        async with httpx.AsyncClient(timeout=15) as http:
+            client = DeltaIndia(key, secret, base_url=settings.delta_india_base_url or
+                                "https://api.india.delta.exchange", client=http)
+            book = DeltaBook(
+                client, mode=mode, live_orders=bool(settings.delta_india_live_orders),
+                risk_pct=float(settings.delta_india_risk_pct),
+                max_open=int(settings.delta_india_max_open),
+                usd_inr=float(settings.delta_india_usd_inr or usdt_inr or 83.0),
+            )
+            plan = await book.on_paper_open(symbol, side_word, entry, stop, target, signal_type)
+        log.info("delta_india_mirror", symbol=symbol, mode=mode, ok=plan.ok, reason=plan.reason,
+                 delta=plan.delta_symbol, size=plan.size, risk_inr=round(plan.risk_inr, 2),
+                 live_orders=bool(settings.delta_india_live_orders))
 
     async def _log_signal(self, sig, suppressed_by: str = "", **extra) -> int:
         """
@@ -2940,6 +3105,8 @@ class AppRunner:
 
     async def _binance_oi_job(self) -> None:
         """Poll Binance Futures Open Interest for crypto perpetuals."""
+        if getattr(settings, "delta_only_mode", False):
+            return  # hold Binance
         if not getattr(settings, "binance_oi_enabled", True):
             return
         try:
@@ -3151,6 +3318,15 @@ class AppRunner:
             next_run_time=datetime.now(UTC) + timedelta(seconds=30),
         )
         self.scheduler.add_job(
+            self._weekly_forward_report_job,
+            "cron",
+            day_of_week="mon",
+            hour=3,
+            minute=30,          # 09:00 IST
+            id="weekly_forward_report",
+            max_instances=1,
+        )
+        self.scheduler.add_job(
             self._v2_backtest_job,
             "cron",
             hour=settings.v2_backtest_hour_utc,
@@ -3214,7 +3390,7 @@ class AppRunner:
             id="crypto_snapshot",
             max_instances=1,
         )
-        if getattr(settings, "binance_oi_enabled", True):
+        if getattr(settings, "binance_oi_enabled", True) and not getattr(settings, "delta_only_mode", False):
             self.scheduler.add_job(
                 self._binance_oi_job,
                 "interval",
@@ -3255,7 +3431,11 @@ class AppRunner:
         await HistoricalDataService.preload_states(self.crypto_store)
 
         crypto_count = await self.crypto_store.count()
-        if settings.binance_only_mode:
+        if getattr(settings, "delta_only_mode", False):
+            sources = (f"Data: <b>Delta India only</b> — candles + marks every "
+                       f"{settings.delta_klines_seconds}s for {crypto_count} symbols\n"
+                       "Binance / CoinDCX / CoinGecko / Twelve Data: held off")
+        elif settings.binance_only_mode:
             sources = (f"Data: <b>Binance only</b> — klines every "
                        f"{settings.binance_klines_seconds}s carry candles, depth and price "
                        f"for {crypto_count} symbols\n"

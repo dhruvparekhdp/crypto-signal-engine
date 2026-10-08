@@ -69,12 +69,22 @@ map; this file has the decisions, results, open work and the owner's rules.
   private HF repo dhruvdp/crypto-analyst-3b-gguf. The Space is set to it (variables MODEL_REPO/MODEL_FILE, secret
   HF_TOKEN). **Space RUNNING with it (7 Oct)**: /health ready, /v1/classify 0.1 s, chat 13 s, valid JSON.
   Startup fixes: launch via Gradio (no own uvicorn), no-op @spaces.GPU for ZeroGPU, musl for the llama.cpp wheel.
-- Space hardware still ZeroGPU: owner to switch to CPU basic (API change is paid).
+- Space stays on ZeroGPU (HF blocks the move to CPU basic without PRO); works via CPU-only code + GPU stub.
+- Deferred by owner (7 Oct): key rotation, GitHub EC2_SSH_KEY update (old key still on server, deploys work),
+  home server move (Wi-Fi in 2-3 days). Production stays on EC2.
 - Phase 2 started: honest permutation p (never 0), Bonferroni on N, trial ledger `analysis/lab/ledger.py`
   (`audit/trial_ledger.jsonl`). Release notes + evening plan: docs/RELEASE_NOTES.md.
 - Application review document (map, wireframes, flowcharts): https://claude.ai/artifact/5erobCpcHL5segVYCyBeHc
 - Local dev server: `scripts/dev_server.sh` (own SQLite DB, no AI keys, port 8090); all 20 pages checked, no JS errors.
 - Laptop AI entry test: last seen 32/150; Tailscale was down on 7 Oct.
+
+## 7 Oct evening (branch phase1-protect-production, NOT deployed)
+Binance verified (docs/BINANCE_PLAN.md), sizing freeze fixed, Binance order rules in paper, strategy registry +
+drawdown alarm + Paper card, honest null tests (6/8 specs beat random at N=579; Ichimoku inconclusive), input
+guards, audit/FINDINGS.md. Release notes top section. Owner rule now: dev Mac + local dev server only.
+
+## 7 Oct late: deployed 189553c; paper reset to cycle 2 (Rs5,000, withdraw Rs2,500 at Rs10,000; backup in
+~/backups on the server); risk 1-3% live. **docs/ROADMAP.md is now the master to-do list.**
 
 ## Open work (in order)
 1. See docs/RELEASE_NOTES.md "Plan: pending work" (sections A-E) — the current to-do list.

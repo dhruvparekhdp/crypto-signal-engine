@@ -12,17 +12,20 @@ from storage.models import Base
 PRICES = {"BTCUSDT": 60000.0, "SOLUSDT": 150.0, "DOGEUSDT": 0.2, "XRPUSDT": 0.6, "BCHUSDT": 400.0}
 
 
-async def run(signals, cap=2):
+async def run(signals, cap=2, binance_rules=False, seed=None):
     engine = create_async_engine("sqlite+aiosqlite:///:memory:")
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
     session_maker = async_sessionmaker(engine, expire_on_commit=False)
+    if seed is not None:                     # e.g. strategy registry rows before the paper job runs
+        await seed(session_maker)
     from scheduler.runner import AppRunner
     runner = AppRunner()
     runner.notifier = AsyncMock()
     with patch("scheduler.runner.settings.paper_trading_enabled", True), \
          patch("scheduler.runner.settings.session_filter_enabled", False), \
          patch("scheduler.runner.settings.swing_max_same_side", cap), \
+         patch("scheduler.runner.settings.swing_binance_rules", binance_rules), \
          patch("scheduler.runner.AsyncSessionFactory", session_maker):
         for sym, px in PRICES.items():
             st = CryptoState(symbol=sym.lower(), base_asset=sym[:-4])
@@ -43,6 +46,10 @@ async def run(signals, cap=2):
             cycle = await repo.get_running_cycle()
             rows = await repo.get_open_positions(cycle.id)
             logs = await repo.crypto_signals_between(1, 0)
+        if seed is not None:
+            from analysis import strategy_registry as reg_mod
+            async with session_maker() as s:
+                run.registry = await reg_mod.load(s)
     return rows, logs
 
 

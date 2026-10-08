@@ -813,3 +813,41 @@ class NewsSentiment(Base):
 
     published_at: Mapped[datetime] = mapped_column(DateTime, index=True)
     received_at: Mapped[datetime] = mapped_column(DateTime, default=_now_utc)
+
+
+class StrategyRegistry(Base):
+    """
+    One row per live swing strategy (docs/INTEGRATION_PLAN.md 2.3/2.4, O6).
+
+    `live_from` is the first paper trade of this exact code + parameters: results after it are the only evidence
+    nobody could have fitted. It resets when the digest (strategy code, params, timeframe) changes. Status:
+    incubating (trades, being measured) | trusted | paused (drawdown alarm or owner) | retired.
+    """
+
+    __tablename__ = "strategy_registry"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    spec_key: Mapped[str] = mapped_column(String, unique=True, index=True)   # "4h@vol_breakout"
+    params: Mapped[str] = mapped_column(String, default="")
+    digest: Mapped[str] = mapped_column(String, default="")
+    status: Mapped[str] = mapped_column(String, default="incubating")
+    live_from: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    note: Mapped[str] = mapped_column(Text, default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=_now_utc)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=_now_utc)
+
+
+class PaperWithdrawal(Base):
+    """
+    Profit taken out of the paper wallet (owner plan, 7 Oct 2026: start Rs5,000, withdraw Rs2,500 each time
+    equity reaches Rs10,000). Kept as rows so "how much did it pay out" is answerable after the fact.
+    """
+
+    __tablename__ = "paper_withdrawals"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    cycle_id: Mapped[int] = mapped_column(Integer, index=True)
+    amount: Mapped[float] = mapped_column(Float)
+    equity_before: Mapped[float] = mapped_column(Float)
+    wallet_after: Mapped[float] = mapped_column(Float)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=_now_utc)

@@ -29,6 +29,7 @@ class TestPriceOwnership(unittest.TestCase):
             with patch("analysis.crypto_state_store.settings") as s:
                 s.binance_only_mode = True
                 s.binance_ws_enabled = True
+                s.delta_only_mode = False
                 await store.replace_candles("btcusdt", _bars(50000.0))
             state = await store.get("btcusdt")
             self.assertEqual(state.current_price, 50000.0 + 24)
@@ -45,6 +46,7 @@ class TestPriceOwnership(unittest.TestCase):
             with patch("analysis.crypto_state_store.settings") as s:
                 s.binance_only_mode = True
                 s.binance_ws_enabled = True
+                s.delta_only_mode = False
                 now = datetime.now(UTC)
                 await store.update_kline(symbol="bchusdt", open_=336.70, high=336.80,
                                          low=336.60, close=336.74, volume=1.0,
@@ -63,6 +65,7 @@ class TestPriceOwnership(unittest.TestCase):
             with patch("analysis.crypto_state_store.settings") as s:
                 s.binance_only_mode = True
                 s.binance_ws_enabled = False
+                s.delta_only_mode = False
                 await store.replace_candles("ethusdt", _bars(2600.0))
                 await store.replace_candles("ethusdt", _bars(2650.0))
             state = await store.get("ethusdt")
@@ -77,6 +80,7 @@ class TestPriceOwnership(unittest.TestCase):
             with patch("analysis.crypto_state_store.settings") as s:
                 s.binance_only_mode = False
                 s.binance_ws_enabled = False
+                s.delta_only_mode = False
                 await store.update_from_rest(
                     symbol="solusdt", price=121.16, high_24h=125.0, low_24h=118.0,
                     volume_24h=1000.0, change_24h_pct=1.0,
