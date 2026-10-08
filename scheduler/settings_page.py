@@ -518,11 +518,14 @@ const PAPER_FIELDS=[['enabled','Paper trading on','bool'],['starting_wallet','St
 function renderGroups(){
   document.getElementById('sources').innerHTML=(LAST_SOURCES_ON||[]).map(s=>'<span>'+esc(s)+'</span>').join('');
   const groups={}; FIELDS.forEach(f=>(groups[f.group_label]=groups[f.group_label]||[]).push(f));
-  const icons={'Market data':'📡','Signals':'📈','Exits (profit lock)':'🔒','Protections':'🛡️','AI':'🤖','v2 strategy':'🧭','Storage':'🗄️','API keys':'🔑'};
-  const secId={'Market data':'sec-data','Signals':'sec-signals','Exits (profit lock)':'sec-exits','Protections':'sec-protect','AI':'sec-ai','v2 strategy':'sec-v2','Storage':'sec-storage','API keys':'sec-keys'};
+  const icons={'Market data':'📡','Signals':'📈','Exits (profit lock)':'🔒','Protections':'🛡️','AI':'🤖','v2 strategy':'🧭','Delta India (INR futures)':'🇮🇳','Storage':'🗄️','API keys':'🔑'};
+  const secId={'Market data':'sec-data','Signals':'sec-signals','Exits (profit lock)':'sec-exits','Protections':'sec-protect','AI':'sec-ai','v2 strategy':'sec-v2','Delta India (INR futures)':'sec-delta','Storage':'sec-storage','API keys':'sec-keys'};
   const groupNote={'API keys':'Paste a new key and save — leave a box blank to keep '
     +'whatever key is already set. Once saved a key is never shown again, here or in any '
-    +'API response, only whether one is set.'};
+    +'API response, only whether one is set.',
+    'Delta India (INR futures)':'Mirrors paper swing signals onto Delta India. Start in '
+    +'<b>shadow</b> (logs only, Read key OK). Real orders need mode=<b>live</b> AND '
+    +'“Allow live Delta orders” ON AND a Trading key. Keys are pasted on /keys.'};
   document.getElementById('groups').innerHTML=Object.entries(groups).map(([g,fs],i)=>
     '<details class="raise" id="'+(secId[g]||'sec-'+i)+'" style="margin-bottom:18px"'+(i===0?' open':'')+'><summary>'+(icons[g]||'')
     +' '+esc(g)+'</summary><div class="rows">'

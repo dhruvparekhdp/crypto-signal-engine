@@ -1262,6 +1262,40 @@ class AppRunner:
                     f"Entry <b>${price:,.4f}</b> · Stop <b>${stop:,.4f}</b> · Target <b>${target:,.4f}</b>\n"
                     f"Risk {risk * 100:.2f}% of wallet · {leverage:.1f}x · closes at stop, target or 7 days",
                     parse_mode=ParseMode.HTML)
+            # Delta India mirror (shadow by default — no real order unless both live gates are on)
+            try:
+                await self._mirror_delta_india(pos.symbol, pos.side.value, price, stop, target,
+                                              sig.signal_type, usdt_inr=pcfg.usdt_inr)
+            except Exception as e:  # noqa: BLE001
+                log.warning("delta_india_mirror_failed", symbol=pos.symbol, error=str(e)[:160])
+
+    async def _mirror_delta_india(self, symbol: str, side_word: str, entry: float, stop: float,
+                                  target: float, signal_type: str, usdt_inr: float = 83.0) -> None:
+        """Copy a paper swing open to Delta India (shadow log or live order — see settings)."""
+        mode = (settings.delta_india_mode or "off").lower()
+        if mode == "off":
+            return
+        key = settings.delta_india_api_key.get_secret_value() if settings.delta_india_api_key else ""
+        secret = settings.delta_india_api_secret.get_secret_value() if settings.delta_india_api_secret else ""
+        if not key or not secret:
+            log.info("delta_india_skipped", reason="no_api_key", mode=mode, symbol=symbol)
+            return
+        import httpx
+        from execution.delta_book import DeltaBook
+        from execution.delta_india import DeltaIndia
+        async with httpx.AsyncClient(timeout=15) as http:
+            client = DeltaIndia(key, secret, base_url=settings.delta_india_base_url or
+                                "https://api.india.delta.exchange", client=http)
+            book = DeltaBook(
+                client, mode=mode, live_orders=bool(settings.delta_india_live_orders),
+                risk_pct=float(settings.delta_india_risk_pct),
+                max_open=int(settings.delta_india_max_open),
+                usd_inr=float(settings.delta_india_usd_inr or usdt_inr or 83.0),
+            )
+            plan = await book.on_paper_open(symbol, side_word, entry, stop, target, signal_type)
+        log.info("delta_india_mirror", symbol=symbol, mode=mode, ok=plan.ok, reason=plan.reason,
+                 delta=plan.delta_symbol, size=plan.size, risk_inr=round(plan.risk_inr, 2),
+                 live_orders=bool(settings.delta_india_live_orders))
 
     async def _log_signal(self, sig, suppressed_by: str = "", **extra) -> int:
         """

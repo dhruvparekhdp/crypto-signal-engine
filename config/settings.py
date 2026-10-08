@@ -240,6 +240,17 @@ class Settings(BaseSettings):
     live_max_leverage: int = 10
     live_daily_loss_pct: float = 0.06         # no new entries after losing this share of the capped balance today
     live_respect_regime_filter: bool = True   # real money skips wild-market / strong-trend signals even in shadow
+    # Delta Exchange India (INR-settled perpetuals). Prefer this over Binance for tax (INR futures).
+    # Modes: "off" | "shadow" (log intents from paper signals, no orders — works with Read key) | "live".
+    # Live also requires delta_india_live_orders=True AND a Trading-permission key. Default is off.
+    delta_india_mode: str = "off"
+    delta_india_api_key: SecretStr | None = None
+    delta_india_api_secret: SecretStr | None = None
+    delta_india_base_url: str = "https://api.india.delta.exchange"
+    delta_india_live_orders: bool = False     # second gate: even in mode=live, no orders until this is True
+    delta_india_risk_pct: float = 0.01        # risk per mirrored trade of INR wallet
+    delta_india_max_open: int = 3
+    delta_india_usd_inr: float = 83.0         # Delta quotes USD notionals; INR wallet conversion for sizing
     paper_open_families: str = "swing"
     # The 60-minute "flat or losing -> close" rule cut trades at small losses; off unless asked for.
     smart_60m_enabled: bool = False

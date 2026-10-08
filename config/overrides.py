@@ -38,6 +38,7 @@ GROUPS = {
     "protect": "Protections",
     "ai": "AI",
     "v2": "v2 strategy",
+    "delta": "Delta India (INR futures)",
     "storage": "Storage",
     "keys": "API keys",
 }
@@ -266,6 +267,32 @@ FIELDS: tuple[Field, ...] = (
           kind="secret"),
     Field("binance_testnet_api_secret", "keys", "Binance testnet secret", "Pairs with the testnet key.",
           kind="secret"),
+    Field("delta_india_api_key", "keys", "Delta India API key",
+          "INR-settled futures on delta.exchange. Create under API Keys; whitelist server IP. "
+          "Start with Read only; enable Trading only when ready for live orders.",
+          kind="secret"),
+    Field("delta_india_api_secret", "keys", "Delta India API secret",
+          "Shown once at creation. Pairs with the Delta India key above.", kind="secret"),
+    # Delta India behaviour (editable on /settings)
+    Field("delta_india_mode", "delta", "Delta India mode",
+          "off = ignore. shadow = when a paper swing opens, log the Delta order we WOULD place "
+          "(no real order; works with a Read key). live = place real orders — also needs "
+          "'Allow live orders' below AND a Trading key.",
+          kind="choice", choices=("off", "shadow", "live")),
+    Field("delta_india_live_orders", "delta", "Allow live Delta orders (second gate)",
+          "Even when mode is live, orders are blocked until this is ON. Keep OFF until you "
+          "explicitly want real INR futures fills.", kind="bool"),
+    Field("delta_india_risk_pct", "delta", "Delta risk per trade (of INR wallet)",
+          "Fraction of available INR balance risked to the stop on each mirrored trade.",
+          kind="float", lo=0.002, hi=0.03),
+    Field("delta_india_max_open", "delta", "Delta max open positions",
+          "Cap on mirrored Delta positions. 0 = no limit.", kind="int", lo=0, hi=20),
+    Field("delta_india_usd_inr", "delta", "USD→INR rate for Delta sizing",
+          "Delta quotes notionals in USD; wallet is INR. Used only for sizing.",
+          kind="float", lo=60.0, hi=120.0),
+    Field("delta_india_base_url", "delta", "Delta India API base URL",
+          "Production: https://api.india.delta.exchange — not api.delta.exchange (Global).",
+          kind="str"),
 )
 BY_KEY = {f.key: f for f in FIELDS}
 

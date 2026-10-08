@@ -77,7 +77,8 @@ def status_rows(settings, stored: dict) -> list[dict]:
         rows.append({"key": f.key, "label": f.label, "help": f.help, "kind": f.kind, "where": where,
                      "is_set": bool(live), "hint": hint, "value": live if f.kind != "secret" else None,
                      "env_differs": bool(env) and bool(live) and env != live, "testable": f.key in TESTERS or
-                     f.key in ("hf_base_url", "ollama_base_url")})
+                     f.key in ("hf_base_url", "ollama_base_url",
+                               "delta_india_api_key", "delta_india_api_secret")})
     return rows
 
 
@@ -87,6 +88,20 @@ async def _test(settings, key: str) -> dict:
     if not v:
         return {"ok": False, "detail": "not set"}
     try:
+        # Delta India: key+secret HMAC against /v2/wallet/balances (read-only)
+        if key in ("delta_india_api_key", "delta_india_api_secret"):
+            api_key = _value(settings, "delta_india_api_key")
+            api_secret = _value(settings, "delta_india_api_secret")
+            if not api_key or not api_secret:
+                return {"ok": False, "detail": "both Delta India key AND secret must be set"}
+            from execution.delta_india import DeltaIndia
+            base = getattr(settings, "delta_india_base_url", None) or "https://api.india.delta.exchange"
+            async with httpx.AsyncClient(timeout=15) as c:
+                client = DeltaIndia(api_key, api_secret, base_url=base, client=c)
+                got = await client.ping()
+            bals = got.get("balances") or []
+            n = len(bals) if isinstance(bals, list) else 1
+            return {"ok": True, "detail": f"Delta India auth OK · {n} wallet row(s) · {base}"}
         async with httpx.AsyncClient(timeout=15) as c:
             if key == "hf_base_url":
                 tok = _value(settings, "hf_api_token")
