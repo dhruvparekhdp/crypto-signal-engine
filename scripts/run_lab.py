@@ -34,6 +34,12 @@ EXITS = {
                             trail_atr=3.0, trail_after_r=1.5, max_hold_min=10080),
     "b5_nnfx": ExitModel(stop_atr=1.5, rr=6.0, partial_r=0.667, partial_frac=0.5, be_trigger_r=0.667,
                          trail_atr=1.5, trail_after_r=0.667, max_hold_min=10080),
+    # 12 Oct 2026, owner: lock profit on swing trades that ran far then came back. Target stays 3R.
+    "lock_be15": ExitModel(stop_atr=3.0, rr=3.0, be_trigger_r=1.5, max_hold_min=10080),
+    "lock_be2": ExitModel(stop_atr=3.0, rr=3.0, be_trigger_r=2.0, max_hold_min=10080),
+    "lock_tr2_1r": ExitModel(stop_atr=3.0, rr=3.0, trail_atr=3.0, trail_after_r=2.0, max_hold_min=10080),
+    "lock_tr2_half": ExitModel(stop_atr=3.0, rr=3.0, trail_atr=1.5, trail_after_r=2.0, max_hold_min=10080),
+    "lock_tr15": ExitModel(stop_atr=3.0, rr=3.0, trail_atr=2.0, trail_after_r=1.5, max_hold_min=10080),
     "daily_trend": ExitModel(stop_atr=3.0, rr=3.0, max_hold_min=43200),     # Q-7: daily bars need a 30-day limit
     "swing_trail": ExitModel(stop_atr=3.0, rr=10.0, be_trigger_r=1.0, trail_atr=3.0, trail_after_r=1.0,
                              max_hold_min=10080),

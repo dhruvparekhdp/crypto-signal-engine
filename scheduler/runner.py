@@ -31,6 +31,7 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from telegram.constants import ParseMode
 
 from analysis import binance_filters as bfilters
+from analysis import swing_book as sb_mod
 from analysis.crypto_engine import CryptoEngine
 from analysis.crypto_signal import CryptoSignal, make_mirror_signal
 from analysis.crypto_state_store import CommodityStateStore, CryptoStateStore
@@ -590,6 +591,17 @@ class AppRunner:
                                  r=round(pos.r_multiple(current_price), 2),
                                  new_target=pos.target_price, new_stop=pos.stop_price)
 
+                    if swing and settings.swing_lock_mode != "off":
+                        side_i = 1 if getattr(pos.side, "value", pos.side) == "long" else -1
+                        new_stop, best = sb_mod.swing_lock(
+                            side_i, pos.entry_price, pos.initial_stop_price or pos.stop_price, pos.stop_price,
+                            pos.peak_price or 0.0, current_price, settings.swing_lock_mode,
+                            settings.swing_lock_after_r, settings.swing_lock_trail_atr)
+                        pos.peak_price = best
+                        if new_stop != pos.stop_price:
+                            self._tick_notes.append(f"profit lock ({settings.swing_lock_mode} after "
+                                                    f"{settings.swing_lock_after_r:g}R): stop {pos.stop_price:.6g} -> {new_stop:.6g}")
+                            pos.stop_price = new_stop
                     trade = resolve_at_price(pos, current_price, now, cfg, wallet,
                                              lock=None if swing else self._profit_lock())
                     if trade is None:

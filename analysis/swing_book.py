@@ -370,3 +370,27 @@ def priority(signal_type: str, timeframe: str, symbol: str) -> float:
     strat = signal_type.replace("swing_", "")
     coin = symbol.upper().replace("USDT", "")
     return STRATEGY_R.get((strat, timeframe), 0.2) + COIN_R.get(coin, 0.2)
+
+
+def swing_lock(side: int, entry: float, initial_stop: float, stop: float, peak: float, price: float,
+               mode: str, after_r: float, trail_atr: float) -> tuple[float, float]:
+    """Profit lock for an open swing trade (owner, 12 Oct 2026). Returns (new stop, new best price).
+
+    mode "be": once the best price is `after_r` R in profit, the stop moves to the entry.
+    mode "trail": once `after_r` R in profit, the stop trails `trail_atr` ATRs behind the best price
+    (1 R = STOP_ATR ATRs, the initial stop distance). The stop never moves backwards. "off" changes nothing.
+    Mirrors the lab's ExitModel be_trigger_r / trail_atr + trail_after_r, so live and backtest agree."""
+    risk = abs(entry - initial_stop)
+    best = price if peak <= 0 else (max(peak, price) if side > 0 else min(peak, price))
+    if mode == "off" or risk <= 0:
+        return stop, best
+    gained_r = side * (best - entry) / risk
+    if gained_r < after_r:
+        return stop, best
+    if mode == "be":
+        cand = entry
+    else:
+        atr = risk / STOP_ATR
+        cand = best - side * trail_atr * atr
+    new = max(stop, cand) if side > 0 else min(stop, cand)
+    return new, best

@@ -200,6 +200,10 @@ class Settings(BaseSettings):
     # Roadmap F-3: incubating -> trusted after this many forward trades with forward mean R > 0 at t >= line
     swing_promote_min_trades: int = 30
     swing_promote_t: float = 1.645
+    # Profit lock on open swing trades (owner, 12 Oct 2026): off | be | trail. Chosen by scripts/run_lab lock_* exits.
+    swing_lock_mode: str = "off"
+    swing_lock_after_r: float = 2.0
+    swing_lock_trail_atr: float = 3.0
     swing_hold_minutes: int = 10080
     swing_signal_max_age_minutes: int = 60
     # Regime check (analysis/regime_gate.py): skip swing signals when Bitcoin's 30-day volatility is in the top
@@ -215,7 +219,9 @@ class Settings(BaseSettings):
     swing_streak_pause_after: int = 3
     swing_streak_pause_minutes: int = 120
     swing_news_guard: bool = True
-    swing_max_side_risk_pct: float = 0.09       # 0 = off
+    # 12 Oct 2026: 9% -> 12%. Backtest (live wallet setup): 12-month median x2.08 -> x2.25, 24-month x3.41 -> x3.85,
+    # worst fall 31% -> 32%; 15-20% added nothing. At 9%, three 3% shorts blocked every new signal for 4 days.
+    swing_max_side_risk_pct: float = 0.12       # 0 = off
     swing_regime_fail_closed: bool = True       # regime data unavailable -> skip the trade (plan L8)       # a mistake in swing_strategies pauses swing trading (and alerts)
     swing_regime_filter: str = "on"
     swing_regime_vol_rank_max: float = 0.67
