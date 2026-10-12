@@ -59,3 +59,28 @@ class SwingBarsTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class FeedClockTests(unittest.IsolatedAsyncioTestCase):
+    async def test_crypto_store_takes_delta_mark_and_moves_feed_clock(self):
+        from analysis.crypto_state import CryptoState
+        from analysis.crypto_state_store import CryptoStateStore
+        store = CryptoStateStore()
+        st = CryptoState(symbol="xrpusdt", base_asset="XRP")
+        st.current_price = 1.42
+        store._states["xrpusdt"] = st
+        ts = datetime.now(UTC)
+        await store.update_price("XRPUSDT", 1.416, ts)
+        self.assertEqual(st.current_price, 1.416)
+        self.assertEqual(st.timestamp, ts)
+
+    def test_stale_mark_cache_is_dropped(self):
+        import time
+
+        from collectors.delta_market import DeltaMarket
+        dm = DeltaMarket()
+        dm._price_cache = {"XRPUSDT": 1.4}
+        dm._price_cache_at = time.time()
+        self.assertEqual(dm._fresh_cache(), {"XRPUSDT": 1.4})
+        dm._price_cache_at = time.time() - dm.MAX_PRICE_AGE_S - 1
+        self.assertEqual(dm._fresh_cache(), {})

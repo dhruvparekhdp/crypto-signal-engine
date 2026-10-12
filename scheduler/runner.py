@@ -203,6 +203,8 @@ def _family_may_trade(sig) -> bool:
     return ("swing" if str(getattr(sig, "signal_type", "")).startswith("swing_") else "intraday") in allowed
 
 class AppRunner:
+    PERP_PRICE_MAX_AGE_S = 300   # older perp prices are dropped: swing exits fall back to the spot feed
+
     def __init__(self) -> None:
         self.notifier = TelegramNotifier()
         self.scheduler = AsyncIOScheduler()
@@ -991,7 +993,7 @@ class AppRunner:
                     cache.update(t=_t.time(), v=v)
             except Exception as e:  # noqa: BLE001
                 log.warning("delta_perp_prices_failed", error=str(e)[:120])
-            return cache["v"]
+            return cache["v"] if _t.time() - cache["t"] < self.PERP_PRICE_MAX_AGE_S else {}
         try:
             import httpx
             async with httpx.AsyncClient(timeout=10) as c:
@@ -1000,7 +1002,7 @@ class AppRunner:
                 cache.update(t=_t.time(), v={x["symbol"]: float(x["price"]) for x in r.json() if float(x["price"]) > 0})
         except Exception as e:  # noqa: BLE001
             log.warning("perp_prices_failed", error=str(e)[:120])
-        return cache["v"]
+        return cache["v"] if _t.time() - cache["t"] < self.PERP_PRICE_MAX_AGE_S else {}
 
     async def _daily_bars(self, client, symbol: str, now_ms: int):
         """Closed daily bars for the regime check, fetched once per UTC day per coin."""

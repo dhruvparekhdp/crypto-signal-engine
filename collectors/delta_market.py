@@ -66,6 +66,7 @@ class DeltaMarket:
     """Polls Delta India for 1m candles (watchlist) and mark prices."""
 
     FETCH_CONCURRENCY = 5
+    MAX_PRICE_AGE_S = 300
 
     def __init__(self, store=None, base_url: str = INDIA_URL, timeout: float = 20.0) -> None:
         self.store = store
@@ -119,7 +120,7 @@ class DeltaMarket:
             rows = r.json().get("result") or []
         except Exception as e:  # noqa: BLE001
             self.last_error = f"tickers: {type(e).__name__}: {e}"
-            return self._price_cache
+            return self._fresh_cache()
         out: dict[str, float] = {}
         for row in rows:
             sym = (row.get("symbol") or "").upper()
@@ -139,6 +140,15 @@ class DeltaMarket:
         if out:
             self._price_cache = out
             self._price_cache_at = time.time()
+        return self._fresh_cache()
+
+    def _fresh_cache(self) -> dict[str, float]:
+        """The last good prices, but never older than MAX_PRICE_AGE_S: a stale mark would judge
+        stops and targets on a price the market left long ago."""
+        if self._price_cache and time.time() - self._price_cache_at > self.MAX_PRICE_AGE_S:
+            log.warning("delta_mark_prices_stale", age_s=round(time.time() - self._price_cache_at),
+                        error=self.last_error[:120])
+            return {}
         return self._price_cache
 
     async def fetch(self) -> int:
@@ -177,7 +187,7 @@ class DeltaMarket:
                 if px and px > 0:
                     await self.store.update_price(sym, px, now)
         except Exception as e:  # noqa: BLE001
-            log.debug("delta_mark_price_push_failed", error=str(e)[:120])
+            log.warning("delta_mark_price_push_failed", error=str(e)[:120])
         if self.refreshed:
             self.last_success = datetime.now(UTC)
         log.info("delta_klines_done", refreshed=len(self.refreshed),

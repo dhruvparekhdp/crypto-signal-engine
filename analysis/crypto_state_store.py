@@ -386,6 +386,17 @@ class CryptoStateStore:
                 state.current_price = state.candles_1m[-1].close
             recalculate_indicators(state)
 
+    async def update_price(self, symbol: str, price: float, timestamp: datetime) -> None:
+        """A venue mark price (Delta India tickers). Moves current_price and the feed clock only;
+        candles stay as the venue delivered them."""
+        sym = symbol.lower()
+        async with self._lock:
+            state = self._states.get(sym)
+            if not state or not price_is_plausible(sym, state.current_price, price):
+                return
+            state.current_price = price
+            state.timestamp = timestamp
+
     async def update_24h_stats(
         self,
         symbol: str,
