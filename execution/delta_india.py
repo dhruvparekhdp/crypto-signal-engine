@@ -227,3 +227,42 @@ class DeltaIndia:
 
     async def cancel_all(self, product_id: int) -> dict:
         return await self._request("DELETE", "/v2/orders/all", params={"product_id": product_id})
+
+
+    # --- order management for the ladder (13 Oct 2026) ------------------------------------------------------------
+
+    async def open_orders(self, product_id: int) -> list[dict]:
+        got = await self._request("GET", "/v2/orders",
+                                  params={"product_ids": str(int(product_id)), "states": "open,pending"})
+        return got if isinstance(got, list) else []
+
+    async def edit_stop(self, order_id: int, product_id: int, size: int, stop_price: float) -> dict:
+        """Move an existing stop order (PUT /v2/orders)."""
+        body = {"id": int(order_id), "product_id": int(product_id), "size": int(size),
+                "stop_price": _px(stop_price)}
+        return await self._request("PUT", "/v2/orders", body=body)
+
+    async def cancel_order(self, order_id: int, product_id: int) -> dict:
+        return await self._request("DELETE", "/v2/orders", body={"id": int(order_id), "product_id": int(product_id)})
+
+    async def position_size(self, product_id: int) -> int:
+        """Signed open contracts on a product (+ long, - short, 0 flat)."""
+        got = await self._request("GET", "/v2/positions", params={"product_id": int(product_id)})
+        row = got if isinstance(got, dict) else (got[0] if got else {})
+        try:
+            return int(float(row.get("size") or 0))
+        except (TypeError, ValueError):
+            return 0
+
+
+def _px(x: float) -> str:
+    return f"{x:.8f}".rstrip("0").rstrip(".")
+
+
+def round_to_tick(price: float, tick: float, side: int) -> float:
+    """Round a stop to the exchange tick, never looser: up for a long's stop (higher = tighter), down for a short's."""
+    import math
+    if tick <= 0:
+        return price
+    n = price / tick
+    return round((math.ceil(n - 1e-9) if side > 0 else math.floor(n + 1e-9)) * tick, 10)

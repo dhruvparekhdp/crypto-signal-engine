@@ -21,7 +21,7 @@ import time
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
-from execution.delta_india import DeltaError, DeltaIndia, Product, binance_to_delta_symbol
+from execution.delta_india import DeltaError, DeltaIndia, Product, binance_to_delta_symbol, round_to_tick
 
 SHADOW_PATH = Path("data/delta_shadow.jsonl")
 STATE_PATH = Path("data/delta_state.json")
@@ -70,7 +70,8 @@ class DeltaBook:
     def __init__(self, client: DeltaIndia, *, mode: str = "shadow",
                  live_orders: bool = False, risk_pct: float = 0.01,
                  max_open: int = 3, usd_inr: float = 83.0,
-                 shadow_path: Path = SHADOW_PATH, state_path: Path = STATE_PATH):
+                 shadow_path: Path = SHADOW_PATH, state_path: Path = STATE_PATH,
+                 kill_switch: bool = False, backstop_r: float = 0.5):
         self.client = client
         self.mode = mode
         self.live_orders = live_orders
@@ -79,6 +80,12 @@ class DeltaBook:
         self.usd_inr = usd_inr
         self.shadow_path = shadow_path
         self.state_path = state_path
+        self.kill_switch = kill_switch
+        self.backstop_r = backstop_r
+
+    @property
+    def live(self) -> bool:
+        return self.mode == "live" and self.live_orders
 
     def _append_shadow(self, row: dict) -> None:
         self.shadow_path.parent.mkdir(parents=True, exist_ok=True)
@@ -132,6 +139,10 @@ class DeltaBook:
         """Called after a paper swing position opens."""
         if self.mode == "off":
             return MirrorPlan(False, "mode_off")
+        if self.kill_switch:
+            self._append_shadow({"t": int(time.time() * 1000), "event": "refused", "reason": "kill_switch",
+                                 "binance_symbol": binance_symbol})
+            return MirrorPlan(False, "kill_switch")
         plan = await self.plan(binance_symbol, side_word, entry, stop, target)
         row = {**asdict(plan), "t": int(time.time() * 1000), "signal_type": signal_type,
                "placed": False}
@@ -139,10 +150,20 @@ class DeltaBook:
             self._append_shadow(row)
             return plan
 
-        can_live = (self.mode == "live" and self.live_orders)
+        product = await self.client.product(plan.delta_symbol)
+        tick = product.tick_size if product else 0.0
+        record = {"side": plan.side, "size": plan.size, "entry": plan.entry, "stop": plan.stop,
+                  "init_stop": plan.stop, "exchange_stop": plan.stop, "risk": abs(plan.entry - plan.stop),
+                  "target": plan.target, "product_id": plan.product_id, "tick": tick,
+                  "binance_symbol": binance_symbol.lower(), "opened_ms": int(time.time() * 1000),
+                  "signal_type": signal_type}
+        can_live = self.live
         if not can_live:
             row["note"] = "shadow_only_no_order"
             self._append_shadow(row)
+            state = self._load_state()                       # rehearse the ladder in shadow too
+            state.setdefault("shadow", {})[plan.delta_symbol] = record
+            self._save_state(state)
             return plan
 
         # LIVE path — real orders
@@ -160,11 +181,9 @@ class DeltaBook:
                 "tp_order": _trim(tp_order),
             })
             state = self._load_state()
-            state.setdefault("positions", {})[plan.delta_symbol] = {
-                "side": plan.side, "size": plan.size, "entry": plan.entry,
-                "stop": plan.stop, "target": plan.target, "product_id": plan.product_id,
-                "opened_ms": int(time.time() * 1000), "signal_type": signal_type,
-            }
+            record.update(stop_order_id=_oid(stop_order), tp_order_id=_oid(tp_order),
+                          entry_fill=(entry_order or {}).get("average_fill_price"))
+            state.setdefault("positions", {})[plan.delta_symbol] = record
             self._save_state(state)
         except DeltaError as e:
             row["placed"] = False
@@ -182,6 +201,127 @@ class DeltaBook:
                               plan.risk_inr, plan.inr_available)
         self._append_shadow(row)
         return plan
+
+
+    # --- the profit ladder on the exchange (13 Oct 2026) -------------------------------------------------------------
+
+    def backstop_for(self, side: int, init_stop: float, risk: float, lock_stop: float) -> float:
+        """Exchange stop for an engine lock: backstop_r R behind it, never looser than the original stop."""
+        cand = lock_stop - side * self.backstop_r * risk
+        return max(init_stop, cand) if side > 0 else min(init_stop, cand)
+
+    async def on_stop_change(self, binance_symbol: str, lock_stop: float) -> dict:
+        """The engine moved this trade's stop (ladder). Tighten the exchange backstop if it should move."""
+        delta_sym = binance_to_delta_symbol(binance_symbol)
+        state = self._load_state()
+        where = "positions" if self.live else "shadow"
+        pos = (state.get(where) or {}).get(delta_sym)
+        if not pos:
+            return {"ok": False, "reason": "not_open_on_delta"}
+        side = 1 if pos["side"] == "buy" else -1
+        want = round_to_tick(self.backstop_for(side, pos["init_stop"], pos["risk"], lock_stop), pos.get("tick", 0), side)
+        cur = pos["exchange_stop"]
+        tighter = want > cur if side > 0 else want < cur
+        if not tighter or abs(want - cur) < max(pos.get("tick", 0), 1e-12) / 2:
+            return {"ok": True, "reason": "unchanged", "exchange_stop": cur}
+        row = {"t": int(time.time() * 1000), "event": "amend_stop", "delta_symbol": delta_sym, "from": cur, "to": want,
+               "engine_lock": lock_stop, "mode": self.mode, "placed": False}
+        if self.live:
+            try:
+                try:
+                    await self.client.edit_stop(pos["stop_order_id"], pos["product_id"], pos["size"], want)
+                except DeltaError:
+                    # fallback: replace the stop (cancel first so two stops never sit together)
+                    close_side = "sell" if side > 0 else "buy"
+                    await self.client.cancel_order(pos["stop_order_id"], pos["product_id"])
+                    new = await self.client.place_stop_market(pos["product_id"], close_side, pos["size"], want)
+                    pos["stop_order_id"] = _oid(new)
+                row["placed"] = True
+            except DeltaError as e:
+                row["error"] = str(e)[:200]
+                self._append_shadow(row)
+                return {"ok": False, "reason": f"amend_failed_{e}"}
+        pos["exchange_stop"] = want
+        state[where][delta_sym] = pos
+        self._save_state(state)
+        self._append_shadow(row)
+        return {"ok": True, "reason": "amended", "exchange_stop": want}
+
+    async def on_paper_close(self, binance_symbol: str, reason: str = "") -> dict:
+        """The engine closed this trade (target, confirmed lock, time, stop). Flatten on Delta, cancel leftovers."""
+        delta_sym = binance_to_delta_symbol(binance_symbol)
+        state = self._load_state()
+        where = "positions" if self.live else "shadow"
+        pos = (state.get(where) or {}).pop(delta_sym, None)
+        if not pos:
+            return {"ok": False, "reason": "not_open_on_delta"}
+        row = {"t": int(time.time() * 1000), "event": "close", "delta_symbol": delta_sym, "reason": reason,
+               "mode": self.mode, "placed": False}
+        if self.live:
+            try:
+                size = await self.client.position_size(pos["product_id"])
+                if size:
+                    await self.client.place_market(pos["product_id"], "sell" if size > 0 else "buy", abs(size),
+                                                   reduce_only=True)
+                    row["closed_contracts"] = abs(size)
+                await self.client.cancel_all(pos["product_id"])
+                row["placed"] = True
+            except DeltaError as e:
+                row["error"] = str(e)[:200]
+                state[where][delta_sym] = pos          # keep it so reconcile retries
+                self._save_state(state)
+                self._append_shadow(row)
+                return {"ok": False, "reason": f"close_failed_{e}"}
+        self._save_state(state)
+        self._append_shadow(row)
+        return {"ok": True, "reason": "closed"}
+
+    async def reconcile(self) -> list[dict]:
+        """Compare our live records with Delta's positions. A position Delta closed itself (backstop or target hit)
+        is removed and its leftover orders cancelled; a size mismatch is reported."""
+        if not self.live:
+            return []
+        state = self._load_state()
+        events = []
+        for delta_sym, pos in list((state.get("positions") or {}).items()):
+            try:
+                size = await self.client.position_size(pos["product_id"])
+            except DeltaError as e:
+                events.append({"delta_symbol": delta_sym, "event": "reconcile_error", "error": str(e)[:160]})
+                continue
+            if size == 0:
+                try:
+                    await self.client.cancel_all(pos["product_id"])
+                except DeltaError:
+                    pass
+                state["positions"].pop(delta_sym, None)
+                events.append({"delta_symbol": delta_sym, "event": "closed_on_exchange",
+                               "binance_symbol": pos.get("binance_symbol")})
+            elif abs(size) != int(pos["size"]):
+                events.append({"delta_symbol": delta_sym, "event": "size_mismatch", "ours": pos["size"],
+                               "delta": size})
+        self._save_state(state)
+        for e in events:
+            self._append_shadow({"t": int(time.time() * 1000), **e})
+        return events
+
+    async def flatten_all(self) -> list[dict]:
+        """Kill switch action: close every live Delta position and cancel its orders."""
+        out = []
+        for delta_sym, pos in list((self._load_state().get("positions") or {}).items()):
+            out.append({delta_sym: await self.on_paper_close(pos.get("binance_symbol") or delta_sym, "kill_switch")})
+        return out
+
+
+def _oid(obj) -> int | None:
+    if isinstance(obj, dict):
+        for k in ("id", "order_id"):
+            if obj.get(k) is not None:
+                try:
+                    return int(obj[k])
+                except (TypeError, ValueError):
+                    pass
+    return None
 
 
 def _trim(obj) -> dict:

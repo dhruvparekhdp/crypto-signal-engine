@@ -286,12 +286,19 @@ FIELDS: tuple[Field, ...] = (
           kind="secret"),
     Field("delta_india_api_secret", "keys", "Delta India API secret",
           "Shown once at creation. Pairs with the Delta India key above.", kind="secret"),
+    Field("delta_india_testnet_api_key", "keys", "Delta India TESTNET key",
+          "Free fake-money account at testnet (cdn-ind.testnet.deltaex.org). Used by the testnet flow check.",
+          kind="secret"),
+    Field("delta_india_testnet_api_secret", "keys", "Delta India TESTNET secret",
+          "Pairs with the testnet key above.", kind="secret"),
     # Delta India behaviour (editable on /settings)
     Field("delta_india_mode", "delta", "Delta India mode",
           "off = ignore. shadow = when a paper swing opens, log the Delta order we WOULD place "
           "(no real order; works with a Read key). live = place real orders — also needs "
           "'Allow live orders' below AND a Trading key.",
           kind="choice", choices=("off", "shadow", "live")),
+    Field("delta_india_kill_switch", "delta", "Delta KILL SWITCH",
+          "ON = no new Delta orders at all. Open positions keep their exchange stops.", kind="bool"),
     Field("delta_india_live_orders", "delta", "Allow live Delta orders (second gate)",
           "Even when mode is live, orders are blocked until this is ON. Keep OFF until you "
           "explicitly want real INR futures fills.", kind="bool"),

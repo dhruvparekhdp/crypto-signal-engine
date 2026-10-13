@@ -265,6 +265,15 @@ class Settings(BaseSettings):
     delta_india_risk_pct: float = 0.01        # risk per mirrored trade of INR wallet
     delta_india_max_open: int = 3
     delta_india_usd_inr: float = 83.0         # Delta quotes USD notionals; INR wallet conversion for sizing
+    # Testnet (cdn-ind.testnet.deltaex.org, no real money): scripts/delta_testnet_flow.py
+    delta_india_testnet_api_key: SecretStr | None = None
+    delta_india_testnet_api_secret: SecretStr | None = None
+    delta_india_testnet_url: str = "https://cdn-ind.testnet.deltaex.org"
+    # Kill switch: ON = no new Delta orders (open ones are still protected and can be closed by the engine)
+    delta_india_kill_switch: bool = False
+    # Server-side backstop on Delta: the exchange stop trails the engine's profit lock by this many R, so an engine
+    # outage cannot give back everything (the engine's 1h-close rule stays the primary exit)
+    delta_india_backstop_r: float = 0.5
     paper_open_families: str = "swing"
     # The 60-minute "flat or losing -> close" rule cut trades at small losses; off unless asked for.
     smart_60m_enabled: bool = False

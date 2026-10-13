@@ -213,3 +213,19 @@ async def test_closed_beyond_reads_the_last_closed_candle_only():
     assert await r._closed_beyond("solusdt", +1, 100.0, 60) is False     # long stop 100: closed at 101, above
     r._close_cache = {}
     assert await r._closed_beyond("solusdt", -1, 100.0, 60) is True      # short stop 100: closed at 101, beyond
+
+
+@pytest.mark.asyncio
+async def test_runner_tells_delta_about_ladder_moves_and_closes(monkeypatch):
+    from scheduler.runner import AppRunner
+    calls = []
+
+    async def fake_call(self, method, *args, **kw):
+        calls.append((method, args[0] if args else None))
+        return None
+    monkeypatch.setattr(AppRunner, "_delta_call", fake_call)
+    runner, st, sm = await _tick_setup(monkeypatch, closed_beyond=True)    # opens, then ladder lock at +1.53R
+    assert ("on_stop_change", "btcusdt") in calls
+    st.current_price = 60600.0                                              # confirmed close -> profit lock exit
+    await runner._paper_trading_job()
+    assert ("on_paper_close", "btcusdt") in calls

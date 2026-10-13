@@ -559,6 +559,8 @@ class AppRunner:
                             trade = close_position(pos, mark_price, ExitReason.EXPIRY, now, fees_for(pos.symbol), wallet)
                         wallet = trade.wallet_after
                         await repo.close_position_atomic(cycle.id, row.id, trade, wallet)
+                        if getattr(pos, "trade_mode", "") == "swing":
+                            await self._delta_call("on_paper_close", pos.symbol, trade.reason.value)
                         events = [_event(
                             pos, cycle.id, now, "closed", "exit", new=f"{trade.exit_price:.6g}",
                             note=(f"{trade.reason.value} · net ₹{trade.net_pnl:+.2f} "
@@ -608,6 +610,7 @@ class AppRunner:
                             self._tick_notes.append(f"profit lock ({settings.swing_lock_mode}): "
                                                     f"stop {pos.stop_price:.6g} -> {new_stop:.6g}")
                             pos.stop_price = new_stop
+                            await self._delta_call("on_stop_change", pos.symbol, new_stop)
                             in_profit = (new_stop > pos.entry_price) if side_i > 0 else (new_stop < pos.entry_price)
                             if in_profit or abs(new_stop - pos.entry_price) / pos.entry_price < 0.005:
                                 pos.stop_moved_by_profit_lock = True       # exits are labelled profit_lock, not stop
@@ -688,6 +691,8 @@ class AppRunner:
 
                     wallet = trade.wallet_after
                     await repo.close_position_atomic(cycle.id, row.id, trade, wallet)
+                    if getattr(pos, "trade_mode", "") == "swing":
+                        await self._delta_call("on_paper_close", pos.symbol, trade.reason.value)
                     events.append(_event(
                         pos, cycle.id, now, "closed", "exit", new=f"{trade.exit_price:.6g}",
                         note=(f"{trade.reason.value} · net ₹{trade.net_pnl:+.2f} "
@@ -1389,6 +1394,45 @@ class AppRunner:
             except Exception as e:  # noqa: BLE001
                 log.warning("delta_india_mirror_failed", symbol=pos.symbol, error=str(e)[:160])
 
+    async def _delta_call(self, method: str, *args, usdt_inr: float = 83.0):
+        """Run one DeltaBook method with a fresh client (shadow or live per settings). None when Delta is off or
+        no key is saved. Never raises: a Delta problem must not break the paper tick."""
+        mode = (settings.delta_india_mode or "off").lower()
+        key = settings.delta_india_api_key.get_secret_value() if settings.delta_india_api_key else ""
+        secret = settings.delta_india_api_secret.get_secret_value() if settings.delta_india_api_secret else ""
+        if mode == "off" or not key or not secret:
+            return None
+        try:
+            import httpx
+
+            from execution.delta_book import DeltaBook
+            from execution.delta_india import USER_AGENT, DeltaIndia
+            async with httpx.AsyncClient(timeout=15, headers={"User-Agent": USER_AGENT}) as http:
+                client = DeltaIndia(key, secret, base_url=settings.delta_india_base_url or
+                                    "https://api.india.delta.exchange", client=http)
+                book = DeltaBook(client, mode=mode, live_orders=bool(settings.delta_india_live_orders),
+                                 risk_pct=float(settings.delta_india_risk_pct),
+                                 max_open=int(settings.delta_india_max_open),
+                                 usd_inr=float(settings.delta_india_usd_inr or usdt_inr or 83.0),
+                                 kill_switch=bool(settings.delta_india_kill_switch),
+                                 backstop_r=float(settings.delta_india_backstop_r))
+                return await getattr(book, method)(*args)
+        except Exception as e:  # noqa: BLE001
+            log.warning("delta_india_call_failed", method=method, error=str(e)[:160])
+            return None
+
+    async def _delta_reconcile_job(self) -> None:
+        """Every few minutes in live mode: Delta's own positions vs ours; alert on anything Delta closed itself."""
+        events = await self._delta_call("reconcile") or []
+        for e in events:
+            log.warning("delta_reconcile", **{k: v for k, v in e.items() if k != "event"}, kind=e.get("event"))
+            try:
+                await self.notifier.send_text(f"⚖️ Delta India reconcile: {e.get('event')} {e.get('delta_symbol')} "
+                                              + ", ".join(f"{k}={v}" for k, v in e.items()
+                                                          if k not in ("event", "delta_symbol")))
+            except Exception:  # noqa: BLE001
+                pass
+
     async def _mirror_delta_india(self, symbol: str, side_word: str, entry: float, stop: float,
                                   target: float, signal_type: str, usdt_inr: float = 83.0) -> None:
         """Copy a paper swing open to Delta India (shadow log or live order — see settings)."""
@@ -1400,19 +1444,10 @@ class AppRunner:
         if not key or not secret:
             log.info("delta_india_skipped", reason="no_api_key", mode=mode, symbol=symbol)
             return
-        import httpx
-        from execution.delta_book import DeltaBook
-        from execution.delta_india import DeltaIndia
-        async with httpx.AsyncClient(timeout=15) as http:
-            client = DeltaIndia(key, secret, base_url=settings.delta_india_base_url or
-                                "https://api.india.delta.exchange", client=http)
-            book = DeltaBook(
-                client, mode=mode, live_orders=bool(settings.delta_india_live_orders),
-                risk_pct=float(settings.delta_india_risk_pct),
-                max_open=int(settings.delta_india_max_open),
-                usd_inr=float(settings.delta_india_usd_inr or usdt_inr or 83.0),
-            )
-            plan = await book.on_paper_open(symbol, side_word, entry, stop, target, signal_type)
+        plan = await self._delta_call("on_paper_open", symbol, side_word, entry, stop, target, signal_type,
+                                      usdt_inr=usdt_inr)
+        if plan is None:
+            return
         log.info("delta_india_mirror", symbol=symbol, mode=mode, ok=plan.ok, reason=plan.reason,
                  delta=plan.delta_symbol, size=plan.size, risk_inr=round(plan.risk_inr, 2),
                  live_orders=bool(settings.delta_india_live_orders))
@@ -3415,6 +3450,9 @@ class AppRunner:
             max_instances=1,
             next_run_time=datetime.now(UTC) + timedelta(seconds=30),
         )
+        self.scheduler.add_job(
+            self._delta_reconcile_job, "interval", minutes=5, id="delta_reconcile", max_instances=1,
+            next_run_time=datetime.now(UTC) + timedelta(seconds=90))
         self.scheduler.add_job(
             self._weekly_forward_report_job,
             "cron",
