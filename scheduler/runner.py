@@ -607,6 +607,9 @@ class AppRunner:
                             self._tick_notes.append(f"profit lock ({settings.swing_lock_mode}): "
                                                     f"stop {pos.stop_price:.6g} -> {new_stop:.6g}")
                             pos.stop_price = new_stop
+                            in_profit = (new_stop > pos.entry_price) if side_i > 0 else (new_stop < pos.entry_price)
+                            if in_profit or abs(new_stop - pos.entry_price) / pos.entry_price < 0.005:
+                                pos.stop_moved_by_profit_lock = True       # exits are labelled profit_lock, not stop
                     trade = resolve_at_price(pos, current_price, now, cfg, wallet,
                                              lock=None if swing else self._profit_lock())
                     if trade is None:

@@ -66,7 +66,7 @@ async def test_paper_tick_locks_profit_on_a_swing_trade_that_ran_and_came_back()
         await runner._paper_trading_job()
         async with sm() as s:
             t = (await Repository(s).get_cycle_trades(cycle.id))[0]
-            assert t.net_pnl > 0
+            assert t.net_pnl > 0 and t.exit_reason == "profit_lock"
 
 
 @pytest.mark.asyncio
