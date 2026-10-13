@@ -110,3 +110,11 @@ async def test_best_price_since_open_is_rebuilt_from_candles():
     row = SimpleNamespace(symbol="solusdt", opened_at=(now - timedelta(hours=5)).replace(tzinfo=None))
     assert await runner._best_price_since(row, -1) == 92        # lowest low since open (the 30h-old bar excluded)
     assert await runner._best_price_since(row, +1) == 103
+
+
+def test_ladder_keeps_locking_however_far_the_trade_runs():
+    # long entry 100, 1R = 6: at 10R (+60%) the lock is 9R; at 100R (+600%) it is 99R
+    assert swing_lock(+1, 100, 94, 94, 0, 160, "ladder", 0, 0)[0] == pytest.approx(100 + 9 * 6)
+    assert swing_lock(+1, 100, 94, 94, 0, 700, "ladder", 0, 0)[0] == pytest.approx(100 + 99 * 6)
+    assert swing_lock(-1, 100, 106, 106, 0, 82, "ladder", 0, 0)[0] == pytest.approx(100 - 2.0 * 6)   # 3R short
+    assert swing_lock(+1, 100, 94, 94, 0, 97, "ladder", 0, 0)[0] == 94     # -0.5R (in loss): original stop stays

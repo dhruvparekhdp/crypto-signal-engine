@@ -374,6 +374,7 @@ def priority(signal_type: str, timeframe: str, symbol: str) -> float:
 
 BE_COST_FRAC = 0.00158          # round-trip fees + slippage (lab CostModel.round_trip, india_gst): break-even covers costs
 DEFAULT_LADDER = "1:0,1.5:0.5,2:1,2.5:1.5"
+LADDER_STEP_R = 0.5
 
 
 def parse_ladder(text: str) -> list[tuple[float, float]]:
@@ -403,10 +404,18 @@ def swing_lock(side: int, entry: float, initial_stop: float, stop: float, peak: 
     if mode == "ladder":
         # S1 (backtest 13 Oct): at 1R -> break-even (entry + round-trip costs), 1.5R -> lock 0.5R, 2R -> 1R, 2.5R -> 1.5R
         new = stop
-        for trig, lock_r in parse_ladder(ladder):
+        steps = parse_ladder(ladder)
+        for trig, lock_r in steps:
             if gained_r >= trig:
                 cand = entry * (1 + side * BE_COST_FRAC) if lock_r <= 0 else entry + side * lock_r * risk
                 new = max(new, cand) if side > 0 else min(new, cand)
+        if steps and gained_r >= steps[-1][0] + LADDER_STEP_R:
+            # open-ended (owner, 13 Oct): beyond the last step, every further 0.5R locks another 0.5R,
+            # so the lock keeps working however far the trade runs
+            last_trig, last_lock = steps[-1]
+            extra = int((gained_r - last_trig) / LADDER_STEP_R + 1e-9) * LADDER_STEP_R
+            cand = entry + side * (last_lock + extra) * risk
+            new = max(new, cand) if side > 0 else min(new, cand)
         return new, best
     if gained_r < after_r:
         return stop, best
