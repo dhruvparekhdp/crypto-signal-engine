@@ -1376,13 +1376,32 @@ async def _api_paper(runner, request: web.Request) -> web.Response:
     states = {st.symbol: st for st in await runner.crypto_store.get_all()}
     positions = []
     unrealised_total = 0.0
+    open_fees = open_funding = 0.0
+    perp = {}
+    if any(getattr(r, "trade_mode", "") == "swing" for r in rows) and hasattr(runner, "_perp_prices"):
+        try:
+            perp = await runner._perp_prices()
+        except Exception:  # noqa: BLE001
+            perp = {}
     for r in rows:
         st = states.get(r.symbol)
         mark = st.current_price if st and st.current_price > 0 else r.entry_price
+        if getattr(r, "trade_mode", "") == "swing" and perp.get(r.symbol.upper()):
+            mark = perp[r.symbol.upper()]          # the price the engine judges swing stops on
         sign = 1.0 if r.side == "long" else -1.0
         gross = sign * (mark - r.entry_price) * r.coin_qty * r.usdt_inr
         exit_fee = mark * r.coin_qty * r.usdt_inr * fees_for(r.symbol).effective_taker_pct
-        net = gross - exit_fee
+        # 13 Oct 2026: net used to subtract only the exit fee; the entry fee (already paid) and funding so far
+        # were missing until the trade closed, so Net, Equity and Costs all looked better than reality
+        funding = (await runner._real_funding(r, datetime.now(UTC)) if _SETTINGS.paper_real_funding
+                   and hasattr(runner, "_real_funding") else None)
+        if funding is None:
+            funding = fees_for(r.symbol).funding_cost(
+                r.coin_qty * r.entry_price * r.usdt_inr,
+                (datetime.now(UTC) - r.opened_at.replace(tzinfo=UTC)).total_seconds() / 3600)
+        net = gross - (r.entry_fee or 0.0) - exit_fee - funding
+        open_fees += (r.entry_fee or 0.0)
+        open_funding += funding
         unrealised_total += net
         positions.append({
             "symbol": r.symbol.upper(),
@@ -1398,6 +1417,9 @@ async def _api_paper(runner, request: web.Request) -> web.Response:
             "confidence": round(r.confidence * 100),
             "signal_type": r.signal_type,
             "unrealised": round(net, 2),
+            "entry_fee": round(r.entry_fee or 0.0, 2),
+            "exit_fee_est": round(exit_fee, 2),
+            "funding_so_far": round(funding, 2),          # + paid, - received (real 8-hourly rates)
             "roe_pct": round(net / r.margin * 100, 2) if r.margin else 0.0,
             "opened_at": _iso(r.opened_at),
             # When this position times out. Exposed because a position that
@@ -1426,7 +1448,8 @@ async def _api_paper(runner, request: web.Request) -> web.Response:
                         + unrealised_total, 2),
         "unrealised": round(unrealised_total, 2),
         "positions": positions,
-        "summary": summarise(trades, cycle.wallet, cfg),
+        "summary": {**summarise(trades, cycle.wallet, cfg),
+                    "open_entry_fees": round(open_fees, 2), "open_funding": round(open_funding, 2)},
         "trades": [_trade_row(t) for t in trades[:60]],
         # Current rate, for figures that are not tied to one trade.
         "usdt_inr": _SETTINGS.paper_usdt_inr,

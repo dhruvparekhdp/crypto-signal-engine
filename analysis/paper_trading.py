@@ -329,6 +329,9 @@ class Position:
     # with no lot rounding, which is what the backtest harness assumes.
     usdt_inr: float = 1.0
     lot_step: float = 0.0
+    # Real funding accrued so far (INR, + paid / - received), set by the runner from the venue's rates
+    # (analysis/funding.py). None = the flat FeeModel estimate.
+    funding_override: float | None = None
 
     # What the signal quoted, before slippage. entry_price is where we filled.
     signal_price: float = 0.0
@@ -1092,7 +1095,8 @@ def close_position(
     gross = pos.gross_pnl(exit_price)
     exit_fee = fees.exit_fee(exit_price * pos.quantity, maker=reason is ExitReason.TARGET)
     hours_held = max(0.0, (closed_at - pos.opened_at).total_seconds() / 3600.0)
-    funding = fees.funding_cost(pos.notional, hours_held)
+    funding = (pos.funding_override if getattr(pos, "funding_override", None) is not None
+               else fees.funding_cost(pos.notional, hours_held))
     total_fees = pos.entry_fee + exit_fee + funding
     net = gross - total_fees
 

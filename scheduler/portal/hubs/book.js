@@ -84,7 +84,9 @@
         ["TARGET", U.inr(c.target_wallet), prog != null ? Math.round(prog * 100) + "% of the way" : ""],
         ["HIT RATE", s.trades ? s.win_rate_pct + "%" : "—", s.trades ? s.trades + " closed" : "needs closed trades"],
         ["NET P&L", U.inr(s.net_pnl, true), "expectancy " + U.inr(s.expectancy_per_trade, true), s.net_pnl >= 0 ? "up" : "dn"],
-        ["COSTS", U.inr((s.trading_fees || 0) + (s.funding_paid || 0)), s.costs_as_pct_of_gross != null ? s.costs_as_pct_of_gross + "% of gross" : "", "dn"],
+        ["COSTS", U.inr((s.trading_fees || 0) + (s.funding_paid || 0) + (s.open_entry_fees || 0) + (s.open_funding || 0)),
+          "closed " + U.inr((s.trading_fees || 0) + (s.funding_paid || 0)) + " · open: fees " + U.inr(s.open_entry_fees || 0) +
+          ", funding " + U.inr(s.open_funding || 0, true), "dn"],
         ["CYCLE", "#" + c.id, "started " + U.ago(c.started_at)]
       ]);
     }

@@ -553,6 +553,8 @@ class Settings(BaseSettings):
     paper_target_wallet: float = 10_000_000.0      # effectively never: profit is withdrawn instead (sweep below)
     # Owner plan (7 Oct 2026): each time paper equity reaches paper_sweep_at, withdraw paper_sweep_amount (INR) from
     # free cash and keep trading. 0 = off. Withdrawals are rows in paper_withdrawals.
+    # Charge real funding from Delta India's 8-hourly rates (analysis/funding.py) instead of the flat estimate
+    paper_real_funding: bool = True
     paper_sweep_at: float = 10000.0
     paper_sweep_amount: float = 2500.0
     paper_leverage: float = 10.0

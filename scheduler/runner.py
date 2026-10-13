@@ -517,6 +517,8 @@ class AppRunner:
                 live_ids: dict[int, int] = {}
                 for row in rows:
                     pos = self._restore_position(row)
+                    if settings.paper_real_funding:
+                        pos.funding_override = await self._real_funding(row, now)
                     st = states.get(row.symbol)
                     current_price = st.current_price if (st and st.current_price > 0) else None
                     if getattr(row, "trade_mode", "") == "swing" and settings.swing_perp_prices:
@@ -910,6 +912,23 @@ class AppRunner:
                                                                withdrawn, week, skips))
         except Exception:
             log.exception("weekly_forward_report_failed")
+
+    async def _real_funding(self, row, now) -> float | None:
+        """Funding paid (+) or received (-) so far on an open position, from Delta India's real rates.
+        None (flat estimate) if the rates cannot be fetched."""
+        from analysis import funding as fmod
+        try:
+            opened = fmod.epoch(row.opened_at)
+            now_s = fmod.epoch(now)
+            if not fmod.settlements(opened, now_s):
+                return 0.0
+            rates = await fmod.fetch_rates(row.symbol, int(opened), int(now_s))
+            side = 1 if row.side == "long" else -1
+            notional = row.coin_qty * row.entry_price * row.usdt_inr
+            return fmod.accrued(side, notional, opened, now_s, rates)
+        except Exception as e:  # noqa: BLE001 - never block the tick on a funding lookup
+            log.warning("real_funding_unavailable", symbol=row.symbol, error=str(e)[:120])
+            return None
 
     async def _maybe_sweep(self, repo, cycle, cstate, wallet: float, pcfg) -> float:
         """Withdraw paper_sweep_amount when equity >= paper_sweep_at and free cash covers it. Returns the wallet."""
