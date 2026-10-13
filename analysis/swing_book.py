@@ -388,7 +388,8 @@ def parse_ladder(text: str) -> list[tuple[float, float]]:
 
 
 def swing_lock(side: int, entry: float, initial_stop: float, stop: float, peak: float, price: float,
-               mode: str, after_r: float, trail_atr: float, ladder: str = DEFAULT_LADDER) -> tuple[float, float]:
+               mode: str, after_r: float, trail_atr: float, ladder: str = DEFAULT_LADDER,
+               buffer_r: float = 0.0) -> tuple[float, float]:
     """Profit lock for an open swing trade (owner, 12 Oct 2026). Returns (new stop, new best price).
 
     mode "be": once the best price is `after_r` R in profit, the stop moves to the entry.
@@ -407,14 +408,16 @@ def swing_lock(side: int, entry: float, initial_stop: float, stop: float, peak: 
         steps = parse_ladder(ladder)
         for trig, lock_r in steps:
             if gained_r >= trig:
-                cand = entry * (1 + side * BE_COST_FRAC) if lock_r <= 0 else entry + side * lock_r * risk
+                lk = lock_r - buffer_r          # robustness grid 13 Oct: 0.25R of room below each lock
+                cand = (entry * (1 + side * BE_COST_FRAC) if lock_r <= 0 and not buffer_r
+                        else entry + side * lk * risk)
                 new = max(new, cand) if side > 0 else min(new, cand)
         if steps and gained_r >= steps[-1][0] + LADDER_STEP_R:
             # open-ended (owner, 13 Oct): beyond the last step, every further 0.5R locks another 0.5R,
             # so the lock keeps working however far the trade runs
             last_trig, last_lock = steps[-1]
             extra = int((gained_r - last_trig) / LADDER_STEP_R + 1e-9) * LADDER_STEP_R
-            cand = entry + side * (last_lock + extra) * risk
+            cand = entry + side * (last_lock + extra - buffer_r) * risk
             new = max(new, cand) if side > 0 else min(new, cand)
         return new, best
     if gained_r < after_r:

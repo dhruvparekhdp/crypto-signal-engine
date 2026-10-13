@@ -205,6 +205,11 @@ class Settings(BaseSettings):
     # (21%/31% vs 23%/33%) and trades free their margin ~2 days sooner (median hold 3.5 vs 5.6 days).
     swing_lock_mode: str = "ladder"
     swing_lock_ladder: str = "1:0,1.5:0.5,2:1,2.5:1.5"
+    # Robustness grid 13 Oct (data/lab/robust_results.json, rb_std_c60_b25): each lock 0.25R further away, and a
+    # stop that has been moved into profit fires only when a 1h candle CLOSES beyond it (the original stop stays
+    # instant). 12m x2.62 / 24m x4.50 / worst fall 28% vs the wick-triggered ladder x2.33 / x3.96 / 31%.
+    swing_lock_buffer_r: float = 0.25
+    swing_lock_confirm_min: int = 60          # 0 = locked stops fire on any touch
     swing_lock_after_r: float = 2.0
     swing_lock_trail_atr: float = 3.0
     swing_hold_minutes: int = 10080

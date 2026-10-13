@@ -42,5 +42,6 @@ def _no_live_perp_prices(monkeypatch):
         # Binance min orders skip most trades of the small test wallets; tests opt in (test_swing_sizing_binance)
         monkeypatch.setattr(settings, "swing_binance_rules", False)
         monkeypatch.setattr(settings, "paper_real_funding", False)      # Delta funding history is network
+        monkeypatch.setattr(settings, "swing_lock_confirm_min", 0)       # confirmation reads Delta candles
     except Exception:  # noqa: BLE001
         pass

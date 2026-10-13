@@ -601,7 +601,8 @@ class AppRunner:
                         new_stop, best = sb_mod.swing_lock(
                             side_i, pos.entry_price, pos.initial_stop_price or pos.stop_price, pos.stop_price,
                             pos.peak_price or 0.0, current_price, settings.swing_lock_mode,
-                            settings.swing_lock_after_r, settings.swing_lock_trail_atr, settings.swing_lock_ladder)
+                            settings.swing_lock_after_r, settings.swing_lock_trail_atr, settings.swing_lock_ladder,
+                            settings.swing_lock_buffer_r)
                         pos.peak_price = best
                         if new_stop != pos.stop_price:
                             self._tick_notes.append(f"profit lock ({settings.swing_lock_mode}): "
@@ -610,8 +611,25 @@ class AppRunner:
                             in_profit = (new_stop > pos.entry_price) if side_i > 0 else (new_stop < pos.entry_price)
                             if in_profit or abs(new_stop - pos.entry_price) / pos.entry_price < 0.005:
                                 pos.stop_moved_by_profit_lock = True       # exits are labelled profit_lock, not stop
-                    trade = resolve_at_price(pos, current_price, now, cfg, wallet,
-                                             lock=None if swing else self._profit_lock())
+                    init_stop = pos.initial_stop_price or pos.stop_price
+                    side_w = 1 if getattr(pos.side, "value", pos.side) == "long" else -1
+                    locked = swing and ((pos.stop_price > init_stop) if side_w > 0 else (pos.stop_price < init_stop))
+                    if locked and settings.swing_lock_confirm_min:
+                        # whipsaw guard: a locked stop fires only on a confirmed candle close beyond it; between
+                        # closes only the original stop (and the target) can close the trade
+                        locked_stop = pos.stop_price
+                        if await self._closed_beyond(row.symbol, side_w, locked_stop, settings.swing_lock_confirm_min):
+                            from analysis.paper_cycle import fees_for as _fees
+                            from analysis.paper_trading import ExitReason, close_position
+                            trade = close_position(pos, current_price, ExitReason.PROFIT_LOCK, now, _fees(pos.symbol), wallet)
+                        else:
+                            pos.stop_price = init_stop
+                            trade = resolve_at_price(pos, current_price, now, cfg, wallet, lock=None)
+                            if trade is None:
+                                pos.stop_price = locked_stop
+                    else:
+                        trade = resolve_at_price(pos, current_price, now, cfg, wallet,
+                                                 lock=None if swing else self._profit_lock())
                     if trade is None:
                         from analysis.paper_cycle import fees_for
                         fees = fees_for(pos.symbol)
@@ -918,6 +936,33 @@ class AppRunner:
                                                                withdrawn, week, skips))
         except Exception:
             log.exception("weekly_forward_report_failed")
+
+    async def _closed_beyond(self, symbol: str, side: int, stop: float, minutes: int) -> bool:
+        """True if the last CLOSED candle of `minutes` (Delta India) closed beyond the stop: at or below it for a
+        long, at or above it for a short. Cached per candle; on a data failure the stop is NOT confirmed (the
+        original stop still protects the trade)."""
+        res = {60: "1h", 240: "4h", 15: "15m", 30: "30m"}.get(minutes, "1h")
+        key = (symbol, res)
+        now = datetime.now(UTC)
+        cache = getattr(self, "_close_cache", {})
+        self._close_cache = cache
+        hit = cache.get(key)
+        bar_end = now.replace(minute=0, second=0, microsecond=0) if res == "1h" else None
+        if hit and hit[0] == bar_end and bar_end is not None:
+            close = hit[1]
+        else:
+            try:
+                bars = await self.delta_market.fetch_candles(symbol, res, limit=3)
+                span = timedelta(minutes=minutes)
+                closed = [b for b in bars if b["timestamp"] + span <= now]
+                if not closed:
+                    return False
+                close = closed[-1]["close"]
+                cache[key] = (bar_end, close)
+            except Exception as e:  # noqa: BLE001
+                log.warning("lock_confirm_unavailable", symbol=symbol, error=str(e)[:120])
+                return False
+        return close <= stop if side > 0 else close >= stop
 
     async def _best_price_since(self, row, side: int) -> float | None:
         """Best price (high for a long, low for a short) since the position opened, from Delta candles,
