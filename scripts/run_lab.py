@@ -54,6 +54,13 @@ EXITS = {
     "s5_bank_half": ExitModel(stop_atr=3.0, rr=3.0, partial_r=1.5, partial_frac=0.5, be_trigger_r=1.5, max_hold_min=10080),
     "s6_ladder_stale3d": ExitModel(stop_atr=3.0, rr=3.0, max_hold_min=10080, stale_after_min=4320, stale_min_r=1.0,
                                    ladder=((1.0, 0.0), (1.5, 0.5), (2.0, 1.0), (2.5, 1.5))),
+    # 13 Oct robustness grid (owner: dips that rebound within 1-2 funding cycles must not shake trades out)
+    **{f"rb_{ln}_c{cf or 0}_b{int(bf * 100)}": ExitModel(stop_atr=3.0, rr=3.0, max_hold_min=10080, ladder=lad,
+                                                          lock_confirm_min=cf, lock_buffer_r=bf)
+       for ln, lad in (("std", ((1.0, 0.0), (1.5, 0.5), (2.0, 1.0), (2.5, 1.5))),
+                       ("slow", ((1.5, 0.0), (2.0, 0.5), (2.5, 1.0))),
+                       ("fast", ((0.75, 0.0), (1.25, 0.5), (1.75, 1.0), (2.25, 1.5))))
+       for cf in (None, 60, 240) for bf in (0.0, 0.25)},
     "daily_trend": ExitModel(stop_atr=3.0, rr=3.0, max_hold_min=43200),     # Q-7: daily bars need a 30-day limit
     "swing_trail": ExitModel(stop_atr=3.0, rr=10.0, be_trigger_r=1.0, trail_atr=3.0, trail_after_r=1.0,
                              max_hold_min=10080),

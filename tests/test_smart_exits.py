@@ -50,3 +50,17 @@ def test_stale_trade_closes_when_it_never_reached_one_r():
 
 def test_old_exit_keys_are_unchanged():
     assert ExitModel(stop_atr=3.0, rr=3.0, max_hold_min=10080).key() == "sl3.0_rr3.0_h10080_beNone_trNone_pNone"
+
+
+def test_confirmed_lock_ignores_a_wick_but_exits_on_a_close():
+    # ladder locks +0.5R (101.5 on a 100 long, 1R = 3) once 1.5R is reached; confirmation on 3-bar (3h) closes
+    exm = ExitModel(stop_atr=3.0, rr=3.0, max_hold_min=100_000, min_stop_pct=0, ladder=((1.5, 0.5),),
+                    lock_confirm_min=180)
+    sig = _bars([100.0] * 80 + [100, 104.6, 104.6, 101.0, 104.0, 104.0, 104.0, 104.0, 104.0, 104.0, 104.0, 108.0, 110.0])
+    # the 101 bar (a wick through 101.5) is not a 3h close -> trade survives and reaches the 109 target
+    from analysis.lab.simulate import simulate_symbol as sim
+    s = np.zeros(len(sig.t), np.int8); s[79] = 1
+    r = sim(sig, s, sig, exm, ZERO)[0]
+    assert r[16] == "target"
+    plain = ExitModel(stop_atr=3.0, rr=3.0, max_hold_min=100_000, min_stop_pct=0, ladder=((1.5, 0.5),))
+    assert sim(sig, s, sig, plain, ZERO)[0][16] == "trail"          # without confirmation the wick stops it out

@@ -43,6 +43,10 @@ class ExitModel:
     giveback_frac: float = 0.5             # ...exit if the trade gives back this share of its best profit
     stale_after_min: int | None = None     # after this long...
     stale_min_r: float = 1.0               # ...close at the bar close if it never reached this many R
+    # Whipsaw guard (owner, 13 Oct): once the stop has been moved into profit (ladder / trail / giveback / be), it
+    # fires only when a bar of this many minutes CLOSES beyond it, not on a wick. The original stop stays intrabar.
+    lock_confirm_min: int | None = None
+    lock_buffer_r: float = 0.0             # place every lock this many R further away (room for noise)
 
     def key(self) -> str:
         k = (f"sl{self.stop_atr}_rr{self.rr}_h{self.max_hold_min}_be{self.be_trigger_r}"
@@ -55,6 +59,10 @@ class ExitModel:
             k += f"_gb{self.giveback_after_r:g}x{self.giveback_frac:g}"
         if self.stale_after_min is not None:
             k += f"_st{self.stale_after_min}m{self.stale_min_r:g}"
+        if self.lock_confirm_min is not None:
+            k += f"_cf{self.lock_confirm_min}"
+        if self.lock_buffer_r:
+            k += f"_buf{self.lock_buffer_r:g}"
         return k
 
 
@@ -98,6 +106,7 @@ def simulate_symbol(sig_bars: Bars, signals: np.ndarray, ex: Bars, exit: ExitMod
             continue
         r_unit = stop_dist
         stop = entry - side * stop_dist
+        init_stop = stop
         tp = entry + side * exit.rr * stop_dist
         part_px = entry + side * exit.partial_r * stop_dist if exit.partial_r else None
         be_px = entry + side * exit.be_trigger_r * stop_dist if exit.be_trigger_r else None
@@ -133,6 +142,9 @@ def simulate_symbol(sig_bars: Bars, signals: np.ndarray, ex: Bars, exit: ExitMod
                 mae = adverse
             if fav > mfe:
                 mfe = fav
+            locked = (side > 0 and stop > init_stop) or (side < 0 and stop < init_stop)
+            if stop_hit and locked and exit.lock_confirm_min:
+                stop_hit = False                     # a locked stop waits for a confirmed close (checked below)
             if stop_hit and (not tp_hit or not exit.optimistic_ties):
                 gap = (op <= stop) if side > 0 else (op >= stop)
                 px = op if gap else stop
@@ -154,6 +166,13 @@ def simulate_symbol(sig_bars: Bars, signals: np.ndarray, ex: Bars, exit: ExitMod
                 exit_px = op if gap else tp
                 reason = "target"
                 break
+            if (exit.lock_confirm_min and ((side > 0 and stop > init_stop) or (side < 0 and stop < init_stop))
+                    and ((int(ex.t[j]) + INTERVAL_MS[ex.interval]) % (exit.lock_confirm_min * 60_000) == 0)):
+                c = float(ex.c[j])
+                if (side > 0 and c <= stop) or (side < 0 and c >= stop):
+                    exit_px = c * (1 - sslip) if side > 0 else c * (1 + sslip)
+                    reason = "trail"
+                    break
             # arm dynamic stops for the NEXT bar
             if side > 0:
                 best = max(best, hi)
@@ -171,7 +190,8 @@ def simulate_symbol(sig_bars: Bars, signals: np.ndarray, ex: Bars, exit: ExitMod
             best_r = side * (best - entry) / r_unit
             for trig, lock_r in exit.ladder:
                 if best_r >= trig:
-                    cand = be_stop if lock_r <= 0 else entry + side * lock_r * r_unit
+                    lk = lock_r - exit.lock_buffer_r
+                    cand = (be_stop if lock_r <= 0 and not exit.lock_buffer_r else entry + side * lk * r_unit)
                     if (side > 0 and cand > stop) or (side < 0 and cand < stop):
                         stop = cand
                         armed_trail = True
