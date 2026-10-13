@@ -21,7 +21,7 @@ from analysis.lab.costs import CostModel
 from analysis.lab.data import INTERVAL_MS, Bars, load_funding
 from analysis.lab import features as F
 
-REASONS = ["stop", "target", "time", "breakeven", "trail", "partial_then_stop", "liquidity"]
+REASONS = ["stop", "target", "time", "breakeven", "trail", "partial_then_stop", "liquidity", "stale"]
 
 
 @dataclass(frozen=True)
@@ -37,10 +37,25 @@ class ExitModel:
     partial_r: float | None = None         # take `partial_frac` off at this many R
     partial_frac: float = 0.5
     optimistic_ties: bool = False          # only for comparison; the default assumes the worst
+    # 13 Oct 2026 "smart switch" options (owner): all lock profit for the NEXT bar, like be/trail
+    ladder: tuple = ()                     # ((trigger_r, lock_r), ...): at trigger R profit, stop >= lock R
+    giveback_after_r: float | None = None  # once this many R in profit...
+    giveback_frac: float = 0.5             # ...exit if the trade gives back this share of its best profit
+    stale_after_min: int | None = None     # after this long...
+    stale_min_r: float = 1.0               # ...close at the bar close if it never reached this many R
 
     def key(self) -> str:
-        return (f"sl{self.stop_atr}_rr{self.rr}_h{self.max_hold_min}_be{self.be_trigger_r}"
-                f"_tr{self.trail_atr}_p{self.partial_r}")
+        k = (f"sl{self.stop_atr}_rr{self.rr}_h{self.max_hold_min}_be{self.be_trigger_r}"
+             f"_tr{self.trail_atr}_p{self.partial_r}")
+        if self.trail_atr is not None and self.trail_after_r != 1.0:
+            k += f"_ta{self.trail_after_r}"
+        if self.ladder:
+            k += "_lad" + "-".join(f"{a:g}:{b:g}" for a, b in self.ladder)
+        if self.giveback_after_r is not None:
+            k += f"_gb{self.giveback_after_r:g}x{self.giveback_frac:g}"
+        if self.stale_after_min is not None:
+            k += f"_st{self.stale_after_min}m{self.stale_min_r:g}"
+        return k
 
 
 COLS = ["symbol", "side", "entry_t", "exit_t", "entry", "exit", "stop_frac", "gross_ret",
@@ -153,6 +168,24 @@ def simulate_symbol(sig_bars: Bars, signals: np.ndarray, ex: Bars, exit: ExitMod
                 cand = best - side * exit.trail_atr * a
                 if (side > 0 and cand > stop) or (side < 0 and cand < stop):
                     stop = cand
+            best_r = side * (best - entry) / r_unit
+            for trig, lock_r in exit.ladder:
+                if best_r >= trig:
+                    cand = be_stop if lock_r <= 0 else entry + side * lock_r * r_unit
+                    if (side > 0 and cand > stop) or (side < 0 and cand < stop):
+                        stop = cand
+                        armed_trail = True
+            if exit.giveback_after_r is not None and best_r >= exit.giveback_after_r:
+                cand = entry + (best - entry) * (1 - exit.giveback_frac)
+                if (side > 0 and cand > stop) or (side < 0 and cand < stop):
+                    stop = cand
+                    armed_trail = True
+            if (exit.stale_after_min is not None and (j - e + 1) * INTERVAL_MS[ex.interval] >= exit.stale_after_min * 60_000
+                    and best_r < exit.stale_min_r):
+                c = float(ex.c[j])
+                exit_px = c * (1 - slip) if side > 0 else c * (1 + slip)
+                reason = "stale"
+                break
             j += 1
         if exit_px is None:
             jj = min(j, j_end)
