@@ -54,7 +54,8 @@ async def test_swing_trade_opens_holds_its_stop_and_closes_at_target():
         await runner._paper_trading_job()
         async with session_maker() as s:
             row = (await Repository(s).get_open_positions(cycle.id))[0]
-            assert row.stop_price == pytest.approx(57000.0)       # no profit lock, trail, ladder or ratchet
+            # 13 Oct 2026: the S1 ladder locks profit (~1.5R reached -> stop at +0.5R); no AI review or other ratchet
+            assert row.stop_price > 60000.0 and row.stop_price == pytest.approx(row.entry_price + 0.5 * 3000, rel=2e-3)
 
         st.current_price = 69500.0                                # tick 3: target
         await runner._paper_trading_job()

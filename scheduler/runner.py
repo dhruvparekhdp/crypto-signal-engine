@@ -595,14 +595,17 @@ class AppRunner:
 
                     if swing and settings.swing_lock_mode != "off":
                         side_i = 1 if getattr(pos.side, "value", pos.side) == "long" else -1
+                        if not pos.peak_price and (now - row.opened_at.replace(tzinfo=UTC)).total_seconds() > 600:
+                            # opened before peaks were tracked: rebuild the best price from candles since entry
+                            pos.peak_price = await self._best_price_since(row, side_i) or 0.0
                         new_stop, best = sb_mod.swing_lock(
                             side_i, pos.entry_price, pos.initial_stop_price or pos.stop_price, pos.stop_price,
                             pos.peak_price or 0.0, current_price, settings.swing_lock_mode,
-                            settings.swing_lock_after_r, settings.swing_lock_trail_atr)
+                            settings.swing_lock_after_r, settings.swing_lock_trail_atr, settings.swing_lock_ladder)
                         pos.peak_price = best
                         if new_stop != pos.stop_price:
-                            self._tick_notes.append(f"profit lock ({settings.swing_lock_mode} after "
-                                                    f"{settings.swing_lock_after_r:g}R): stop {pos.stop_price:.6g} -> {new_stop:.6g}")
+                            self._tick_notes.append(f"profit lock ({settings.swing_lock_mode}): "
+                                                    f"stop {pos.stop_price:.6g} -> {new_stop:.6g}")
                             pos.stop_price = new_stop
                     trade = resolve_at_price(pos, current_price, now, cfg, wallet,
                                              lock=None if swing else self._profit_lock())
@@ -912,6 +915,22 @@ class AppRunner:
                                                                withdrawn, week, skips))
         except Exception:
             log.exception("weekly_forward_report_failed")
+
+    async def _best_price_since(self, row, side: int) -> float | None:
+        """Best price (high for a long, low for a short) since the position opened, from Delta candles,
+        so the profit ladder sees the move that happened before peaks were tracked. None if unavailable."""
+        try:
+            opened = row.opened_at.replace(tzinfo=UTC)
+            minutes = max(1, int((datetime.now(UTC) - opened).total_seconds() / 60) + 1)
+            res, per = ("1m", 1) if minutes <= 2000 else ("5m", 5) if minutes <= 10_000 else ("1h", 60)
+            bars = await self.delta_market.fetch_candles(row.symbol, res, limit=minutes // per + 2)
+            bars = [x for x in bars if x["timestamp"] >= opened]
+            if not bars:
+                return None
+            return max(x["high"] for x in bars) if side > 0 else min(x["low"] for x in bars)
+        except Exception as e:  # noqa: BLE001
+            log.warning("best_price_backfill_failed", symbol=row.symbol, error=str(e)[:120])
+            return None
 
     async def _real_funding(self, row, now) -> float | None:
         """Funding paid (+) or received (-) so far on an open position, from Delta India's real rates.

@@ -372,11 +372,26 @@ def priority(signal_type: str, timeframe: str, symbol: str) -> float:
     return STRATEGY_R.get((strat, timeframe), 0.2) + COIN_R.get(coin, 0.2)
 
 
+BE_COST_FRAC = 0.00158          # round-trip fees + slippage (lab CostModel.round_trip, india_gst): break-even covers costs
+DEFAULT_LADDER = "1:0,1.5:0.5,2:1,2.5:1.5"
+
+
+def parse_ladder(text: str) -> list[tuple[float, float]]:
+    """'1:0,1.5:0.5' -> [(1.0, 0.0), (1.5, 0.5)]."""
+    out = []
+    for part in (text or "").split(","):
+        if ":" in part:
+            a, b = part.split(":", 1)
+            out.append((float(a), float(b)))
+    return out
+
+
 def swing_lock(side: int, entry: float, initial_stop: float, stop: float, peak: float, price: float,
-               mode: str, after_r: float, trail_atr: float) -> tuple[float, float]:
+               mode: str, after_r: float, trail_atr: float, ladder: str = DEFAULT_LADDER) -> tuple[float, float]:
     """Profit lock for an open swing trade (owner, 12 Oct 2026). Returns (new stop, new best price).
 
     mode "be": once the best price is `after_r` R in profit, the stop moves to the entry.
+    mode "ladder": stepped locks from `ladder` ("trigger:lock,..." in R), the backtest's S1 winner.
     mode "trail": once `after_r` R in profit, the stop trails `trail_atr` ATRs behind the best price
     (1 R = STOP_ATR ATRs, the initial stop distance). The stop never moves backwards. "off" changes nothing.
     Mirrors the lab's ExitModel be_trigger_r / trail_atr + trail_after_r, so live and backtest agree."""
@@ -385,6 +400,14 @@ def swing_lock(side: int, entry: float, initial_stop: float, stop: float, peak: 
     if mode == "off" or risk <= 0:
         return stop, best
     gained_r = side * (best - entry) / risk
+    if mode == "ladder":
+        # S1 (backtest 13 Oct): at 1R -> break-even (entry + round-trip costs), 1.5R -> lock 0.5R, 2R -> 1R, 2.5R -> 1.5R
+        new = stop
+        for trig, lock_r in parse_ladder(ladder):
+            if gained_r >= trig:
+                cand = entry * (1 + side * BE_COST_FRAC) if lock_r <= 0 else entry + side * lock_r * risk
+                new = max(new, cand) if side > 0 else min(new, cand)
+        return new, best
     if gained_r < after_r:
         return stop, best
     if mode == "be":

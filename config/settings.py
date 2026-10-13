@@ -201,7 +201,10 @@ class Settings(BaseSettings):
     swing_promote_min_trades: int = 30
     swing_promote_t: float = 1.645
     # Profit lock on open swing trades (owner, 12 Oct 2026): off | be | trail. Chosen by scripts/run_lab lock_* exits.
-    swing_lock_mode: str = "off"
+    # 13 Oct backtest (data/lab/smart_exits_results.json): ladder = same returns as no lock (24m x3.96), smaller falls
+    # (21%/31% vs 23%/33%) and trades free their margin ~2 days sooner (median hold 3.5 vs 5.6 days).
+    swing_lock_mode: str = "ladder"
+    swing_lock_ladder: str = "1:0,1.5:0.5,2:1,2.5:1.5"
     swing_lock_after_r: float = 2.0
     swing_lock_trail_atr: float = 3.0
     swing_hold_minutes: int = 10080

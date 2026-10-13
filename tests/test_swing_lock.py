@@ -77,3 +77,36 @@ async def test_a_fourth_same_side_trade_fits_under_the_12pct_cap():
             ("XRPUSDT", "vol_breakout", -1)]
     rows, logs = await run(sigs, cap=0)
     assert len(rows) == 4, [(lg.symbol, lg.skip_reason) for lg in logs]
+
+
+def test_ladder_steps_match_the_backtest_s1():
+    from analysis.swing_book import BE_COST_FRAC
+    # long entry 100, initial stop 94 (1R = 6)
+    assert swing_lock(+1, 100, 94, 94, 0, 105, "ladder", 0, 0)[0] == 94                  # 0.83R: nothing yet
+    assert swing_lock(+1, 100, 94, 94, 0, 106, "ladder", 0, 0)[0] == pytest.approx(100 * (1 + BE_COST_FRAC))  # 1R
+    assert swing_lock(+1, 100, 94, 94, 0, 109, "ladder", 0, 0)[0] == pytest.approx(103)  # 1.5R -> lock 0.5R
+    assert swing_lock(+1, 100, 94, 94, 0, 115, "ladder", 0, 0)[0] == pytest.approx(109)  # 2.5R -> lock 1.5R
+    s, b = swing_lock(-1, 100, 106, 106, 0, 91, "ladder", 0, 0)                          # short 1.5R
+    assert (s, b) == (pytest.approx(97), 91)
+    assert swing_lock(-1, 100, 106, 97, 91, 99, "ladder", 0, 0)[0] == pytest.approx(97)  # never loosens
+
+
+def test_ladder_is_the_live_default():
+    from config.settings import Settings
+    assert Settings.model_fields["swing_lock_mode"].default == "ladder"
+
+
+@pytest.mark.asyncio
+async def test_best_price_since_open_is_rebuilt_from_candles():
+    from datetime import UTC, datetime, timedelta
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock
+
+    from scheduler.runner import AppRunner
+    runner = AppRunner()
+    now = datetime.now(UTC)
+    bars = [{"timestamp": now - timedelta(hours=h), "high": 100 + h, "low": 95 - h} for h in (1, 2, 3, 30)]
+    runner.delta_market = SimpleNamespace(fetch_candles=AsyncMock(return_value=bars))
+    row = SimpleNamespace(symbol="solusdt", opened_at=(now - timedelta(hours=5)).replace(tzinfo=None))
+    assert await runner._best_price_since(row, -1) == 92        # lowest low since open (the 30h-old bar excluded)
+    assert await runner._best_price_since(row, +1) == 103

@@ -1396,11 +1396,11 @@ async def _api_paper(runner, request: web.Request) -> web.Response:
         funding = (await runner._real_funding(r, datetime.now(UTC)) if _SETTINGS.paper_real_funding
                    and hasattr(runner, "_real_funding") else None)
         if funding is None:
-            funding = fees_for(r.symbol).funding_cost(
-                r.coin_qty * r.entry_price * r.usdt_inr,
-                (datetime.now(UTC) - r.opened_at.replace(tzinfo=UTC)).total_seconds() / 3600)
-        net = gross - (r.entry_fee or 0.0) - exit_fee - funding
-        open_fees += (r.entry_fee or 0.0)
+            hours = ((datetime.now(UTC) - r.opened_at.replace(tzinfo=UTC)).total_seconds() / 3600
+                     if getattr(r, "opened_at", None) else 0.0)
+            funding = fees_for(r.symbol).funding_cost(r.coin_qty * r.entry_price * r.usdt_inr, hours)
+        net = gross - (getattr(r, "entry_fee", 0.0) or 0.0) - exit_fee - funding
+        open_fees += (getattr(r, "entry_fee", 0.0) or 0.0)
         open_funding += funding
         unrealised_total += net
         positions.append({
@@ -1417,7 +1417,7 @@ async def _api_paper(runner, request: web.Request) -> web.Response:
             "confidence": round(r.confidence * 100),
             "signal_type": r.signal_type,
             "unrealised": round(net, 2),
-            "entry_fee": round(r.entry_fee or 0.0, 2),
+            "entry_fee": round(getattr(r, "entry_fee", 0.0) or 0.0, 2),
             "exit_fee_est": round(exit_fee, 2),
             "funding_so_far": round(funding, 2),          # + paid, - received (real 8-hourly rates)
             "roe_pct": round(net / r.margin * 100, 2) if r.margin else 0.0,
