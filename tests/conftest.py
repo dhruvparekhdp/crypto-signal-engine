@@ -21,6 +21,13 @@ def _fresh_llm_budget(tmp_path, monkeypatch):
         monkeypatch.setattr(llm_budget, "_budget", None)
     except ImportError:
         pass
+    try:
+        # The circuit breaker is module-level: a test that simulates a provider failure paused Groq for 30-45 s,
+        # and on CI's faster runner the macro-sentinel tests ran inside that window and made no call (14 Oct 2026)
+        from collectors import llm_client
+        monkeypatch.setattr(llm_client, "_circuit_breakers", {})
+    except ImportError:
+        pass
 
 
 @_pytest.fixture(autouse=True)
