@@ -237,8 +237,12 @@
   F.openSwing = function (D) {
     return ((D.swing && D.swing.open) || []).map(function (p) {
       var c = F.coin(D, p.symbol), mark = c ? c.price : null, dir = String(p.side).toLowerCase() === "short" ? -1 : 1;
-      var risk = Math.abs(p.entry - p.stop);
-      return { p: p, mark: mark, dir: dir, R: mark != null && risk > 0 ? dir * (mark - p.entry) / risk : null };
+      // R is measured against the ORIGINAL stop: once the profit ladder moves the stop, |entry - stop| is no
+      // longer one R (a break-even stop made R look enormous)
+      var risk = Math.abs(p.entry - (p.initial_stop || p.stop));
+      var lk = p.lock || {};
+      return { p: p, mark: mark, dir: dir, lock: lk,
+               R: lk.r_now != null ? lk.r_now : (mark != null && risk > 0 ? dir * (mark - p.entry) / risk : null) };
     });
   };
   F.riskPct = function (D) { var r = D.swing && D.swing.rules && D.swing.rules.risk_per_trade; return r == null ? null : (r <= 1 ? +(r * 100).toFixed(2) : r); };
@@ -379,7 +383,13 @@
     gate.textContent = !g.known ? "FILTER · NO READING YET" : g.mode !== "on" ? "FILTER " + String(g.mode || "OFF").toUpperCase() : g.closed ? "FILTER CLOSED" : "FILTER OPEN";
     gate.classList.toggle("closed", g.closed);
     U.$("#stripOpen").textContent = "OPEN SWING TRADES " + (D.swing ? open.length : "…");
-    U.$("#stripRisk").textContent = risk == null ? "WORST CASE …" : "WORST CASE −" + (open.length * risk).toFixed(1) + "% WALLET";
+    // worst case = what every stop filling now would cost; a trade with profit locked adds nothing (or a gain)
+    var eq = D.swing ? (D.swing.wallet || 0) + open.reduce(function (m, o) { return m + (o.p.margin || 0); }, 0) : 0;
+    var haveLocks = open.length && open.every(function (o) { return o.lock && o.lock.worst_case_inr != null; });
+    var worstInr = haveLocks ? open.reduce(function (m, o) { return m + Math.max(0, o.lock.worst_case_inr); }, 0) : null;
+    U.$("#stripRisk").textContent = risk == null ? "WORST CASE …" : haveLocks && eq > 0
+      ? (worstInr <= 0 ? "WORST CASE 0% · PROFIT LOCKED" : "WORST CASE −" + (100 * worstInr / eq).toFixed(1) + "% WALLET")
+      : "WORST CASE −" + (open.length * risk).toFixed(1) + "% WALLET";
     var coins = D.coins || [], newest = coins.reduce(function (m, c) { return c.timestamp && c.timestamp > m ? c.timestamp : m; }, "");
     U.$("#stripFeed").textContent = coins.length ? "FEED " + coins.length + " COINS · " + U.ago(newest) : "FEED …";
     U.$("#stripMode").textContent = F.live(D) ? "LIVE TRADING: " + String(D.meta.live_trading_mode).toUpperCase() : "LIVE TRADING: OFF · PAPER ONLY";

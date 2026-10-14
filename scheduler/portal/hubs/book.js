@@ -16,10 +16,32 @@
           '<div class="mono small dim">' + e(U.name(p.strategy)) + (p.leverage ? " · " + e(p.leverage) + "x" : "") + "</div>" +
           '<div class="pos-r' + (o.R < 0 ? " dn" : "") + '">' + U.rr(o.R) + "</div>" + C.rbar(o.R) +
           '<div class="pos-scale"><span>STOP ' + e(U.px(p.stop)) + "</span><span>0</span><span>TARGET " + e(U.px(p.target)) + "</span></div>" +
-          '<div class="pos-foot"><span>in ' + e(U.px(p.entry)) + "</span><span>now " + e(U.px(o.mark)) + "</span><b>" + (left == null ? "—" : left > 0 ? left.toFixed(1) + "d left" : "expiring") + "</b></div></div>";
+          lockBlock(p, o) +
+          '<div class="pos-foot"><span>in ' + e(U.px(p.entry)) + "</span><span>now " + e(U.px(o.mark)) + "</span><b>" +
+          (left == null ? "—" : left >= 1 ? left.toFixed(1) + "d left" : left > 0 ? (left * 24).toFixed(1) + "h left" : "expiring") +
+          "</b></div></div>";
       }).join("") + "</div>";
     }
   });
+  // Profit lock (ladder) panel: what is protected now, the best the trade reached, and the next step.
+  function lockBlock(p, o) {
+    var k = o.lock || p.lock || {};
+    if (k.state == null) return "";
+    var locked = k.locked_r != null && k.locked_r > -0.999;
+    var cls = k.locked_r > 0.02 ? "up" : locked ? "acc" : "dim";
+    var rows = [
+      ["Stop now", U.px(k.stop) + (locked ? "  (was " + U.px(k.initial_stop) + ")" : "")],
+      ["Best so far", U.px(k.best_price) + " · " + U.rr(k.best_r)],
+      ["If stopped now", (k.worst_case_inr <= 0 ? "+" : "−") + U.inr(Math.abs(k.worst_case_inr))],
+      ["Next step", k.next_trigger_r == null ? "—" : "at " + U.px(k.next_trigger_price) + " (" + U.rr(k.next_trigger_r) +
+        ") → lock " + (k.next_lock_r <= 0 ? "break-even" : U.rr(k.next_lock_r)) + " at " + U.px(k.next_lock_price)]
+    ];
+    return '<div class="lockbox"><div class="lockbox-head"><span class="lock-badge ' + cls + '">' +
+      (locked ? "🔒 " : "") + e(String(k.state).toUpperCase()) + "</span><span class='dim tiny'>PROFIT LADDER</span></div>" +
+      rows.map(function (r) { return '<div class="lockbox-row"><span>' + e(r[0]) + "</span><b>" + e(r[1]) + "</b></div>"; }).join("") +
+      '<div class="lockbox-note">' + e(k.confirm || "") + "</div></div>";
+  }
+
   UI.widget("swing-closed", {
     title: "CLOSED SWING TRADES", uses: ["swing"],
     mount: function (el, ctx) { ctx.s.t = { sort: null }; },
@@ -106,12 +128,35 @@
         { label: "ENTRY", w: "100px", cell: function (r) { return e(U.px(r.entry)); } },
         { label: "MARK", w: "100px", cell: function (r) { return e(U.px(r.mark)); } },
         { label: "STOP", w: "100px", cell: function (r) { return e(U.px(r.stop)) + (r.trailing ? ' <span class="acc tiny">trail</span>' : ""); } },
+        { label: "LOCK", w: "170px", cell: function (r) {
+            var k = r.lock || {};
+            if (k.state == null) return '<span class="dim">—</span>';
+            var cls = k.locked_r > 0.02 ? "up" : k.locked_r > -0.999 ? "acc" : "dim";
+            var txt = k.locked_r > 0.02 ? "LOCKED " + U.rr(k.locked_r) : k.locked_r > -0.05 ? "BREAK-EVEN"
+                    : k.locked_r > -0.999 ? "RISK " + U.rr(k.locked_r) : "ORIGINAL STOP";
+            return '<span class="lock-badge ' + cls + '" title="' + e(k.confirm || "") + '">' + (k.locked_r > -0.999 ? "🔒 " : "") + e(txt) + "</span>";
+          } },
+        { label: "R NOW / BEST", w: "120px", cell: function (r) { var k = r.lock || {};
+            return k.r_now == null ? "—" : C.signed(k.r_now, U.rr) + ' <span class="dim">/ ' + e(U.rr(k.best_r)) + "</span>"; },
+          sort: function (r) { return (r.lock || {}).r_now; } },
+        { label: "NEXT LOCK", w: "150px", cell: function (r) { var k = r.lock || {};
+            return k.next_trigger_r == null ? "—" : '<span class="dim">at ' + e(U.px(k.next_trigger_price)) + " → " +
+              e(k.next_lock_r <= 0 ? "BE" : U.rr(k.next_lock_r)) + "</span>"; } },
         { label: "TARGET", w: "100px", cell: function (r) { return e(U.px(r.target)); } },
         { label: "MARGIN", w: "90px", cell: function (r) { return e(U.inr(r.margin)); }, sort: function (r) { return r.margin; } },
         { label: "NET", w: "100px", cell: function (r) { return C.signed(r.unrealised, function (x) { return U.inr(x, true); }); }, sort: function (r) { return r.unrealised; } },
         { label: "ROE", w: "80px", cell: function (r) { return C.signed(r.roe_pct); }, sort: function (r) { return r.roe_pct; } },
-        { label: "OPENED", w: "90px", cell: function (r) { return '<span class="dim">' + e(U.ago(r.opened_at)) + "</span>"; }, sort: function (r) { return r.opened_at || ""; } }
-      ], rows, { state: ctx.s.t, minWidth: 1000, empty: p.running ? "No open positions." : "No cycle running." });
+        { label: "COSTS", w: "110px", cell: function (r) {
+            var c = -(r.entry_fee || 0) - (r.exit_fee_est || 0) - (r.funding_so_far || 0);
+            return '<span title="entry fee ' + e(U.inr(r.entry_fee || 0)) + ' · exit fee est ' + e(U.inr(r.exit_fee_est || 0)) +
+              ' · funding ' + e(U.inr(-(r.funding_so_far || 0), true)) + '">' + C.signed(c, function (x) { return U.inr(x, true); }) + "</span>"; } },
+        { label: "OPENED", w: "90px", cell: function (r) { return '<span class="dim">' + e(U.ago(r.opened_at)) + "</span>"; }, sort: function (r) { return r.opened_at || ""; } },
+        { label: "EXPIRES", w: "90px", cell: function (r) {
+            if (!r.expires_at) return "—";
+            var h = (new Date(r.expires_at).getTime() - Date.now()) / 3600000;
+            return '<span class="' + (h < 12 ? "acc" : "dim") + '">' + (h <= 0 ? "now" : h < 48 ? h.toFixed(1) + "h" : (h / 24).toFixed(1) + "d") + "</span>";
+          }, sort: function (r) { return r.expires_at || ""; } }
+      ], rows, { state: ctx.s.t, minWidth: 1500, empty: p.running ? "No open positions." : "No cycle running." });
     }
   });
   UI.widget("paper-history", {

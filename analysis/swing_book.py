@@ -429,3 +429,47 @@ def swing_lock(side: int, entry: float, initial_stop: float, stop: float, peak: 
         cand = best - side * trail_atr * atr
     new = max(stop, cand) if side > 0 else min(stop, cand)
     return new, best
+
+
+def ladder_status(side: int, entry: float, init_stop: float, stop: float, peak: float, price: float, qty: float,
+                  usdt_inr: float, ladder: str = DEFAULT_LADDER, buffer_r: float = 0.0, confirm_min: int = 0,
+                  mode: str = "ladder") -> dict:
+    """Everything the portal shows about an open swing trade's profit lock (owner, 14 Oct 2026)."""
+    risk = abs(entry - init_stop)
+    if risk <= 0 or entry <= 0:
+        return {}
+    best = price if not peak else (max(peak, price) if side > 0 else min(peak, price))
+    r_now = side * (price - entry) / risk
+    best_r = side * (best - entry) / risk
+    locked_r = side * (stop - entry) / risk               # -1 = original stop; 0 = break-even; >0 = profit locked
+    if abs(stop - init_stop) <= risk * 1e-6:
+        state = "original stop"
+    elif abs(locked_r) < 0.05:
+        state = "break-even"
+    elif locked_r > 0:
+        state = f"profit locked +{locked_r:.2f}R"
+    else:
+        state = f"risk cut to {-locked_r:.2f}R"
+    nxt = None
+    if mode == "ladder":
+        steps = parse_ladder(ladder)
+        for trig, lock_r in steps:
+            if best_r < trig:
+                nxt = (trig, lock_r - buffer_r)
+                break
+        if nxt is None and steps:
+            last_trig, last_lock = steps[-1]
+            k = int((best_r - last_trig) / LADDER_STEP_R + 1e-9) + 1
+            nxt = (last_trig + k * LADDER_STEP_R, last_lock + k * LADDER_STEP_R - buffer_r)
+    worst = qty * (entry - stop) * side * usdt_inr       # INR lost if the stop fills now (negative = profit kept)
+    return {
+        "mode": mode, "state": state, "initial_stop": init_stop, "stop": stop, "best_price": best,
+        "r_now": round(r_now, 3), "best_r": round(best_r, 3), "locked_r": round(locked_r, 3),
+        "next_trigger_r": nxt[0] if nxt else None,
+        "next_trigger_price": (entry + side * nxt[0] * risk) if nxt else None,
+        "next_lock_r": nxt[1] if nxt else None,
+        "next_lock_price": (entry + side * nxt[1] * risk) if nxt else None,
+        "confirm": (f"locked stop needs a {confirm_min}-minute candle close beyond it; the original stop "
+                    f"{init_stop:.6g} fires instantly") if confirm_min else "locked stop fires on touch",
+        "worst_case_inr": round(worst, 2),
+    }

@@ -1206,6 +1206,12 @@ async def _api_swing(runner, request: web.Request) -> web.Response:
     trades = [t for t in (snap.get("trades") or []) if str(getattr(t, "signal_type", "")).startswith("swing_")]
 
     from analysis.strategy_registry import trade_r as r_of
+    marks = {}
+    if rows and hasattr(runner, "_perp_prices"):
+        try:
+            marks = await runner._perp_prices()
+        except Exception:  # noqa: BLE001
+            marks = {}
 
     rs = [r_of(t) for t in trades]
     by_strategy = {}
@@ -1228,9 +1234,11 @@ async def _api_swing(runner, request: web.Request) -> web.Response:
                                    "judge_after_trades": 30},
         "scan": getattr(runner, "_swing_last", {}),
         "open": [{"symbol": r.symbol, "side": r.side, "strategy": r.signal_type, "entry": r.entry_price,
-                  "stop": r.stop_price, "target": r.target_price, "leverage": r.leverage, "margin": r.margin,
+                  "stop": r.stop_price, "initial_stop": r.initial_stop_price or r.stop_price,
+                  "target": r.target_price, "leverage": r.leverage, "margin": r.margin,
                   "opened_at": r.opened_at.isoformat() if r.opened_at else None,
-                  "expires_at": r.expires_at.isoformat() if r.expires_at else None} for r in rows],
+                  "expires_at": r.expires_at.isoformat() if r.expires_at else None,
+                  "lock": _lock_status(r, marks.get(r.symbol.upper()) or 0.0)} for r in rows],
         "closed": {"n": len(trades), "wins": sum(1 for r in rs if r > 0),
                    "win_rate": (sum(1 for r in rs if r > 0) / len(rs)) if rs else None,
                    "avg_r": (sum(rs) / len(rs)) if rs else None, "total_r": sum(rs),
@@ -1244,6 +1252,18 @@ async def _api_swing(runner, request: web.Request) -> web.Response:
         "registry": await _swing_registry_section(trades),
         "shortfall": await _swing_shortfall_section(getattr(cycle, "id", None)),
     })
+
+
+def _lock_status(r, mark: float) -> dict:
+    """The profit-lock (ladder) state of an open swing position, for the portal."""
+    if getattr(r, "trade_mode", "") != "swing" or not mark:
+        return {}
+    from analysis.swing_book import ladder_status
+    side = 1 if r.side == "long" else -1
+    return ladder_status(side, r.entry_price, getattr(r, "initial_stop_price", None) or r.stop_price, r.stop_price,
+                         getattr(r, "peak_price", 0.0) or 0.0, mark, r.coin_qty, r.usdt_inr,
+                         _SETTINGS.swing_lock_ladder, _SETTINGS.swing_lock_buffer_r,
+                         _SETTINGS.swing_lock_confirm_min, _SETTINGS.swing_lock_mode)
 
 
 async def _swing_shortfall_section(cycle_id) -> dict:
@@ -1420,6 +1440,7 @@ async def _api_paper(runner, request: web.Request) -> web.Response:
             "entry_fee": round(getattr(r, "entry_fee", 0.0) or 0.0, 2),
             "exit_fee_est": round(exit_fee, 2),
             "funding_so_far": round(funding, 2),          # + paid, - received (real 8-hourly rates)
+            "lock": _lock_status(r, mark),
             "roe_pct": round(net / r.margin * 100, 2) if r.margin else 0.0,
             "opened_at": _iso(r.opened_at),
             # When this position times out. Exposed because a position that
