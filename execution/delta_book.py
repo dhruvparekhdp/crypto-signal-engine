@@ -15,6 +15,7 @@ on its own — only when called after a paper swing open.
 """
 from __future__ import annotations
 
+import asyncio
 import json
 import math
 import time
@@ -82,6 +83,7 @@ class DeltaBook:
         self.state_path = state_path
         self.kill_switch = kill_switch
         self.backstop_r = backstop_r
+        self.retry_delay_s = 1.0
 
     @property
     def live(self) -> bool:
@@ -112,7 +114,12 @@ class DeltaBook:
             return MirrorPlan(False, f"no_delta_product_{delta_sym}", self.mode,
                               binance_symbol, delta_sym)
         try:
-            inr = await self.client.inr_available()
+            if hasattr(self.client, "wallet_inr"):
+                inr, rate = await self.client.wallet_inr()
+                if rate:
+                    self.usd_inr = rate                     # size with the exchange's own conversion rate
+            else:
+                inr = await self.client.inr_available()
         except DeltaError as e:
             return MirrorPlan(False, f"wallet_{e}", self.mode, binance_symbol, delta_sym)
         side = "buy" if side_word.lower() in ("long", "buy") else "sell"
@@ -230,15 +237,30 @@ class DeltaBook:
             try:
                 try:
                     await self.client.edit_stop(pos["stop_order_id"], pos["product_id"], pos["size"], want)
-                except DeltaError:
-                    # fallback: replace the stop (cancel first so two stops never sit together)
-                    close_side = "sell" if side > 0 else "buy"
-                    await self.client.cancel_order(pos["stop_order_id"], pos["product_id"])
-                    new = await self.client.place_stop_market(pos["product_id"], close_side, pos["size"], want)
-                    pos["stop_order_id"] = _oid(new)
+                except DeltaError as first:
+                    row["edit_error"] = str(first)[:160]
+                    await asyncio.sleep(self.retry_delay_s)            # testnet 14 Oct: an amend right after the
+                    try:                                                # stop was created failed once, then worked
+                        await self.client.edit_stop(pos["stop_order_id"], pos["product_id"], pos["size"], want)
+                    except DeltaError:
+                        # fallback: place the NEW stop first, then cancel the old one. Both are reduce-only, so two
+                        # stops for a moment is harmless; zero stops (the old cancel-first order) was not.
+                        close_side = "sell" if side > 0 else "buy"
+                        new = await self.client.place_stop_market(pos["product_id"], close_side, pos["size"], want)
+                        old_id, pos["stop_order_id"] = pos["stop_order_id"], _oid(new)
+                        try:
+                            await self.client.cancel_order(old_id, pos["product_id"])
+                        except DeltaError as e:
+                            row["old_stop_cancel_error"] = str(e)[:160]
                 row["placed"] = True
             except DeltaError as e:
                 row["error"] = str(e)[:200]
+                if "immediate_execution_stop_order" in str(e):
+                    # price is already beyond where the backstop belongs (testnet 14 Oct): do what that stop
+                    # would have done and close at market; the old stop stays until the close is through
+                    self._append_shadow(row)
+                    closed = await self.on_paper_close(binance_symbol, "backstop_breached")
+                    return {"ok": closed.get("ok", False), "reason": "closed_backstop_breached"}
                 self._append_shadow(row)
                 return {"ok": False, "reason": f"amend_failed_{e}"}
         pos["exchange_stop"] = want
@@ -297,9 +319,22 @@ class DeltaBook:
                 state["positions"].pop(delta_sym, None)
                 events.append({"delta_symbol": delta_sym, "event": "closed_on_exchange",
                                "binance_symbol": pos.get("binance_symbol")})
-            elif abs(size) != int(pos["size"]):
-                events.append({"delta_symbol": delta_sym, "event": "size_mismatch", "ours": pos["size"],
-                               "delta": size})
+            else:
+                if abs(size) != int(pos["size"]):
+                    events.append({"delta_symbol": delta_sym, "event": "size_mismatch", "ours": pos["size"],
+                                   "delta": size})
+                # every open position must have a stop on the exchange; put one back if it is missing
+                try:
+                    orders = await self.client.open_orders(pos["product_id"])
+                    if not any(o.get("stop_order_type") == "stop_loss_order" for o in orders):
+                        side = 1 if pos["side"] == "buy" else -1
+                        new = await self.client.place_stop_market(pos["product_id"], "sell" if side > 0 else "buy",
+                                                                  abs(size), pos["exchange_stop"])
+                        pos["stop_order_id"] = _oid(new)
+                        events.append({"delta_symbol": delta_sym, "event": "stop_restored",
+                                       "stop": pos["exchange_stop"]})
+                except DeltaError as e:
+                    events.append({"delta_symbol": delta_sym, "event": "stop_check_error", "error": str(e)[:160]})
         self._save_state(state)
         for e in events:
             self._append_shadow({"t": int(time.time() * 1000), **e})

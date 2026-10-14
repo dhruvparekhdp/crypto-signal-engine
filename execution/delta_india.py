@@ -106,8 +106,27 @@ class DeltaIndia:
         got = await self._request("GET", "/v2/wallet/balances")
         return got if isinstance(got, list) else (got.get("balances") or got or [])
 
+    async def wallet_inr(self) -> tuple[float, float | None]:
+        """(available balance in INR across every wallet asset, the exchange's own INR-per-USD rate or None).
+        Delta India keeps margin in USD and reports each row's INR value (testnet 14 Oct: USD 100 = Rs8,500), so
+        reading only an "INR" row said Rs0 for a funded account."""
+        total, rate = 0.0, None
+        for b in await self.balances():
+            try:
+                inr = float(b.get("available_balance_inr") or 0)
+                native = float(b.get("available_balance") or 0)
+            except (TypeError, ValueError):
+                continue
+            total += inr
+            if (b.get("asset_symbol") or "").upper() == "USD" and native > 0 and inr > 0:
+                rate = inr / native
+        return total, rate
+
     async def inr_available(self) -> float:
-        """Available INR balance (asset_symbol INR / available_balance)."""
+        """Available balance in INR (all assets, as Delta values them); falls back to an INR row."""
+        total, _ = await self.wallet_inr()
+        if total > 0:
+            return total
         for b in await self.balances():
             sym = (b.get("asset_symbol") or b.get("symbol") or "").upper()
             if sym in ("INR", "RUPEE"):
@@ -226,7 +245,11 @@ class DeltaIndia:
         return await self._request("POST", "/v2/orders", body=body)
 
     async def cancel_all(self, product_id: int) -> dict:
-        return await self._request("DELETE", "/v2/orders/all", params={"product_id": product_id})
+        # The product goes in the JSON body: as a query parameter Delta signs without it (testnet 14 Oct:
+        # 401 Signature Mismatch, signature_data 'DELETE<ts>/v2/orders/all')
+        return await self._request("DELETE", "/v2/orders/all",
+                                   body={"product_id": int(product_id), "cancel_limit_orders": True,
+                                         "cancel_stop_orders": True})
 
 
     # --- order management for the ladder (13 Oct 2026) ------------------------------------------------------------

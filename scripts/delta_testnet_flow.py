@@ -66,13 +66,16 @@ async def main() -> int:
                  f"{kinds}")
             size = await client.position_size(product.id)
             step("6 exchange position", size == -plan.size, f"size {size}")
-            lock = entry - 0.5 * (stop - entry)                    # engine locks +0.5R
+            # a realistic first ladder step: the engine moves its stop to break-even, so the exchange backstop
+            # goes 0.5R behind it (between the market and the original stop, never at the market price)
+            lock = entry
             res = await book.on_stop_change(SYMBOL, lock)
             orders = await client.open_orders(product.id)
             sl = [float(o.get("stop_price") or 0) for o in orders if o.get("stop_order_type") == "stop_loss_order"]
             step("7 ladder amend moved the exchange stop", res.get("reason") == "amended" and sl
                  and abs(sl[0] - res["exchange_stop"]) <= (product.tick_size or 1e-4) * 1.01,
-                 f"want {res.get('exchange_stop')} on exchange {sl}")
+                 f"want {res.get('exchange_stop')} on exchange {sl} | {res} | log: "
+                 + (tmp / "log.jsonl").read_text()[-600:].replace(chr(10), " ") if (tmp / "log.jsonl").exists() else "")
             ev = await book.reconcile()
             step("8 reconcile clean", ev == [], f"{ev}")
             res = await book.on_paper_close(SYMBOL, "testnet_flow")

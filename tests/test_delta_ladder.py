@@ -51,10 +51,15 @@ class FakeDelta:
     async def position_size(self, product_id):
         return self.size
 
+    async def open_orders(self, product_id):
+        return [{"stop_order_type": "stop_loss_order"}, {"stop_order_type": "take_profit_order"}]
+
 
 def _book(tmp_path, client, mode="live", live=True, **kw):
-    return DeltaBook(client, mode=mode, live_orders=live, risk_pct=0.03, max_open=3, usd_inr=86.0,
-                     shadow_path=tmp_path / "shadow.jsonl", state_path=tmp_path / "state.json", **kw)
+    b = DeltaBook(client, mode=mode, live_orders=live, risk_pct=0.03, max_open=3, usd_inr=86.0,
+                  shadow_path=tmp_path / "shadow.jsonl", state_path=tmp_path / "state.json", **kw)
+    b.retry_delay_s = 0
+    return b
 
 
 async def _open_short(book):
@@ -102,7 +107,7 @@ async def test_failed_edit_falls_back_to_cancel_and_replace(tmp_path):
     res = await book.on_stop_change("xrpusdt", 1.30)
     assert res["reason"] == "amended"
     kinds = [c[0] for c in fake.calls]
-    assert kinds[-2:] == ["cancel", "stop"]                     # cancel first: never two stops at once
+    assert kinds[-2:] == ["stop", "cancel"]                     # new stop FIRST: never zero stops
     assert book._load_state()["positions"]["XRPUSD"]["stop_order_id"] == fake.next_id
 
 
@@ -150,3 +155,93 @@ async def test_shadow_mode_rehearses_the_ladder_without_orders(tmp_path):
 def test_stops_round_to_the_tick_without_loosening():
     assert round_to_tick(1.36543, 0.001, -1) == pytest.approx(1.365)   # short stop rounds down (tighter)
     assert round_to_tick(97.123, 0.05, +1) == pytest.approx(97.15)     # long stop rounds up (tighter)
+
+
+@pytest.mark.asyncio
+async def test_wallet_reads_inr_value_of_a_usd_wallet_and_the_exchange_rate():
+    from execution.delta_india import DeltaIndia
+
+    class Fake(DeltaIndia):
+        def __init__(self):
+            pass
+
+        async def balances(self):
+            return [{"asset_symbol": "USD", "balance": "100", "available_balance": "100", "available_balance_inr": "8500"},
+                    {"asset_symbol": "INR", "balance": "0", "available_balance": "0", "available_balance_inr": "0"}]
+    d = Fake()
+    assert await d.wallet_inr() == (8500.0, 85.0)
+    assert await d.inr_available() == 8500.0
+
+
+@pytest.mark.asyncio
+async def test_cancel_all_sends_the_product_in_the_body():
+    from execution.delta_india import DeltaIndia
+    sent = {}
+
+    class Fake(DeltaIndia):
+        def __init__(self):
+            pass
+
+        async def _request(self, method, path, *, params=None, body=None, signed=True):
+            sent.update(method=method, path=path, params=params, body=body)
+            return {}
+    await Fake().cancel_all(93723)
+    assert sent["method"] == "DELETE" and sent["params"] is None and sent["body"]["product_id"] == 93723
+
+
+class FlakyEdit(FakeDelta):
+    """First edit fails, the retry works (what the testnet did on 14 Oct)."""
+    def __init__(self):
+        super().__init__()
+        self.edits = 0
+
+    async def edit_stop(self, order_id, product_id, size, stop_price):
+        self.edits += 1
+        if self.edits == 1:
+            raise DeltaError(400, {"error": "order_not_found"})
+        return await super().edit_stop(order_id, product_id, size, stop_price)
+
+
+@pytest.mark.asyncio
+async def test_a_failed_amend_is_retried_before_replacing(tmp_path):
+    fake = FlakyEdit()
+    book = _book(tmp_path, fake)
+    await _open_short(book)
+    res = await book.on_stop_change("xrpusdt", 1.30)
+    assert res["reason"] == "amended" and fake.edits == 2
+    assert not any(c[0] == "cancel" for c in fake.calls)       # the retry worked: no replace needed
+
+
+@pytest.mark.asyncio
+async def test_reconcile_puts_back_a_missing_exchange_stop(tmp_path):
+    fake = FakeDelta()
+    fake.open_orders = lambda pid: _async([])                   # the exchange shows no stop order
+    book = _book(tmp_path, fake)
+    await _open_short(book)
+    events = await book.reconcile()
+    assert events[0]["event"] == "stop_restored" and fake.calls[-1][0] == "stop"
+
+
+async def _async(v):
+    return v
+
+
+class ImmediateStop(FakeDelta):
+    async def edit_stop(self, order_id, product_id, size, stop_price):
+        raise DeltaError(400, {"error": {"code": "immediate_execution_stop_order"}})
+
+    async def place_stop_market(self, product_id, side, size, stop_price):
+        if self.calls and self.calls[-1][0] == "stop" or len([c for c in self.calls if c[0] == "stop"]) >= 1:
+            raise DeltaError(400, {"error": {"code": "immediate_execution_stop_order"}})
+        return await super().place_stop_market(product_id, side, size, stop_price)
+
+
+@pytest.mark.asyncio
+async def test_backstop_already_breached_closes_at_market(tmp_path):
+    fake = ImmediateStop()
+    book = _book(tmp_path, fake)
+    await _open_short(book)
+    res = await book.on_stop_change("xrpusdt", 1.30)
+    assert res["reason"] == "closed_backstop_breached"
+    assert any(c[0] == "market" and c[1]["reduce_only"] for c in fake.calls)
+    assert "XRPUSD" not in book._load_state()["positions"]
