@@ -134,21 +134,28 @@ async def _api_crypto_signals(runner, request: web.Request) -> web.Response:
         tc_dict[r.id] = tc
 
     if mirror_mode and rows:
-        async def _fetch_ai(sig_row):
-            tc = tc_dict.get(sig_row.id, {})
-            try:
-                return await get_mirror_ai_dual_reasoning(sig_row, tc)
-            except Exception:
-                return {
-                    "why_it_worked": "Initial technical momentum aligned with setup criteria.",
-                    "why_it_failed": "Counter-trend orderflow or resistance capped further progression.",
-                    "key_takeaway": "Enforce strict risk management and trailing profit stops.",
-                    "source_model": "fallback",
-                }
-
-        ai_res_list = await asyncio.gather(*[_fetch_ai(r) for r in rows])
-        for r, ai_res in zip(rows, ai_res_list):
-            ai_dict[r.id] = ai_res
+        # 14 Oct 2026: this used to ask an AI model about EVERY mirror signal of the last 48 h on every page load
+        # and wait for all of them; with rate-limited providers the page never loaded (>60 s) and each visit
+        # burned the free AI budget. Now: cached explanations only; a background task explains at most 3
+        # FINISHED trades per view, one at a time (a running trade's explanation would go stale).
+        from analysis.trade_evaluator import _AI_REASONING_CACHE
+        pending = {"why_it_worked": "", "why_it_failed": "", "key_takeaway": "", "source_model": "pending"}
+        for r in rows:
+            ai_dict[r.id] = _AI_REASONING_CACHE.get(r.id) or pending
+        todo = [r for r in rows if r.id not in _AI_REASONING_CACHE
+                and tc_dict.get(r.id, {}).get("status") not in (None, "running")][:3]
+        if todo and not getattr(runner, "_mirror_ai_busy", False):
+            async def _explain(batch):
+                try:
+                    runner._mirror_ai_busy = True
+                    for sig_row in batch:
+                        try:
+                            await get_mirror_ai_dual_reasoning(sig_row, tc_dict.get(sig_row.id, {}))
+                        except Exception:  # noqa: BLE001
+                            pass
+                finally:
+                    runner._mirror_ai_busy = False
+            asyncio.create_task(_explain(todo))
 
     signals = [
         {
@@ -4205,20 +4212,20 @@ function renderMirrorSignalCard(s){
         <div style="font-size:11px;font-weight:700;color:#10b981;margin-bottom:4px;display:flex;align-items:center;gap:4px">
           <span>🟢 AI: Why It Worked</span>
         </div>
-        <div style="font-size:11.5px;color:#cbd5e1;line-height:1.45">${esc(ai.why_it_worked || 'Technical momentum and volume expansion supported the move toward peak levels.')}</div>
+        <div style="font-size:11.5px;color:#cbd5e1;line-height:1.45">${esc(ai.why_it_worked || 'Not explained yet: only finished trades are explained, a few at a time.')}</div>
       </div>
       <div style="background:rgba(239,68,68,0.07);border:1px solid rgba(239,68,68,0.25);border-radius:8px;padding:10px">
         <div style="font-size:11px;font-weight:700;color:#f87171;margin-bottom:4px;display:flex;align-items:center;gap:4px">
           <span>🔴 AI: Why It Failed / Retraced</span>
         </div>
-        <div style="font-size:11.5px;color:#cbd5e1;line-height:1.45">${esc(ai.why_it_failed || 'Opposing liquidity or counter-trend resistance capped further continuation.')}</div>
+        <div style="font-size:11.5px;color:#cbd5e1;line-height:1.45">${esc(ai.why_it_failed || '—')}</div>
       </div>
     </div>
 
     <!-- Key Heuristic Footer -->
     <div style="display:flex;align-items:center;justify-content:space-between;padding-top:6px;border-top:1px solid rgba(255,255,255,0.06);font-size:11px;color:#94a3b8">
-      <div>💡 <b>Key Takeaway:</b> ${esc(ai.key_takeaway || 'Manage risk proactively with dynamic trailing stops.')}</div>
-      <div style="font-size:10px;color:#64748b">Provider: ${esc(ai.source_model || 'Hugging Face')}</div>
+      <div>💡 <b>Key Takeaway:</b> ${esc(ai.key_takeaway || '—')}</div>
+      <div style="font-size:10px;color:#64748b">Provider: ${esc(ai.source_model === 'pending' || !ai.source_model ? 'not explained yet' : ai.source_model === 'algorithmic_synthesis' ? 'template text (no AI was available)' : ai.source_model)}</div>
     </div>
 
     ${renderReviewTrail(s)}
