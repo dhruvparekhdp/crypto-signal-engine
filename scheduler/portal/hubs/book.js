@@ -23,6 +23,19 @@
       }).join("") + "</div>";
     }
   });
+  // Swing / Intra / Delivery tabs (owner, 14 Oct 2026): every list in the paper cycle can be cut by book.
+  var MODES = [["all", "All"], ["swing", "Swing"], ["intraday", "Intra"], ["delivery", "Delivery"]];
+  function modeTabs(cur, rows) {
+    return '<span class="chipset modetabs">' + MODES.map(function (m) {
+      var n = m[0] === "all" ? rows.length : rows.filter(function (r) { return (r.trade_mode || "intraday") === m[0]; }).length;
+      return '<button class="chipbtn' + (cur === m[0] ? " on" : "") + '" data-act="mode" data-v="' + m[0] + '">' +
+        e(m[1]) + " · " + n + "</button>";
+    }).join("") + "</span>";
+  }
+  function byMode(rows, cur) {
+    return cur === "all" ? rows : rows.filter(function (r) { return (r.trade_mode || "intraday") === cur; });
+  }
+
   // Profit lock (ladder) panel: what is protected now, the best the trade reached, and the next step.
   function lockBlock(p, o) {
     var k = o.lock || p.lock || {};
@@ -115,13 +128,14 @@
   });
   UI.widget("paper-open", {
     title: "OPEN POSITIONS", uses: ["paper"],
-    mount: function (el, ctx) { ctx.s.t = { sort: null }; },
-    on: { sort: function (el, ev, t, ctx) { C.sortState(ctx.s.t, t.dataset.k); ctx.render(); } },
+    mount: function (el, ctx) { ctx.s.t = { sort: null }; ctx.s.mode = "all"; },
+    on: { sort: function (el, ev, t, ctx) { C.sortState(ctx.s.t, t.dataset.k); ctx.render(); },
+          mode: function (el, ev, t, ctx) { ctx.s.mode = t.dataset.v; ctx.render(); } },
     render: function (el, D, ctx) {
       var p = D.paper; if (!p) { el.innerHTML = C.state(D, "paper"); return; }
-      var rows = p.positions || [];
-      ctx.right(rows.length + " open");
-      el.innerHTML = C.table([
+      var allRows = p.positions || [], rows = byMode(allRows, ctx.s.mode || "all");
+      ctx.right(rows.length + " of " + allRows.length + " open");
+      el.innerHTML = '<div class="toolbar">' + modeTabs(ctx.s.mode || "all", allRows) + "</div>" + C.table([
         { label: "COIN", w: "80px", cell: function (r) { return "<b>" + e(U.base(r.symbol)) + "</b>"; }, sort: function (r) { return r.symbol; } },
         { label: "SIDE", w: "80px", cell: function (r) { return C.side(r.side); } },
         { label: "MODE", w: "80px", cell: function (r) { return '<span class="dim">' + e(r.trade_mode) + "</span>"; } },
@@ -131,8 +145,8 @@
         { label: "LOCK", w: "170px", cell: function (r) {
             var k = r.lock || {};
             if (k.state == null) return '<span class="dim">—</span>';
-            var cls = k.locked_r > 0.02 ? "up" : k.locked_r > -0.999 ? "acc" : "dim";
-            var txt = k.locked_r > 0.02 ? "LOCKED " + U.rr(k.locked_r) : k.locked_r > -0.05 ? "BREAK-EVEN"
+            var cls = k.locked_r >= 0.05 ? "up" : k.locked_r > -0.999 ? "acc" : "dim";
+            var txt = k.locked_r >= 0.05 ? "LOCKED " + U.rr(k.locked_r) : k.locked_r > -0.05 ? "BREAK-EVEN"
                     : k.locked_r > -0.999 ? "RISK " + U.rr(k.locked_r) : "ORIGINAL STOP";
             return '<span class="lock-badge ' + cls + '" title="' + e(k.confirm || "") + '">' + (k.locked_r > -0.999 ? "🔒 " : "") + e(txt) + "</span>";
           } },
@@ -162,7 +176,7 @@
   UI.widget("paper-history", {
     title: "HISTORY", uses: ["paper"],
     mount: function (el, ctx) {
-      ctx.s.f = { sym: "", side: "", setup: "", exit: "", res: "", q: "" }; ctx.s.t = { sort: null };
+      ctx.s.f = { sym: "", side: "", setup: "", exit: "", res: "", q: "", mode: "all" }; ctx.s.t = { sort: null };
       el.innerHTML = '<div class="toolbar"></div><div data-slot="t"></div><div data-slot="sum"></div>';
     },
     on: {
@@ -172,17 +186,18 @@
       exit: function (el, ev, t, ctx) { ctx.s.f.exit = t.value; ctx.render(); },
       res: function (el, ev, t, ctx) { ctx.s.f.res = ctx.s.f.res === t.dataset.v ? "" : t.dataset.v; ctx.s.tb = null; ctx.render(); },
       q: function (el, ev, t, ctx) { ctx.s.f.q = t.value.toLowerCase(); ctx.render(); },
-      reset: function (el, ev, t, ctx) { ctx.s.f = { sym: "", side: "", setup: "", exit: "", res: "", q: "" }; ctx.s.tb = null; ctx.render(); },
+      reset: function (el, ev, t, ctx) { ctx.s.f = { sym: "", side: "", setup: "", exit: "", res: "", q: "", mode: "all" }; ctx.s.tb = null; ctx.render(); },
+      mode: function (el, ev, t, ctx) { ctx.s.f.mode = t.dataset.v; ctx.s.tb = null; ctx.render(); },
       sort: function (el, ev, t, ctx) { C.sortState(ctx.s.t, t.dataset.k); ctx.render(); }
     },
     render: function (el, D, ctx) {
       var p = D.paper; if (!p) { el.querySelector('[data-slot="t"]').innerHTML = C.state(D, "paper"); return; }
       var all = p.trades || [], f = ctx.s.f;
       function uniq(k) { return Array.from(new Set(all.map(function (t) { return t[k]; }).filter(Boolean))).sort(); }
-      var key = [all.length, f.res].join();
+      var key = [all.length, f.res, f.mode].join();
       if (ctx.s.tb !== key) {
         ctx.s.tb = key;
-        el.querySelector(".toolbar").innerHTML =
+        el.querySelector(".toolbar").innerHTML = modeTabs(f.mode || "all", all) +
           C.select("sym", "Coin", [["", "All"]].concat(uniq("symbol").map(function (s) { return [s, U.base(s)]; })), f.sym) +
           C.select("side", "Side", [["", "Both"], ["long", "Long"], ["short", "Short"]], f.side) +
           C.select("setup", "Setup", [["", "All"]].concat(uniq("signal_type").map(function (s) { return [s, U.name(s)]; })), f.setup) +
@@ -191,7 +206,7 @@
           '<button class="chipbtn' + (f.res === "loss" ? " on" : "") + '" data-act="res" data-v="loss">Losses</button></span>' +
           C.search("q", "Search…", f.q) + '<button class="mini" data-act="reset">Reset</button>';
       }
-      var rows = all.filter(function (t) {
+      var rows = byMode(all, f.mode || "all").filter(function (t) {
         return (!f.sym || t.symbol === f.sym) && (!f.side || t.side === f.side) && (!f.setup || t.signal_type === f.setup) && (!f.exit || t.reason === f.exit) &&
           (!f.res || (f.res === "win" ? t.net > 0 : t.net <= 0)) && (!f.q || (t.symbol + " " + t.signal_type + " " + t.reason).toLowerCase().indexOf(f.q) >= 0);
       });

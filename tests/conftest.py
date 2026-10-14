@@ -50,5 +50,7 @@ def _no_live_perp_prices(monkeypatch):
         monkeypatch.setattr(settings, "swing_binance_rules", False)
         monkeypatch.setattr(settings, "paper_real_funding", False)      # Delta funding history is network
         monkeypatch.setattr(settings, "swing_lock_confirm_min", 0)       # confirmation reads Delta candles
+        monkeypatch.setattr(settings, "intraday_margin_cap_frac", 0.0)  # legacy sizing tests; opt in per test
+        monkeypatch.setattr(settings, "intraday_max_open", 99)
     except Exception:  # noqa: BLE001
         pass

@@ -199,16 +199,34 @@ def should_open(
     """
     if signal.confidence < cfg.min_confidence:
         return False, "confidence_below_floor"
-    if len(state.positions) >= cfg.max_concurrent:
+    # 14 Oct 2026: intraday has its own slots; swing positions no longer use them up (and vice versa)
+    intraday_open = [p for p in state.positions if getattr(p, "trade_mode", "intraday") != "swing"]
+    if len(intraday_open) >= min(cfg.max_concurrent, _intraday_max_open()):
         return False, "max_concurrent"
     if any(p.symbol == signal.symbol for p in state.positions):
         return False, "already_open_in_symbol"
 
-    margin = cfg.margin_for_signal(state.wallet, signal.confidence,
-                                   committed_margin(state.positions))
+    margin = _capped_margin(cfg, state, signal)
     if margin <= 0:
         return False, "no_free_margin"
     return True, "ok"
+
+
+def _intraday_max_open() -> int:
+    from config.settings import settings
+    return int(getattr(settings, "intraday_max_open", 2) or 2)
+
+
+def _capped_margin(cfg: CycleConfig, state: CycleState, signal: CryptoSignal) -> float:
+    """Intraday margin, capped at intraday_margin_cap_frac of equity so intraday can never crowd out the swing
+    book (14 Oct 2026: it used a 25% floor per trade)."""
+    from config.settings import settings
+    committed = committed_margin(state.positions)
+    margin = cfg.margin_for_signal(state.wallet, signal.confidence, committed)
+    cap = float(getattr(settings, "intraday_margin_cap_frac", 0.0) or 0.0)
+    if cap > 0:
+        margin = min(margin, cap * (state.wallet + committed))
+    return margin
 
 
 def _hold_minutes(signal: CryptoSignal, cfg: CycleConfig,
@@ -267,8 +285,7 @@ def open_from_signal(
     cfg.max_hold_minutes exactly as it was — stop-loss and sizing above are
     never affected by it either way.
     """
-    margin = cfg.margin_for_signal(state.wallet, signal.confidence,
-                                   committed_margin(state.positions))
+    margin = _capped_margin(cfg, state, signal)
     if margin <= 0:
         return None
 

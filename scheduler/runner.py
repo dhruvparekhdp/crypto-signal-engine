@@ -195,13 +195,33 @@ def _briefing_can_wait(latest, now, event_near: bool) -> bool:
     created = latest.created_at if latest.created_at.tzinfo else latest.created_at.replace(tzinfo=UTC)
     return (now - created).total_seconds() < settings.market_briefing_quiet_minutes * 60
 
+def _tf_minutes(tf: str) -> float:
+    """'16m' -> 16, '1h' -> 60, '4h' -> 240, '1d' -> 1440; unknown -> 0 (never passes a minimum)."""
+    t = str(tf or "").strip().lower()
+    try:
+        if t.endswith("m"):
+            return float(t[:-1])
+        if t.endswith("h"):
+            return float(t[:-1]) * 60
+        if t.endswith("d"):
+            return float(t[:-1]) * 1440
+    except ValueError:
+        pass
+    return 0.0
+
 def _family_may_trade(sig) -> bool:
     """Only the families named in settings.paper_open_families open paper trades; the rest are shadow
     signals, logged for comparison. 'swing' covers swing_* signals, 'intraday' everything else."""
     allowed = {f.strip() for f in (settings.paper_open_families or "").split(",") if f.strip()}
+    swing = str(getattr(sig, "signal_type", "")).startswith("swing_")
+    if not swing and "intraday" in allowed:
+        # owner 14 Oct 2026: intraday trades only on strong confidence and on signals of 1 hour or longer
+        # (backtests: 15m strategies lose after costs)
+        return (float(getattr(sig, "confidence", 0.0) or 0.0) >= settings.intraday_min_confidence
+                and _tf_minutes(getattr(sig, "timeframe", "")) >= settings.intraday_min_timeframe_minutes)
     if "all" in allowed:
         return True
-    return ("swing" if str(getattr(sig, "signal_type", "")).startswith("swing_") else "intraday") in allowed
+    return ("swing" if swing else "intraday") in allowed
 
 class AppRunner:
     def __init__(self) -> None:
@@ -1212,12 +1232,20 @@ class AppRunner:
                     if verdict is not None:
                         sig.indicators_summary = f"{sig.indicators_summary} | {verdict.tag()}"
                         self._swing_last[key]["regime"] = verdict.as_dict()
+                    # basic rating from the backtest (recorded only; compared with outcomes before it may decide)
+                    from analysis.signal_rating import rate as _rate
+                    from analysis.signal_rating import tag as _rtag
+                    sig.rating = _rate(sig.signal_type, sig.timeframe, sym,
+                                       getattr(verdict, "btc_vol_rank", None) if verdict is not None else None)
+                    sig.indicators_summary = f"{sig.indicators_summary} | {_rtag(sig.rating)}"
+                    self._swing_last[key]["rating"] = sig.rating
                     if not settings.paper_trading_enabled:          # plan L7: nothing would ever open them
                         continue
                     self._pending_swing = self._pending_swing[-49:] + [sig]
                     log.info("swing_signal", symbol=sym, tf=tf, strategy=setup.strategy, side=sig.direction,
                              price=price, stop=sig.stop_loss, target=sig.target_price,
-                             regime=verdict.tag() if verdict is not None else "off")
+                             regime=verdict.tag() if verdict is not None else "off",
+                             rating=sig.rating["grade"], expected_r=sig.rating["expected_r"])
         except Exception:
             log.exception("swing_scan_failed")
 
@@ -1365,6 +1393,8 @@ class AppRunner:
                       f"risking {risk * 100:.2f}% of the wallet ({sb.risk_reason(sig.signal_type, sig.timeframe, dd, streak, trusted)}; "
                       f"range {settings.swing_risk_min * 100:g}-{settings.swing_risk_pct * 100:g}%) · "
                       f"closes only at stop, target or after 7 days" + sf_txt
+                      + (f" · signal rating {sig.rating['grade']} (backtest {sig.rating['expected_r']:+.2f}R)"
+                         if getattr(sig, "rating", None) else "")
                       + (f" · {verdict.tag()} ({settings.swing_regime_filter})" if verdict is not None else "")))])
             cstate.position_ids[len(cstate.positions)] = row.id
             cstate.positions.append(pos)
@@ -1385,7 +1415,9 @@ class AppRunner:
                     f"📝 <b>Swing Trade Opened</b> ({sig.signal_type.replace('swing_', '')})\n"
                     f"<b>{pos.symbol.upper()}</b> · {arrow}\n"
                     f"Entry <b>${price:,.4f}</b> · Stop <b>${stop:,.4f}</b> · Target <b>${target:,.4f}</b>\n"
-                    f"Risk {risk * 100:.2f}% of wallet · {leverage:.1f}x · closes at stop, target or 7 days",
+                    f"Risk {risk * 100:.2f}% of wallet · {leverage:.1f}x · closes at stop, target or 7 days"
+                    + (f"\nSignal rating <b>{sig.rating['grade']}</b> (backtest {sig.rating['expected_r']:+.2f}R)"
+                       if getattr(sig, "rating", None) else ""),
                     parse_mode=ParseMode.HTML)
             # Delta India mirror (shadow by default — no real order unless both live gates are on)
             try:
@@ -1398,24 +1430,33 @@ class AppRunner:
         """Run one DeltaBook method with a fresh client (shadow or live per settings). None when Delta is off or
         no key is saved. Never raises: a Delta problem must not break the paper tick."""
         mode = (settings.delta_india_mode or "off").lower()
-        key = settings.delta_india_api_key.get_secret_value() if settings.delta_india_api_key else ""
-        secret = settings.delta_india_api_secret.get_secret_value() if settings.delta_india_api_secret else ""
+        testnet = mode == "testnet"          # demo account, fake money: real orders on cdn-ind.testnet.deltaex.org
+        k_obj = settings.delta_india_testnet_api_key if testnet else settings.delta_india_api_key
+        s_obj = settings.delta_india_testnet_api_secret if testnet else settings.delta_india_api_secret
+        key = k_obj.get_secret_value() if k_obj else ""
+        secret = s_obj.get_secret_value() if s_obj else ""
         if mode == "off" or not key or not secret:
             return None
         try:
+            from pathlib import Path
+
             import httpx
 
-            from execution.delta_book import DeltaBook
+            from execution.delta_book import SHADOW_PATH, STATE_PATH, DeltaBook
             from execution.delta_india import USER_AGENT, DeltaIndia
+            base = (settings.delta_india_testnet_url if testnet
+                    else settings.delta_india_base_url or "https://api.india.delta.exchange")
             async with httpx.AsyncClient(timeout=15, headers={"User-Agent": USER_AGENT}) as http:
-                client = DeltaIndia(key, secret, base_url=settings.delta_india_base_url or
-                                    "https://api.india.delta.exchange", client=http)
-                book = DeltaBook(client, mode=mode, live_orders=bool(settings.delta_india_live_orders),
-                                 risk_pct=float(settings.delta_india_risk_pct),
-                                 max_open=int(settings.delta_india_max_open),
+                client = DeltaIndia(key, secret, base_url=base, client=http)
+                book = DeltaBook(client, mode="live" if testnet else mode,
+                                 live_orders=True if testnet else bool(settings.delta_india_live_orders),
+                                 risk_pct=float(settings.delta_testnet_risk_pct if testnet else settings.delta_india_risk_pct),
+                                 max_open=int(settings.delta_testnet_max_open if testnet else settings.delta_india_max_open),
                                  usd_inr=float(settings.delta_india_usd_inr or usdt_inr or 83.0),
                                  kill_switch=bool(settings.delta_india_kill_switch),
-                                 backstop_r=float(settings.delta_india_backstop_r))
+                                 backstop_r=float(settings.delta_india_backstop_r),
+                                 shadow_path=Path("data/delta_testnet.jsonl") if testnet else SHADOW_PATH,
+                                 state_path=Path("data/delta_testnet_state.json") if testnet else STATE_PATH)
                 return await getattr(book, method)(*args)
         except Exception as e:  # noqa: BLE001
             log.warning("delta_india_call_failed", method=method, error=str(e)[:160])
@@ -1438,11 +1479,6 @@ class AppRunner:
         """Copy a paper swing open to Delta India (shadow log or live order — see settings)."""
         mode = (settings.delta_india_mode or "off").lower()
         if mode == "off":
-            return
-        key = settings.delta_india_api_key.get_secret_value() if settings.delta_india_api_key else ""
-        secret = settings.delta_india_api_secret.get_secret_value() if settings.delta_india_api_secret else ""
-        if not key or not secret:
-            log.info("delta_india_skipped", reason="no_api_key", mode=mode, symbol=symbol)
             return
         plan = await self._delta_call("on_paper_open", symbol, side_word, entry, stop, target, signal_type,
                                       usdt_inr=usdt_inr)

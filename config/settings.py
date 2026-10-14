@@ -269,12 +269,21 @@ class Settings(BaseSettings):
     delta_india_testnet_api_key: SecretStr | None = None
     delta_india_testnet_api_secret: SecretStr | None = None
     delta_india_testnet_url: str = "https://cdn-ind.testnet.deltaex.org"
+    # delta_india_mode = "testnet": mirror paper swing trades onto the DEMO account (fake money, real order flow)
+    delta_testnet_risk_pct: float = 0.03       # same risk as the paper book, so demo results compare to paper
+    delta_testnet_max_open: int = 10
     # Kill switch: ON = no new Delta orders (open ones are still protected and can be closed by the engine)
     delta_india_kill_switch: bool = False
     # Server-side backstop on Delta: the exchange stop trails the engine's profit lock by this many R, so an engine
     # outage cannot give back everything (the engine's 1h-close rule stays the primary exit)
     delta_india_backstop_r: float = 0.5
-    paper_open_families: str = "swing"
+    # 14 Oct 2026 owner: strong-confidence intraday trades in paper too, with their own limits so they cannot crowd
+    # out the swing book: confidence >= intraday_min_confidence, at most intraday_max_open open, margin <= 10%
+    paper_open_families: str = "swing"          # production: "swing,intraday" on /settings (owner 14 Oct)
+    intraday_min_confidence: float = 0.85
+    intraday_max_open: int = 2
+    intraday_margin_cap_frac: float = 0.10
+    intraday_min_timeframe_minutes: int = 60     # owner: no 15m trades, 1 hour minimum
     # The 60-minute "flat or losing -> close" rule cut trades at small losses; off unless asked for.
     smart_60m_enabled: bool = False
     candle_refresh_enabled: bool = True

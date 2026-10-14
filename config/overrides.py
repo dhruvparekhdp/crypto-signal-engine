@@ -294,9 +294,10 @@ FIELDS: tuple[Field, ...] = (
     # Delta India behaviour (editable on /settings)
     Field("delta_india_mode", "delta", "Delta India mode",
           "off = ignore. shadow = when a paper swing opens, log the Delta order we WOULD place "
-          "(no real order; works with a Read key). live = place real orders — also needs "
+          "(no real order; works with a Read key). testnet = mirror onto the DEMO account with the testnet key "
+          "(fake money, real order flow). live = place real orders — also needs "
           "'Allow live orders' below AND a Trading key.",
-          kind="choice", choices=("off", "shadow", "live")),
+          kind="choice", choices=("off", "shadow", "testnet", "live")),
     Field("delta_india_kill_switch", "delta", "Delta KILL SWITCH",
           "ON = no new Delta orders at all. Open positions keep their exchange stops.", kind="bool"),
     Field("delta_india_live_orders", "delta", "Allow live Delta orders (second gate)",

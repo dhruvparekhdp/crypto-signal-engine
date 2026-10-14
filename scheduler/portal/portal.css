@@ -337,3 +337,5 @@ main section{display:flex;flex-direction:column;gap:24px}
 .lock-badge.up{background:var(--up);color:var(--bg);border-color:var(--up)}
 .lock-badge.acc{background:var(--acc);color:var(--bg);border-color:var(--acc)}
 .lock-badge.dim{color:var(--dim)}
+.modetabs{margin-right:8px}
+.modetabs .chipbtn.on{background:var(--acc);color:var(--bg)}
