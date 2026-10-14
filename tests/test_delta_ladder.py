@@ -245,3 +245,14 @@ async def test_backstop_already_breached_closes_at_market(tmp_path):
     assert res["reason"] == "closed_backstop_breached"
     assert any(c[0] == "market" and c[1]["reduce_only"] for c in fake.calls)
     assert "XRPUSD" not in book._load_state()["positions"]
+
+
+@pytest.mark.asyncio
+async def test_sizing_refuses_a_hair_thin_stop_and_never_exceeds_wallet_margin(tmp_path):
+    fake = FakeDelta()
+    book = _book(tmp_path, fake)
+    plan = await book.on_paper_open("xrpusdt", "short", 1.3798, 1.38378, 1.2045, "x")   # 0.29% stop
+    assert not plan.ok and plan.reason == "stop_too_close" and fake.calls == []
+    plan = await book.on_paper_open("xrpusdt", "short", 1.40, 1.41, 1.37, "x")          # 0.7% stop: wants a lot
+    max_contracts = int((500 / 86.0) * 10 * 0.9 // 1.40)
+    assert plan.ok and plan.size <= max_contracts

@@ -25,6 +25,8 @@ from pathlib import Path
 from execution.delta_india import DeltaError, DeltaIndia, Product, binance_to_delta_symbol, round_to_tick
 
 SHADOW_PATH = Path("data/delta_shadow.jsonl")
+MIN_STOP_FRAC = 0.005        # a stop closer than 0.5% is noise, and sizes absurdly large
+MAX_LEVERAGE = 10.0          # sizing never needs more margin than the wallet has at this leverage
 STATE_PATH = Path("data/delta_state.json")
 
 
@@ -126,8 +128,19 @@ class DeltaBook:
         # Shadow with an empty INR wallet still sizes against a ₹5,000 notional so the
         # log shows a realistic order; live mode always uses the real balance.
         sizing_equity = inr if self.mode == "live" else max(inr, 5000.0)
+        if entry > 0 and abs(entry - stop) / entry < MIN_STOP_FRAC:
+            return MirrorPlan(False, "stop_too_close", self.mode, binance_symbol, delta_sym, product.id, side,
+                              0, entry, stop, target, 0.0, 0.0, inr)
         size, notional, risk = size_contracts(
             product, entry, stop, sizing_equity, self.risk_pct, self.usd_inr)
+        # never ask for more than the wallet can margin (testnet 14 Oct: a 0.3% stop asked for 1,491 contracts)
+        max_notional_usd = (sizing_equity / self.usd_inr) * MAX_LEVERAGE * 0.9 if self.usd_inr else 0.0
+        if size and product.contract_value * entry > 0:
+            cap = int(max_notional_usd // (product.contract_value * entry))
+            if size > cap:
+                size = cap
+                notional = size * product.contract_value * entry
+                risk = notional * abs(entry - stop) / entry * self.usd_inr
         if size < 1:
             return MirrorPlan(False, "below_one_contract", self.mode, binance_symbol, delta_sym,
                               product.id, side, 0, entry, stop, target, 0.0, 0.0, inr)
