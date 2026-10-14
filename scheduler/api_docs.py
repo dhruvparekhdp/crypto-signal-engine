@@ -57,6 +57,7 @@ ENDPOINTS: tuple[tuple[str, str, str, str, dict], ...] = (
     ("Portal", "GET", "/api/portal/signals", "Swing signals, newest first: traded / not traded / filter block, with the BTC vol rank.", {"days": "14", "limit": "40"}),
     ("Portal", "GET", "/api/portal/meta", "Paper or live, swing book on/off, market filter mode and threshold.", {}),
     ("Delta India", "GET", "/api/delta", "Delta India mirror status: mode, key set?, shadow log tail, state.", {}),
+    ("Delta India", "GET", "/api/delta/demo", "Demo (testnet) positions next to the real market: demo price, real price, gap, demo P&L.", {}),
     ("Delta India", "POST", "/api/delta/shadow-now",
      "Shadow-mirror every open paper swing onto Delta (logs only — never places orders).", {}),
     ("Charts", "GET", "/api/chart/klines", "Candles for the chart page.", {"symbol": "BTCUSDT", "tf": "4h", "limit": "600"}),
