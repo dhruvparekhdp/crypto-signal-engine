@@ -229,7 +229,33 @@
         e(U.inr(net, true)) + " · costs " + e(U.inr(fees)) + "</p>" : "";
     }
   });
-  UI.view("book/paper", [["paper-strip"], ["paper-open"], ["paper-history"]]);
+  // Delta demo (testnet) positions with the real-market gap (owner, 15 Oct 2026)
+  UI.Store.def("delta_demo", "/api/delta/demo", 30000);
+  UI.widget("paper-demo", {
+    title: "DELTA DEMO · FAKE MONEY", uses: ["delta_demo", "paper"],
+    render: function (el, D) {
+      var d = D.delta_demo; if (!d) { el.innerHTML = C.state(D, "delta_demo"); return; }
+      var rows = d.positions || [];
+      if (!rows.length) { el.innerHTML = C.empty(d.mode === "testnet" ? "No open demo positions." : "Demo mode is off (mode: " + e(d.mode) + ")."); return; }
+      var paper = {}; ((D.paper && D.paper.positions) || []).forEach(function (p) { paper[String(p.symbol).toUpperCase()] = p; });
+      el.innerHTML = '<p class="mono small dim" style="margin:0 0 10px">The demo exchange has its own price, which drifts away from the real market. ' +
+        "Demo profit and loss shows that orders, stops and targets work, not how the strategy is doing; the paper column is the real-price result.</p>" +
+        C.table([
+          { label: "COIN", w: "80px", cell: function (r) { return "<b>" + e(r.symbol.replace(/USD$/, "")) + "</b>"; } },
+          { label: "SIDE", w: "80px", cell: function (r) { return C.side(r.side); } },
+          { label: "CONTRACTS", w: "90px", cell: function (r) { return e(r.contracts); } },
+          { label: "DEMO ENTRY", w: "110px", cell: function (r) { return e(U.px(r.entry)); } },
+          { label: "DEMO PRICE", w: "110px", cell: function (r) { return e(U.px(r.demo_mark)); } },
+          { label: "REAL PRICE", w: "110px", cell: function (r) { return "<b>" + e(U.px(r.real_mark)) + "</b>"; } },
+          { label: "GAP", w: "80px", cell: function (r) { var g = r.gap_pct; return g == null ? "—" : '<span class="' + (Math.abs(g) >= 1 ? "dn" : "dim") + '">' + (g > 0 ? "+" : "") + g.toFixed(2) + "%</span>"; } },
+          { label: "DEMO P&L", w: "100px", cell: function (r) { return r.demo_pnl_usd == null ? "—" : C.signed(r.demo_pnl_usd, function (x) { return (x >= 0 ? "+$" : "−$") + Math.abs(x).toFixed(2); }); } },
+          { label: "PAPER (REAL PRICE)", w: "130px", cell: function (r) { var p = paper[String(r.binance_symbol || "").toUpperCase()];
+              return p ? C.signed(p.unrealised, function (x) { return U.inr(x, true); }) : '<span class="dim">closed in paper</span>'; } },
+          { label: "EXCHANGE STOP", w: "120px", cell: function (r) { return e(U.px(r.exchange_stop)); } }
+        ], rows, { minWidth: 1100 });
+    }
+  });
+  UI.view("book/paper", [["paper-strip"], ["paper-open"], ["paper-demo"], ["paper-history"]]);
 
   // ------------------------------------------------------------- session guard
   function guard(trades) {
