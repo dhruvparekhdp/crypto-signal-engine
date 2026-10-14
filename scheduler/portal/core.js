@@ -127,6 +127,7 @@
   Store.def("budget", "/api/llm/budget", 60000);
   Store.def("status", "/api/status", 30000);
   Store.def("paper", "/api/paper", 20000);
+  Store.def("delta_demo", "/api/delta/demo", 30000);
   Store.def("history7", "/api/signals/history?days=7", 60000);
   Store.def("archive", "/api/signals/history?days=365&before=7", 300000);
   Store.def("accuracy", "/api/signals/accuracy", 300000);

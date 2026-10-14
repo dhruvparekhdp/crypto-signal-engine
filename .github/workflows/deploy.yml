@@ -30,7 +30,7 @@ jobs:
           summary=$(grep -E "^=*.*[0-9]+ (passed|failed)" pytest.out | tail -n 1)
           echo "summary: $summary"
           # failing tests as annotations: readable on the public run page without a login
-          grep -E "^(FAILED|ERROR) " pytest.out | head -25 | sed 's/^/::error::/' || true
+          grep -E "^(FAILED|ERROR|SUBFAILED)" pytest.out | head -25 | sed 's/^/::error::/' || true
           if [ "$code" -ne 0 ] || ! echo "$summary" | grep -Eq "[0-9]+ passed" || echo "$summary" | grep -Eq "[0-9]+ (failed|errors?)"; then
             echo "::error::test suite did not pass (exit $code): $summary"; exit 1
           fi

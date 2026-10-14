@@ -230,7 +230,6 @@
     }
   });
   // Delta demo (testnet) positions with the real-market gap (owner, 15 Oct 2026)
-  UI.Store.def("delta_demo", "/api/delta/demo", 30000);
   UI.widget("paper-demo", {
     title: "DELTA DEMO · FAKE MONEY", uses: ["delta_demo", "paper"],
     render: function (el, D) {
