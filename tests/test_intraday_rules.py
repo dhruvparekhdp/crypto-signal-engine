@@ -53,3 +53,14 @@ def test_swing_positions_do_not_use_intraday_slots_and_margin_is_capped(rules):
     assert _capped_margin(cfg, _state(swing, 2000.0), sig) <= 0.10 * (2000 + 3000) + 1e-9
     two_intra = swing + [SimpleNamespace(symbol=f"i{i}usdt", trade_mode="intraday", margin=100.0) for i in range(2)]
     assert should_open(sig, cfg, _state(two_intra, 1800.0), datetime.now(UTC)) == (False, "max_concurrent")
+
+
+def test_intraday_switches_are_editable_on_the_settings_page(monkeypatch):
+    from config.overrides import BY_KEY, apply
+    from config.settings import settings
+    for k in ("paper_open_families", "intraday_min_confidence", "intraday_min_timeframe_minutes",
+              "intraday_max_open", "intraday_margin_cap_frac"):
+        assert k in BY_KEY, k
+    monkeypatch.setattr(settings, "paper_open_families", "swing")
+    assert "paper_open_families" in apply(settings, {"paper_open_families": "swing,intraday"})
+    assert settings.paper_open_families == "swing,intraday"
