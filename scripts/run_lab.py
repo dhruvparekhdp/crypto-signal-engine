@@ -61,6 +61,9 @@ EXITS = {
                        ("slow", ((1.5, 0.0), (2.0, 0.5), (2.5, 1.0))),
                        ("fast", ((0.75, 0.0), (1.25, 0.5), (1.75, 1.0), (2.25, 1.5))))
        for cf in (None, 60, 240) for bf in (0.0, 0.25)},
+    # 15 Oct 2026 intraday research (owner: 1h minimum): two exit styles for 1h/2h signals
+    "intra_a": ExitModel(stop_atr=2.0, rr=2.0, max_hold_min=1440),
+    "intra_b": ExitModel(stop_atr=1.5, rr=3.0, max_hold_min=2880),
     "daily_trend": ExitModel(stop_atr=3.0, rr=3.0, max_hold_min=43200),     # Q-7: daily bars need a 30-day limit
     "swing_trail": ExitModel(stop_atr=3.0, rr=10.0, be_trigger_r=1.0, trail_atr=3.0, trail_after_r=1.0,
                              max_hold_min=10080),
