@@ -313,6 +313,11 @@ FIELDS: tuple[Field, ...] = (
           kind="float", lo=0.0, hi=0.5),
     Field("delta_india_kill_switch", "delta", "Delta KILL SWITCH",
           "ON = no new Delta orders at all. Open positions keep their exchange stops.", kind="bool"),
+    Field("delta_india_daily_loss_pct", "delta", "Delta daily loss limit (share of wallet)",
+          "No new Delta orders for the rest of the UTC day once the wallet is this far below the day's start. "
+          "0.10 = Rs50 on Rs500.", kind="float", lo=0.0, hi=0.5),
+    Field("delta_india_min_wallet_inr", "delta", "Delta wallet floor (Rs)",
+          "No new Delta orders at all once the wallet is below this. 0 = off.", kind="float", lo=0.0, hi=1e7),
     Field("delta_india_live_orders", "delta", "Allow live Delta orders (second gate)",
           "Even when mode is live, orders are blocked until this is ON. Keep OFF until you "
           "explicitly want real INR futures fills.", kind="bool"),

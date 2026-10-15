@@ -277,6 +277,10 @@ class Settings(BaseSettings):
     # Server-side backstop on Delta: the exchange stop trails the engine's profit lock by this many R, so an engine
     # outage cannot give back everything (the engine's 1h-close rule stays the primary exit)
     delta_india_backstop_r: float = 0.5
+    # Automatic loss guard on the Delta book (live and testnet): no NEW orders once the wallet is this share below
+    # the day's start (UTC), or below the floor. Open positions keep their stops. Rs500 trial: Rs50/day, stop at Rs350.
+    delta_india_daily_loss_pct: float = 0.10
+    delta_india_min_wallet_inr: float = 350.0
     # 14 Oct 2026 owner: strong-confidence intraday trades in paper too, with their own limits so they cannot crowd
     # out the swing book: confidence >= intraday_min_confidence, at most intraday_max_open open, margin <= 10%
     paper_open_families: str = "swing"          # production: "swing,intraday" on /settings (owner 14 Oct)

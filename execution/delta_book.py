@@ -74,7 +74,8 @@ class DeltaBook:
                  live_orders: bool = False, risk_pct: float = 0.01,
                  max_open: int = 3, usd_inr: float = 83.0,
                  shadow_path: Path = SHADOW_PATH, state_path: Path = STATE_PATH,
-                 kill_switch: bool = False, backstop_r: float = 0.5):
+                 kill_switch: bool = False, backstop_r: float = 0.5,
+                 daily_loss_pct: float = 0.0, min_wallet_inr: float = 0.0):
         self.client = client
         self.mode = mode
         self.live_orders = live_orders
@@ -85,6 +86,8 @@ class DeltaBook:
         self.state_path = state_path
         self.kill_switch = kill_switch
         self.backstop_r = backstop_r
+        self.daily_loss_pct = daily_loss_pct      # no new orders once the wallet is this far below today's start
+        self.min_wallet_inr = min_wallet_inr      # no new orders at all once the wallet is below this
         self.retry_delay_s = 1.0
 
     @property
@@ -154,6 +157,31 @@ class DeltaBook:
         return MirrorPlan(True, "", self.mode, binance_symbol, delta_sym, product.id, side,
                           size, entry, stop, target, notional, risk, inr)
 
+    async def _loss_guard(self) -> str:
+        """'' when new orders may go out, else the reason they may not. The day's starting wallet (UTC) is stored
+        in the state file; an unreadable wallet blocks new orders (fail closed) but never touches open ones."""
+        if self.daily_loss_pct <= 0 and self.min_wallet_inr <= 0:
+            return ""
+        try:
+            if hasattr(self.client, "wallet_total_inr"):
+                wallet = await self.client.wallet_total_inr()
+            else:
+                wallet = await self.client.inr_available()
+        except DeltaError:
+            return "wallet_unreadable"
+        if self.min_wallet_inr > 0 and wallet < self.min_wallet_inr:
+            return "wallet_floor"
+        if self.daily_loss_pct > 0:
+            today = time.strftime("%Y-%m-%d", time.gmtime())
+            state = self._load_state()
+            day = state.get("day") or {}
+            if day.get("date") != today or not day.get("start_inr"):
+                state["day"] = day = {"date": today, "start_inr": wallet}
+                self._save_state(state)
+            if wallet < float(day["start_inr"]) * (1 - self.daily_loss_pct):
+                return "daily_loss_limit"
+        return ""
+
     async def on_paper_open(self, binance_symbol: str, side_word: str, entry: float,
                             stop: float, target: float, signal_type: str = "") -> MirrorPlan:
         """Called after a paper swing position opens."""
@@ -163,6 +191,11 @@ class DeltaBook:
             self._append_shadow({"t": int(time.time() * 1000), "event": "refused", "reason": "kill_switch",
                                  "binance_symbol": binance_symbol})
             return MirrorPlan(False, "kill_switch")
+        guard = await self._loss_guard() if self.live else ""
+        if guard:
+            self._append_shadow({"t": int(time.time() * 1000), "event": "refused", "reason": guard,
+                                 "binance_symbol": binance_symbol})
+            return MirrorPlan(False, guard)
         plan = await self.plan(binance_symbol, side_word, entry, stop, target)
         row = {**asdict(plan), "t": int(time.time() * 1000), "signal_type": signal_type,
                "placed": False}
@@ -316,6 +349,7 @@ class DeltaBook:
         is removed and its leftover orders cancelled; a size mismatch is reported."""
         if not self.live:
             return []
+        await self._loss_guard()               # rolls the day's starting wallet even on days with no new trade
         state = self._load_state()
         events = []
         for delta_sym, pos in list((state.get("positions") or {}).items()):

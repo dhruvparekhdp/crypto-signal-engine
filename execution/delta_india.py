@@ -122,6 +122,26 @@ class DeltaIndia:
                 rate = inr / native
         return total, rate
 
+    async def wallet_total_inr(self) -> float:
+        """Whole wallet in INR including margin held by open positions (realised losses lower it, open trades do
+        not hide it the way the available balance does). Used by the loss guard, not for sizing."""
+        total = 0.0
+        for b in await self.balances():
+            try:
+                if b.get("balance_inr") is not None:
+                    total += float(b["balance_inr"])
+                    continue
+                bal = float(b.get("balance") or 0)
+                avail = float(b.get("available_balance") or 0)
+                avail_inr = float(b.get("available_balance_inr") or 0)
+            except (TypeError, ValueError):
+                continue
+            if (b.get("asset_symbol") or "").upper() == "INR":
+                total += bal
+            elif avail > 0 and avail_inr > 0:
+                total += bal * avail_inr / avail
+        return total
+
     async def inr_available(self) -> float:
         """Available balance in INR (all assets, as Delta values them); falls back to an INR row."""
         total, _ = await self.wallet_inr()
