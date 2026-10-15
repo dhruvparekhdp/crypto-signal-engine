@@ -21,7 +21,8 @@ def test_search_roles_have_a_non_groq_fallback_and_run_less_often():
     for role in ("llm_chain_briefing", "llm_chain_attribution", "llm_chain_briefing_calm"):
         chain = Settings.model_fields[role].default
         assert "openrouter:" in chain and chain.strip().endswith("+search")
-    assert Settings.model_fields["market_briefing_minutes"].default == 60
+    # 15 Oct 2026: briefing news had no predictive value (rank corr -0.03, 1,214 headlines) - a 3-hourly risk radar
+    assert Settings.model_fields["market_briefing_minutes"].default == 180
     assert Settings.model_fields["move_attribution_minutes"].default == 180
 
 

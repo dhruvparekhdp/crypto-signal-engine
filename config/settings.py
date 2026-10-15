@@ -147,13 +147,15 @@ class Settings(BaseSettings):
     market_briefing_quiet_minutes: int = 120
     # Hourly: why each watchlist coin moved, and how our signals fared.
     llm_chain_attribution: str = (
-        "groq:openai/gpt-oss-20b+search, groq:openai/gpt-oss-120b+search")
+        "groq:openai/gpt-oss-20b+search, groq:openai/gpt-oss-120b+search, "
+        "openrouter:nvidia/nemotron-3-ultra-550b-a55b:free+search")
     move_attribution_enabled: bool = True
     # The event monitor: adaptive, jittered web checks with a daily cap.
     event_monitor_enabled: bool = True
     event_monitor_daily_cap: int = 30           # 104 searches/day found nothing new and spent Groq's daily quota
     llm_chain_briefing_calm: str = (
-        "groq:openai/gpt-oss-20b+search, groq:openai/gpt-oss-120b+search")
+        "groq:openai/gpt-oss-20b+search, groq:openai/gpt-oss-120b+search, "
+        "openrouter:nvidia/nemotron-3-ultra-550b-a55b:free+search")
     # Labelling past moves from the Binance lake (scripts/review_history.py).
     # Local first: it is bulk work and the free Groq requests are shared with
     # live trading. The biggest moves use web search to find that day's news.
