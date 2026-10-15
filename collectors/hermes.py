@@ -57,7 +57,12 @@ FEEDS: list[tuple[str, str]] = [
     ("coindesk", "https://www.coindesk.com/arc/outboundfeeds/rss/"),
     ("cointelegraph", "https://cointelegraph.com/rss"),
     ("bitcoinmagazine", "https://bitcoinmagazine.com/feed"),
-    ("yahoo_finance", "https://finance.yahoo.com/news/rssindex"),
+    # 15 Oct 2026 audit: finance.yahoo.com/news/rssindex returns 404 (284 failures a day); the headline feed works
+    ("yahoo_finance", "https://feeds.finance.yahoo.com/rss/2.0/headline?s=BTC-USD,ETH-USD,%5EGSPC&region=US&lang=en-US"),
+    ("theblock", "https://www.theblock.co/rss.xml"),
+    ("decrypt", "https://decrypt.co/feed"),
+    ("cryptoslate", "https://cryptoslate.com/feed/"),
+    ("cnbc_economy", "https://www.cnbc.com/id/20910258/device/rss/rss.html"),
 ]
 
 # A closed vocabulary, for the reason every other vocabulary in this codebase
