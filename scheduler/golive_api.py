@@ -82,8 +82,11 @@ def evaluate(s: dict) -> dict:
          f"{j['days_running']} days, {j['opens']} opens, {j['amends']} stop moves, {j['engine_closes']} closes", "system")
     gate("No demo order errors in 24 h", j["errors_24h"] == 0,
          "clean" if j["errors_24h"] == 0 else f"{j['errors_24h']} errors: {j['last_error']}", "system")
-    gate("Real-money key saved (trading, IP 52.62.37.4)", True if s["live_key_set"] else None,
-         "key saved - trading permission + IP whitelist confirmed by the owner" if s["live_key_set"]
+    # a saved key proves nothing about its permissions (the 13 Oct key is read-only): green only once live orders run
+    gate("Real-money key with trading permission (IP 52.62.37.4)", True if (s["live_key_set"] and s["mode"] == "live"
+                                                                            and s["live_orders"]) else None,
+         ("a key is saved - owner confirms it has trading permission and the 52.62.37.4 whitelist (the 13 Oct key "
+          "was read-only)") if s["live_key_set"]
          else "owner: create on Delta India with trading permission, whitelist 52.62.37.4, save on /keys", "owner")
     w = s.get("live_wallet_inr")
     gate("Rs500 deposited", (w >= 450) if isinstance(w, (int, float)) else None,

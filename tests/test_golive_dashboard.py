@@ -58,3 +58,8 @@ def test_wallet_unknown_and_intraday_are_flagged():
 def test_journal_counts_errors_only_in_the_last_day():
     j = journal_stats([{"t": NOW - 2 * DAY, "error": "old"}, {"t": NOW - 60_000, "error": "delta 400: x"}], NOW)
     assert j["errors_24h"] == 1 and j["last_error"].startswith("delta 400")
+
+
+def test_a_saved_key_alone_is_not_a_trading_key():
+    r = evaluate(_snap(live_key_set=True))
+    assert _gate(r, "Real-money key")["status"] == "wait"
