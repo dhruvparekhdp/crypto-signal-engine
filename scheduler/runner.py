@@ -1467,8 +1467,14 @@ class AppRunner:
     async def _delta_reconcile_job(self) -> None:
         """Every few minutes in live mode: Delta's own positions vs ours; alert on anything Delta closed itself."""
         events = await self._delta_call("reconcile") or []
+        # a read error (exchange 'unavailable') alerts only when the same contract fails two runs in a row
+        fails = getattr(self, "_delta_read_fails", {})
+        failed_now = {e.get("delta_symbol") for e in events if e.get("event") == "reconcile_error"}
+        self._delta_read_fails = {s: fails.get(s, 0) + 1 for s in failed_now}
         for e in events:
             log.warning("delta_reconcile", **{k: v for k, v in e.items() if k != "event"}, kind=e.get("event"))
+            if e.get("event") == "reconcile_error" and self._delta_read_fails.get(e.get("delta_symbol"), 0) < 2:
+                continue
             try:
                 await self.notifier.send_text(f"⚖️ Delta India reconcile: {e.get('event')} {e.get('delta_symbol')} "
                                               + ", ".join(f"{k}={v}" for k, v in e.items()

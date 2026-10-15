@@ -355,9 +355,14 @@ class DeltaBook:
         for delta_sym, pos in list((state.get("positions") or {}).items()):
             try:
                 size = await self.client.position_size(pos["product_id"])
-            except DeltaError as e:
-                events.append({"delta_symbol": delta_sym, "event": "reconcile_error", "error": str(e)[:160]})
-                continue
+            except DeltaError:
+                # one retry: the demo answered {'code': 'unavailable'} for a single run on 15 Oct 12:25 UTC
+                await asyncio.sleep(self.retry_delay_s * 2)
+                try:
+                    size = await self.client.position_size(pos["product_id"])
+                except DeltaError as e:
+                    events.append({"delta_symbol": delta_sym, "event": "reconcile_error", "error": str(e)[:160]})
+                    continue
             if size == 0:
                 try:
                     await self.client.cancel_all(pos["product_id"])

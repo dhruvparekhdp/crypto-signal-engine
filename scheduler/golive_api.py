@@ -44,11 +44,14 @@ def journal_stats(rows: list[dict], now_ms: int) -> dict:
     closes = [r for r in rows if r.get("event") == "close" and r.get("placed")]
     on_exchange = [r for r in rows if r.get("event") == "closed_on_exchange"]
     restored = [r for r in rows if r.get("event") == "stop_restored"]
-    errors_24h = [r for r in rows if r.get("error") and now_ms - int(r.get("t") or 0) <= DAY_MS]
+    recent = [r for r in rows if r.get("error") and now_ms - int(r.get("t") or 0) <= DAY_MS]
+    # order errors block the gate; a failed position read (exchange blip, retried next run) is shown separately
+    errors_24h = [r for r in recent if r.get("event") != "reconcile_error"]
+    read_errors_24h = [r for r in recent if r.get("event") == "reconcile_error"]
     first = min((int(r["t"]) for r in rows if r.get("t")), default=None)
     return {"opens": len(opens), "amends": len(amends), "engine_closes": len(closes),
             "exchange_closes": len(on_exchange), "stops_restored": len(restored),
-            "errors_24h": len(errors_24h), "last_error": (errors_24h[-1].get("error", "")[:160] if errors_24h else ""),
+            "errors_24h": len(errors_24h), "read_errors_24h": len(read_errors_24h), "last_error": (errors_24h[-1].get("error", "")[:160] if errors_24h else ""),
             "days_running": round((now_ms - first) / DAY_MS, 1) if first else 0.0,
             "last": [{k: r.get(k) for k in ("t", "event", "delta_symbol", "side", "size", "reason", "placed", "error")}
                      for r in rows[-12:]]}
@@ -101,6 +104,9 @@ def evaluate(s: dict) -> dict:
           f"{s['mode']}" + (" · live orders ON" if s["live_orders"] else " · live orders OFF"))
     check("delta", "Kill switch", "warn" if s["kill_switch"] else "ok", "ON - no new orders" if s["kill_switch"] else "off")
     check("delta", "Demo positions", "ok", f"{s['demo_open']} open on the demo account")
+    re24 = j.get("read_errors_24h", 0)
+    check("delta", "Exchange position reads (24 h)", "ok" if re24 == 0 else "warn",
+          "all answered" if re24 == 0 else f"{re24} failed reads (exchange 'unavailable'; retried, alert after 2 runs)")
     hf = s.get("hf") or {}
     if hf.get("error"):
         check("ai", "HF Space", "fail", hf["error"][:120])
