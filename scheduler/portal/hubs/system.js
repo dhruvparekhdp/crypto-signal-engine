@@ -63,6 +63,66 @@
         ], ev.upcoming.slice(0, 8), { minWidth: 360 }) : C.empty("Nothing scheduled."));
     }
   });
+  // ------------------------------------------------------------- go-live (owner, 15 Oct 2026)
+  var GL_ICON = { ok: "✔", fail: "✖", wait: "…", warn: "!" };
+  function glTag(st) { return C.tag(GL_ICON[st] + " " + String(st).toUpperCase(), st === "ok" ? "" : st === "fail" ? "skip" : "wait"); }
+  UI.widget("golive-verdict", {
+    title: "REAL MONEY · ₹500 TRIAL", uses: ["golive"],
+    render: function (el, D, ctx) {
+      var g = D.golive; if (!g) { el.innerHTML = C.state(D, "golive"); return; }
+      ctx.right("updated " + U.hms(new Date(g.generated_ms)) + " · refreshes every 20 s");
+      var ok = (g.gates || []).filter(function (x) { return x.status === "ok"; }).length;
+      el.innerHTML = C.flag(g.tone === "ok" ? "ok" : g.tone === "fail" ? "red" : "amber", g.verdict,
+        ok + " of " + (g.gates || []).length + " gates met. Real orders need mode=live, the second gate, and the owner's yes after the REAL MONEY alert.", "") +
+        C.tiles([["DELTA MODE", String(g.mode || "—").toUpperCase()],
+                 ["LIVE WALLET", g.live_wallet_inr != null ? U.inr(g.live_wallet_inr) : "—", "real account, read-only"],
+                 ["DEMO DAYS", g.journal ? g.journal.days_running : "—"],
+                 ["DEMO ERRORS 24H", g.journal ? g.journal.errors_24h : "—", "", g.journal && g.journal.errors_24h ? "dn" : ""]]);
+    }
+  });
+  UI.widget("golive-gates", {
+    title: "GATES BEFORE REAL MONEY", uses: ["golive"],
+    render: function (el, D) {
+      var g = D.golive; if (!g) { el.innerHTML = C.state(D, "golive"); return; }
+      el.innerHTML = C.table([
+        { label: "STATUS", w: "92px", cell: function (r) { return glTag(r.status); } },
+        { label: "GATE", w: "minmax(0,1.2fr)", cell: function (r) { return "<b>" + e(r.name) + "</b>"; } },
+        { label: "DETAIL", w: "minmax(0,2fr)", cell: function (r) { return '<span class="small">' + e(r.detail) + "</span>"; } },
+        { label: "WHO", w: "70px", cell: function (r) { return '<span class="dim">' + e(r.who) + "</span>"; } }
+      ], g.gates || [], { minWidth: 560 });
+    }
+  });
+  UI.widget("golive-checks", {
+    title: "SYSTEM CHECKS · LIVE", uses: ["golive"],
+    mount: function (el, ctx) { ctx.s.t = { sort: null }; },
+    on: { sort: function (el, ev, t, ctx) { C.sortState(ctx.s.t, t.dataset.k); ctx.render(); } },
+    render: function (el, D, ctx) {
+      var g = D.golive; if (!g) { el.innerHTML = C.state(D, "golive"); return; }
+      var rank = { fail: 0, warn: 1, wait: 2, ok: 3 }, rows = (g.checks || []).slice().sort(function (a, b) { return rank[a.status] - rank[b.status]; });
+      ctx.right(rows.filter(function (r) { return r.status !== "ok"; }).length + " need attention");
+      el.innerHTML = C.table([
+        { label: "STATUS", w: "92px", cell: function (r) { return glTag(r.status); }, sort: function (r) { return rank[r.status]; } },
+        { label: "AREA", w: "70px", cell: function (r) { return '<span class="dim">' + e(r.area) + "</span>"; }, sort: function (r) { return r.area; } },
+        { label: "CHECK", w: "minmax(0,1fr)", cell: function (r) { return "<b>" + e(r.name) + "</b>"; } },
+        { label: "DETAIL", w: "minmax(0,2fr)", cell: function (r) { return '<span class="small">' + e(r.detail) + "</span>"; } }
+      ], rows, { state: ctx.s.t, minWidth: 560 });
+    }
+  });
+  UI.widget("golive-journal", {
+    title: "DEMO ORDER JOURNAL · LAST 12", uses: ["golive"],
+    render: function (el, D) {
+      var g = D.golive; if (!g || !g.journal) { el.innerHTML = C.state(D, "golive"); return; }
+      var j = g.journal;
+      el.innerHTML = C.tiles([["OPENS", j.opens], ["STOP MOVES", j.amends], ["ENGINE CLOSES", j.engine_closes], ["EXCHANGE CLOSES", j.exchange_closes], ["STOPS RESTORED", j.stops_restored]]) +
+        C.table([
+          { label: "TIME", w: "96px", cell: function (r) { return '<span class="dim">' + (r.t ? U.hms(new Date(r.t)) : "—") + "</span>"; } },
+          { label: "EVENT", w: "minmax(0,1fr)", cell: function (r) { return "<b>" + e(r.event || (r.side ? "open " + r.side : "intent")) + "</b>"; } },
+          { label: "CONTRACT", w: "90px", cell: function (r) { return e(r.delta_symbol || "—"); } },
+          { label: "RESULT", w: "minmax(0,1.4fr)", cell: function (r) { return r.error ? '<span class="dn small">' + e(String(r.error).slice(0, 80)) + "</span>" : '<span class="small">' + e((r.placed ? "placed" : "not placed") + (r.size ? " · " + r.size + " ct" : "") + (r.reason ? " · " + r.reason : "")) + "</span>"; } }
+        ], (j.last || []).slice().reverse(), { minWidth: 460, empty: "No demo orders yet." });
+    }
+  });
+  UI.view("system/golive", [[{ w: "golive-verdict", size: "grow" }, { w: "budget", size: "side" }], ["golive-gates"], [{ w: "golive-checks", size: "grow" }, { w: "events", size: "side" }], ["golive-journal"]]);
   UI.view("system/health", [[{ w: "engine", size: "grow" }, { w: "budget", size: "side" }], [{ w: "scan", size: "grow" }, { w: "events", size: "side" }]]);
 
   // ------------------------------------------------------------- data (was /data)

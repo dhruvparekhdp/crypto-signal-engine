@@ -34,6 +34,7 @@
       { id: "v2", label: "v2 shadow", url: "/v2" }
     ] },
     { id: "system", label: "System", tabs: [
+      { id: "golive", label: "Go-live", native: true },
       { id: "health", label: "Health", native: true },
       { id: "data", label: "Data", native: true, aliases: ["/data"] },
       { id: "diagnostics", label: "Diagnostics", native: true },

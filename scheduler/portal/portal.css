@@ -185,7 +185,7 @@ main section{display:flex;flex-direction:column;gap:24px}
 .side-tag{font-weight:700;padding:2px 6px;text-align:center;background:var(--up);color:var(--on-acc)}
 .side-tag.short{background:var(--dn)}
 .st-tag{font-weight:700;padding:4px 6px;text-align:center;border:2px solid var(--up);color:var(--up)}
-.st-tag.skip{border-color:var(--dn);color:var(--dn)} .st-tag.neutral{border-color:var(--dim);color:var(--dim)}
+.st-tag.skip{border-color:var(--dn);color:var(--dn)} .st-tag.wait{border-color:var(--acc);border-style:dashed;color:var(--acc)} .st-tag.neutral{border-color:var(--dim);color:var(--dim)}
 
 /* ask */
 .ask-btns{display:flex;flex-wrap:wrap;gap:8px}
