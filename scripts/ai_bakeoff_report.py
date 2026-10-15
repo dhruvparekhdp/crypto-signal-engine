@@ -100,6 +100,16 @@ def main() -> None:
     sample = json.load(open(a.sample))
     results, traps = [], []
     for path in a.results:
+        if path.endswith(".jsonl"):                 # streamed by ai_bakeoff.py: one model (or trap) per line
+            for line in open(path):
+                line = line.strip()
+                if not line.startswith("{"):
+                    continue
+                d = json.loads(line)
+                if d.get("result"):
+                    results.append(d["result"])
+                traps += d.get("traps") or []
+            continue
         r = json.load(open(path))
         if isinstance(r, dict):
             results += r.get("results", [])
@@ -123,7 +133,8 @@ def main() -> None:
             "rank_corr_4h", "rank_corr_24h", "hit_24h_confident", "agreement"]
     print(pd.DataFrame(scored).reindex(columns=cols).to_string(index=False))
     print("\nskipped (no key):", ", ".join(skipped) or "none")
-    print(pd.DataFrame(tt)[["model", "kind", "verdict", "ms"]].to_string(index=False))
+    if tt:
+        print(pd.DataFrame(tt)[["model", "kind", "verdict", "ms"]].to_string(index=False))
     print("saved", a.out)
 
 

@@ -2412,6 +2412,23 @@ class AppRunner:
         except Exception:
             log.exception("news_sentiment_job_failed")
 
+    async def _llm_check_headlines(self, items: list[dict]) -> None:
+        """One batched LLM check of the FinBERT-scored headlines that could pause trading (see headline_rules)."""
+        from analysis.headline_rules import REVIEW_SYSTEM, apply_review, needs_review
+        from collectors.hermes import EVENT_TYPES, HIGH_IMPACT
+        from collectors.llm_client import ask_json
+        flagged = [it for it in items if needs_review(it, HIGH_IMPACT)][:30]
+        if not flagged:
+            return
+        user = "\n".join(f"{k + 1}. [{it.get('source')}] {it.get('headline')}" for k, it in enumerate(flagged))
+        try:
+            reply = await ask_json("news_scoring", REVIEW_SYSTEM.format(types=", ".join(EVENT_TYPES)), user,
+                                   max_tokens=80 * len(flagged) + 100, temperature=0.0, timeout=30.0)
+            n = apply_review(flagged, (reply.data or {}).get("items") if reply else [], EVENT_TYPES)
+            log.info("headlines_llm_checked", flagged=len(flagged), checked=n, served_by=reply.served_by if reply else "")
+        except Exception as exc:  # noqa: BLE001 - FinBERT's score stands
+            log.warning("headlines_llm_check_failed", error=str(exc)[:140])
+
     async def _hermes_rss_job(self) -> None:
         """Fetch RSS feeds and score new headlines."""
         if not settings.news_sentiment_enabled:
@@ -2477,6 +2494,7 @@ class AppRunner:
                         scored_items.append(headline.as_payload())
                     new_headlines = []
                     log.info("headlines_scored_by_space", n=len(scored_items))
+                    await self._llm_check_headlines(scored_items)
                 except Exception as exc:
                     log.warning("hf_space_classify_failed", error=str(exc)[:160], fallback="llm")
                     scored_items = []

@@ -77,3 +77,48 @@ def combine(probs: dict, headline: str) -> dict:
     sym = "all" if ev in MACRO else symbol(headline)
     return {"score": round(max(-1.0, min(1.0, score)), 3), "confidence": round(max(0.0, min(1.0, conf)), 3),
             "event_type": ev, "symbol": sym}
+
+
+# ── LLM check of the headlines that matter (15 Oct 2026 bake-off) ─────────────
+# FinBERT + rules let 42% of known noise through; Groq gpt-oss-20b caught 92% (gpt-oss-120b 100%) at ~1 s per
+# 30 headlines. A false "high impact" headline pauses trading, so every headline the rules call high-impact or
+# strong gets one batched LLM check; the rest keep the free FinBERT score.
+REVIEW_SYSTEM = (
+    "You check news for a crypto trading desk. For each numbered headline decide: relevant (could it move BTC or "
+    "the major coins within 24 hours?), score from -1 (bearish for crypto) to +1 (bullish), confidence 0..1, and "
+    "event_type from: {types}. Judge only from the headline; routine or off-topic items are noise with score 0. "
+    "Reply with JSON only: {{\"items\": [{{\"i\": 1, \"relevant\": true, \"score\": -0.4, \"confidence\": 0.7, "
+    "\"event_type\": \"etf_flow\"}}]}} with one entry for every headline.")
+
+
+def needs_review(item: dict, high_impact: set[str], min_abs_score: float = 0.5) -> bool:
+    """A FinBERT-scored headline worth an LLM check: tagged high-impact, or a strong score."""
+    return item.get("event_type") in high_impact or abs(float(item.get("score") or 0)) >= min_abs_score
+
+
+def apply_review(items: list[dict], reply_items: list, event_types: list[str]) -> int:
+    """Overwrite score/confidence/event_type with the LLM's answer for each numbered headline (1-based, in order).
+    Irrelevant -> noise with score 0. Malformed entries are ignored (the FinBERT score stays). Returns the count."""
+    n = 0
+    for x in reply_items or []:
+        if not isinstance(x, dict):
+            continue
+        try:
+            k = int(x.get("i")) - 1
+            score = max(-1.0, min(1.0, float(x.get("score") or 0)))
+            conf = max(0.0, min(1.0, float(x.get("confidence") or 0)))
+        except (TypeError, ValueError):
+            continue
+        if not 0 <= k < len(items):
+            continue
+        rel = x.get("relevant")
+        rel = rel if isinstance(rel, bool) else str(rel).lower() == "true"
+        et = str(x.get("event_type") or "").strip().lower()
+        it = items[k]
+        if not rel or et == "noise":
+            it.update(score=0.0, confidence=conf, event_type="noise")
+        else:
+            it.update(score=score, confidence=conf, event_type=et if et in event_types else it.get("event_type", "macro_other"))
+        it["model"] = (it.get("model") or "") + "+llm"
+        n += 1
+    return n

@@ -36,7 +36,7 @@ PRICE_USER = ("Current time: {now} UTC. What is the BTC/USD price right now? Rep
 CANDIDATES = [
     # provider, model, does it search?, seconds to wait after each call (free-tier pacing)
     ("groq", "openai/gpt-oss-120b", False, 40), ("groq", "openai/gpt-oss-20b", False, 40),
-    ("groq", "qwen/qwen3.8-27b", False, 40),
+    ("groq", "qwen/qwen3.8-27b", False, 40, 10),
     ("openrouter", "nvidia/nemotron-3-ultra-550b-a55b:free", False, 4),
     ("openrouter", "nvidia/nemotron-3-super-120b-a12b:free", False, 4),
     ("openrouter", "google/gemma-4-31b-it:free", False, 4),
@@ -47,7 +47,7 @@ CANDIDATES = [
     ("anthropic", "claude-haiku-5-5", False, 2), ("anthropic", "claude-sonnet-5-5", False, 2),
 ]
 SEARCH_CANDIDATES = [("groq", "openai/gpt-oss-120b+search", 40), ("groq", "openai/gpt-oss-20b+search", 40),
-                     ("openrouter", "nvidia/nemotron-3-super-120b-a12b:free+search", 4),
+                     ("openrouter", "nvidia/nemotron-3-ultra-550b-a55b:free+search", 4),
                      ("hf", "meta-llama/Llama-3.1-8B-Instruct+search", 3)]
 
 
@@ -63,7 +63,10 @@ async def _call(provider_name: str, model: str, system: str, user: str, max_toke
         else:
             text = await _call_openai_shaped(p, model, system, user, max_tokens, 0.0, timeout)
         data = _extract_json(text)
-        return {"ok": bool(data), "ms": int((time.perf_counter() - t) * 1000), "data": data,
+        repaired = False
+        if not data and text.lstrip().startswith('{"{'):
+            data, repaired = _extract_json(text.lstrip()[2:]), True
+        return {"ok": bool(data), "repaired": repaired, "ms": int((time.perf_counter() - t) * 1000), "data": data,
                 "tokens_out_est": len(text) // 4, "error": "" if data else "no JSON: " + text[:120]}
     except Exception as e:  # noqa: BLE001
         return {"ok": False, "ms": int((time.perf_counter() - t) * 1000), "data": {}, "error": str(e)[:200]}
@@ -97,23 +100,29 @@ async def main() -> None:
     apply(settings, await _stored())
     from collectors.llm_client import PROVIDERS
     sample = json.load(open(sys.argv[1])) if len(sys.argv) > 1 else json.load(sys.stdin)
-    only = set(sys.argv[2].split(",")) if len(sys.argv) > 2 else None
+    only = set(sys.argv[2].split(",")) if len(sys.argv) > 2 else None      # model names to run
     now = time.strftime("%Y-%m-%d %H:%M", time.gmtime())
     out = {"started": now, "results": [await finbert(sample)], "traps": []}
+    print(json.dumps({"result": out["results"][0], "traps": []}), flush=True)
     print("finbert done", file=sys.stderr, flush=True)
-    for provider, model, _search, pace in CANDIDATES:
-        if not PROVIDERS[provider].configured or (only and provider not in only):
+    for cand in CANDIDATES:
+        provider, model, _search, pace = cand[:4]
+        size = cand[4] if len(cand) > 4 else 30
+        if only and model not in only:
+            continue
+        if not PROVIDERS[provider].configured:
             out["results"].append({"provider": provider, "model": model, "skipped": "no key saved"})
+            print(json.dumps({"result": out["results"][-1], "traps": []}), flush=True)
             continue
         res = {"provider": provider, "model": model, "calls": [], "items": []}
-        for b in range(0, len(sample), 30):
-            batch = sample[b:b + 30]
+        for b in range(0, len(sample), size):
+            batch = sample[b:b + size]
             user = "\n".join(f"{s['i']}. [{s['source']}, {s['published_at']} UTC] {s['headline']}" for s in batch)
-            r = await _call(provider, model, NEWS_SYSTEM, user, 2400, 120)
+            r = await _call(provider, model, NEWS_SYSTEM, user, 80 * size, 120)
             res["calls"].append({k: v for k, v in r.items() if k != "data"})
             got = (r["data"] or {}).get("items") or []
             res["items"] += [x for x in got if isinstance(x, dict)]
-            print(provider, model, "batch", b // 30 + 1, "ok" if r["ok"] else r["error"][:80], r["ms"], "ms",
+            print(provider, model, "batch", b // size + 1, "ok" if r["ok"] else r["error"][:80], r["ms"], "ms",
                   file=sys.stderr, flush=True)
             await asyncio.sleep(pace)
             if not r["ok"] and b == 0 and "429" in r["error"]:
@@ -123,15 +132,17 @@ async def main() -> None:
             out["traps"].append({"provider": provider, "model": model, "kind": kind, **r})
             await asyncio.sleep(pace)
         out["results"].append(res)
+        print(json.dumps({"result": res, "traps": [t for t in out["traps"] if t["model"] == model]}), flush=True)
     for provider, model, pace in SEARCH_CANDIDATES:
-        if not PROVIDERS[provider].configured or (only and provider not in only):
+        if not PROVIDERS[provider].configured or (only and model not in only):
             continue
         for kind, user in (("trap", TRAP_USER), ("price", PRICE_USER)):
             r = await _call(provider, model, TRAP_SYSTEM, user.format(now=time.strftime("%Y-%m-%d %H:%M", time.gmtime())), 600, 90)
             out["traps"].append({"provider": provider, "model": model, "kind": kind, **r})
+            print(json.dumps({"traps": [out["traps"][-1]]}), flush=True)
             print("search", provider, model, kind, "ok" if r["ok"] else r["error"][:80], file=sys.stderr, flush=True)
             await asyncio.sleep(pace)
-    print(json.dumps(out))
+    print(json.dumps({"done": True}), flush=True)
 
 
 if __name__ == "__main__":

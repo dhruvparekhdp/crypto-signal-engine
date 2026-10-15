@@ -104,11 +104,13 @@ async def _run_job(space_result, monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_job_scores_the_batch_on_the_space_without_llm_calls(monkeypatch):
+async def test_job_scores_the_batch_on_the_space_with_one_batched_llm_check(monkeypatch):
+    # 15 Oct 2026: strong / high-impact headlines get ONE batched LLM check (not one call per headline); a reply
+    # without usable items leaves FinBERT's scores in place
     probs = AsyncMock(return_value=[{"positive": 0.9, "negative": 0.05, "neutral": 0.05},
                                     {"positive": 0.05, "negative": 0.9, "neutral": 0.05}])
     rows, llm = await _run_job(probs, monkeypatch)
-    assert llm.await_count == 0 and probs.await_count == 1
+    assert llm.await_count == 1 and probs.await_count == 1
     by = {r.headline: r for r in rows}
     assert by["Bitcoin ETF sees record inflows"].event_type == "etf_flow" and by["Fed hikes rates by 50 bps"].score < 0
     assert {r.model for r in rows} == {"hf/finbert+rules"}
