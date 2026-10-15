@@ -37,7 +37,8 @@ BRIEFING_SYSTEM = (
     "and trade policy, sanctions, major regulation, ETF flows, big exchange "
     "hacks or outages, large liquidations. Only include things you found in "
     "search results from the last 12 hours. If nothing important happened, "
-    "say so and return an empty list — do not pad it.\n\n"
+    "say so and return an empty list — do not pad it. Never report a result for a release that is scheduled "
+    "later than the current time (no 'actual vs forecast' before it is published); leave upcoming events out.\n\n"
     "Be specific with concrete numbers: state BTC and ETH price changes (e.g. 'BTC +2.1% to $83.4k'), "
     "exact interest rate numbers, ETF net inflow/outflow dollar amounts, or liquidation totals. "
     "Vague summaries like 'the market is relatively stable' are strictly prohibited — cite the real numbers.\n\n"
@@ -86,12 +87,31 @@ def parse_briefing(data: dict) -> tuple[float, str, list[dict]]:
     return tone, summary, events
 
 
+def _parse_when(text: str) -> datetime | None:
+    """A model's ISO time as naive UTC, or None when it is missing or unreadable."""
+    if not text:
+        return None
+    try:
+        t = datetime.fromisoformat(text.strip().replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return t.astimezone(UTC).replace(tzinfo=None) if t.tzinfo else t
+
+
 def as_news_items(events: list[dict], model: str) -> list[dict]:
     """Briefing events in the shape /api/sentiment/ingest and the repository take."""
     import re
-    now = datetime.now(UTC).replace(tzinfo=None).isoformat()
+    from datetime import timedelta
+    now_dt = datetime.now(UTC).replace(tzinfo=None)
+    now = now_dt.isoformat()
     items = []
     for e in events:
+        when = _parse_when(e["when"])
+        if when is not None and when > now_dt + timedelta(minutes=15):
+            # dated in the future: a scheduled release or an invented result (15 Oct 2026: PPI "0.6% vs 0.4%"
+            # four hours before the release) - never news; the event calendar handles scheduled releases
+            log.info("briefing_future_event_dropped", headline=e["headline"][:80], when=e["when"])
+            continue
         # Normalized headline hash for robust deduplication across model variations
         norm = re.sub(r'[^a-z0-9]', '', e["headline"].lower())
         key = hashlib.sha256(("briefing|" + norm).encode()).hexdigest()[:32]

@@ -37,6 +37,7 @@ HALF_LIFE_HOURS = 3.0
 WINDOW_HOURS = 12
 PRIOR_WEIGHT = 1.0
 MACRO_SHARE = 0.5
+FUTURE_TOLERANCE_H = 0.25     # clock skew between sources; anything later than this is not yet news
 
 # How much a headline from each source is trusted, relative to 1.0. The
 # central bank's own release is the event itself, not commentary on it.
@@ -70,7 +71,12 @@ def aggregate(rows, now: datetime) -> Reading:
             continue
         if r.published_at is None:
             continue
-        age_h = max(0.0, (now - r.published_at).total_seconds() / 3600)
+        age_h = (now - r.published_at).total_seconds() / 3600
+        # a "headline" dated in the future is a scheduled event or an invented result, not news (15 Oct 2026: the
+        # web briefing reported PPI "0.6% vs 0.4%" four hours before the release, and counted at full weight)
+        if age_h < -FUTURE_TOLERANCE_H:
+            continue
+        age_h = max(0.0, age_h)
         if age_h > WINDOW_HOURS:
             continue
         w = (max(0.0, min(1.0, r.confidence))
