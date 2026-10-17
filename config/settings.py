@@ -658,7 +658,10 @@ class Settings(BaseSettings):
     event_blackout_enabled: bool = True
     # During an event window, trade with the AI's bull/bear read of it
     # (analysis/event_bias.py) instead of pausing everything.
-    event_bias_mode: bool = True
+    # OFF since 18 Oct 2026: the AI briefing tone pointed the wrong way (risk-on -> BTC -0.39% next 24 h, risk-off
+    # -> +0.20%, right 29-38% of the time, 52 six-hour blocks), while swing entries inside release windows lost
+    # (-0.73R, 11 trades 2022-2025) and holding THROUGH releases was fine (+0.42R, 508). A pause is a plain skip.
+    event_bias_mode: bool = False
     # Research phase 1 (27 Sep): soften confidence during structural
     # institutional-flow windows — rebalancing, options/futures expiry,
     # thin weekend liquidity (analysis/event_calendar.caution). Never a

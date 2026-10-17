@@ -1273,6 +1273,10 @@ class AppRunner:
                     st = states.get(sym.lower())
                     price = st.current_price if st is not None and st.current_price > 0 else setup.close
                     sig = sb.to_signal(setup, price, now)
+                    if sig is not None and st is not None:
+                        # record the news score the engine had at signal time (18 Oct 2026: every swing signal
+                        # stored 0, so news vs trade outcome could never be measured)
+                        sig.sentiment_score = float(getattr(st, "sentiment_score", 0.0) or 0.0)
                     if sig is None:
                         log.info("swing_signal_stop_too_wide", symbol=sym, strategy=setup.strategy)
                         continue
