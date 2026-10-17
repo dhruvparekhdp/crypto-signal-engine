@@ -33,12 +33,22 @@ LIQ_BUFFER = 2.0             # liquidation at least 2x as far from entry as the 
 MAINT_MARGIN = 0.005         # Delta maintenance margin, roughly, for the liquidation distance estimate
 
 
-def leverage_for(stop_frac: float) -> int:
+MIN_LEVERAGE = 5             # owner, 17 Oct 2026: never below 5x
+
+
+def leverage_for(stop_frac: float, min_lev: int = MIN_LEVERAGE) -> int:
     """Highest whole leverage whose liquidation distance (~1/L - maintenance) is >= LIQ_BUFFER x the stop distance,
-    capped at MAX_LEVERAGE. A 6% stop -> 8x (liquidation ~12% away); 3% -> 10x; 15% -> 3x."""
+    between min_lev and MAX_LEVERAGE. Swing stops are capped at 8% (analysis/swing_book.MAX_STOP_PCT), so this is
+    6-10x in practice: 3% -> 10x, 5% -> 9x, 6% -> 8x, 8% -> 6x."""
     if stop_frac <= 0:
-        return 1
-    return int(max(1, min(MAX_LEVERAGE, math.floor(1 / (stop_frac * LIQ_BUFFER + MAINT_MARGIN)))))
+        return int(max(1, min_lev))
+    best = math.floor(1 / (stop_frac * LIQ_BUFFER + MAINT_MARGIN))
+    return int(max(min_lev, min(MAX_LEVERAGE, best)))
+
+
+def liquidation_distance(leverage: int) -> float:
+    """Rough share of price at which an isolated position at this leverage is liquidated."""
+    return 1 / max(1, leverage) - MAINT_MARGIN
 STATE_PATH = Path("data/delta_state.json")
 
 
@@ -88,7 +98,7 @@ class DeltaBook:
                  max_open: int = 3, usd_inr: float = 83.0,
                  shadow_path: Path = SHADOW_PATH, state_path: Path = STATE_PATH,
                  kill_switch: bool = False, backstop_r: float = 0.5,
-                 daily_loss_pct: float = 0.0, min_wallet_inr: float = 0.0):
+                 daily_loss_pct: float = 0.0, min_wallet_inr: float = 0.0, min_leverage: int = MIN_LEVERAGE):
         self.client = client
         self.mode = mode
         self.live_orders = live_orders
@@ -101,6 +111,7 @@ class DeltaBook:
         self.backstop_r = backstop_r
         self.daily_loss_pct = daily_loss_pct      # no new orders once the wallet is this far below today's start
         self.min_wallet_inr = min_wallet_inr      # no new orders at all once the wallet is below this
+        self.min_leverage = int(min_leverage)
         self.retry_delay_s = 1.0
 
     @property
@@ -151,7 +162,12 @@ class DeltaBook:
             product, entry, stop, sizing_equity, self.risk_pct, self.usd_inr)
         # never ask for more than the wallet can margin (testnet 14 Oct: a 0.3% stop asked for 1,491 contracts), at
         # the leverage this stop allows (the order is placed at exactly that leverage)
-        lev = leverage_for(abs(entry - stop) / entry if entry > 0 else 0.0)
+        stop_frac = abs(entry - stop) / entry if entry > 0 else 0.0
+        lev = leverage_for(stop_frac, self.min_leverage)
+        if liquidation_distance(lev) < stop_frac * 1.2:
+            # the minimum leverage would put liquidation within 1.2x of the stop: do not trade this one
+            return MirrorPlan(False, "stop_too_wide_for_leverage", self.mode, binance_symbol, delta_sym, product.id,
+                              side, 0, entry, stop, target, 0.0, 0.0, inr, lev)
         max_notional_usd = (sizing_equity / self.usd_inr) * lev * 0.9 if self.usd_inr else 0.0
         if size and product.contract_value * entry > 0:
             cap = int(max_notional_usd // (product.contract_value * entry))

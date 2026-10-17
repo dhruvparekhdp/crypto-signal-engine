@@ -28,10 +28,25 @@ class LevDelta(FakeDelta):
 def test_leverage_keeps_liquidation_twice_as_far_as_the_stop():
     assert leverage_for(0.06) == 8
     assert leverage_for(0.03) == 10          # capped
-    assert leverage_for(0.15) == 3
-    for sf in (0.01, 0.03, 0.05, 0.08, 0.12, 0.2):
+    for sf in (0.01, 0.03, 0.05, 0.06, 0.08):   # every swing stop (capped at 8%)
         lev = leverage_for(sf)
-        assert 1 / lev - 0.005 >= 2 * sf or lev == 1
+        assert 5 <= lev <= 10 and 1 / lev - 0.005 >= 2 * sf
+
+
+def test_never_below_the_owners_5x_minimum():
+    # owner 17 Oct 2026: "don't go for 2x leverage, minimum 5x"
+    assert leverage_for(0.15) == 5
+    assert leverage_for(0.15, min_lev=7) == 7
+    assert min(leverage_for(sf / 1000) for sf in range(1, 300)) >= 5
+
+
+@pytest.mark.asyncio
+async def test_a_stop_too_wide_for_the_minimum_leverage_is_not_traded(tmp_path):
+    fake = LevDelta(liq=5.0)                 # short at 1.40 with a 20% stop: 5x liquidates at ~19.5%
+    book = _book(tmp_path, fake)
+    plan = await book.on_paper_open("xrpusdt", "short", 1.40, 1.68, 0.56, "t")
+    assert not plan.ok and plan.reason == "stop_too_wide_for_leverage"
+    assert not [c for c in fake.calls if c[0] in ("market", "leverage")]
 
 
 @pytest.mark.asyncio

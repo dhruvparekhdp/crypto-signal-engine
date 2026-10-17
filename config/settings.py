@@ -282,6 +282,9 @@ class Settings(BaseSettings):
     # the day's start (UTC), or below the floor. Open positions keep their stops. Rs500 trial: Rs50/day, stop at Rs350.
     delta_india_daily_loss_pct: float = 0.10
     delta_india_min_wallet_inr: float = 350.0
+    # Leverage set on Delta before every live entry: the highest that keeps liquidation >= 2x the stop distance away,
+    # never below this (owner, 17 Oct 2026) and never above 10x. Swing stops <= 8% -> 6-10x in practice.
+    delta_india_min_leverage: int = 5
     # 14 Oct 2026 owner: strong-confidence intraday trades in paper too, with their own limits so they cannot crowd
     # out the swing book: confidence >= intraday_min_confidence, at most intraday_max_open open, margin <= 10%
     paper_open_families: str = "swing"          # production: "swing,intraday" on /settings (owner 14 Oct)

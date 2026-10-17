@@ -1457,6 +1457,7 @@ class AppRunner:
                                  backstop_r=float(settings.delta_india_backstop_r),
                                  daily_loss_pct=float(settings.delta_india_daily_loss_pct),
                                  min_wallet_inr=0.0 if testnet else float(settings.delta_india_min_wallet_inr),
+                                 min_leverage=int(settings.delta_india_min_leverage),
                                  shadow_path=Path("data/delta_testnet.jsonl") if testnet else SHADOW_PATH,
                                  state_path=Path("data/delta_testnet_state.json") if testnet else STATE_PATH)
                 return await getattr(book, method)(*args)
