@@ -207,6 +207,80 @@ def _volbreak(b, p):
     return _sig((b.c > hi) & (z > p["z"]), (b.c < lo) & (z > p["z"]))
 
 
+# ------------------------------------------------- swing research (owner, 18 Oct 2026: "only 3 strategies feels
+# very less") - relative strength vs BTC, adaptive trend, momentum + volume, EMA ribbon, confirmed breakouts
+_BTC_CLOSE: dict = {}
+
+
+def _btc_aligned(b):
+    """BTC closes on this coin's bar times (the last BTC bar opened at or before each bar)."""
+    if b.interval not in _BTC_CLOSE:
+        from analysis.lab.data import load_bars
+        bb = load_bars("BTCUSDT", b.interval)
+        _BTC_CLOSE[b.interval] = (bb.t, bb.c)
+    t, c = _BTC_CLOSE[b.interval]
+    i = np.searchsorted(t, b.t, side="right") - 1
+    return np.where(i >= 0, c[np.clip(i, 0, None)], np.nan)
+
+
+def _ret(x, n):
+    return x / np.r_[np.full(n, np.nan), x[:-n]] - 1
+
+
+@register("rel_strength", "Relative Strength vs BTC", "relative", "research",
+          "The coin's N-bar return minus BTC's crosses +/- thr: go with the coin that is clearly out- or "
+          "under-performing the market (cross-sectional momentum, one coin at a time).",
+          {"n": 42, "thr": 0.08}, {"n": [21, 42, 84], "thr": [0.05, 0.08, 0.12]}, tf="4h")
+def _relstr(b, p):
+    if b.symbol.upper().startswith("BTC"):
+        return np.zeros(len(b.c), np.int8)
+    d = np.nan_to_num(_ret(b.c, p["n"]) - _ret(_btc_aligned(b), p["n"]))
+    th = np.full(len(d), p["thr"])
+    return _sig(F.cross_up(d, th), F.cross_dn(d, -th))
+
+
+@register("kama_trend", "KAMA Trend (Kaufman)", "trend", "classic",
+          "Close crosses Kaufman's adaptive moving average while the average slopes the same way.",
+          {"n": 10}, {"n": [10, 20, 30]}, tf="4h")
+def _kama_trend(b, p):
+    k = F.kama(b.c, p["n"])
+    slope = k - np.r_[np.nan, k[:-1]]
+    return _sig(F.cross_up(b.c, k) & (slope > 0), F.cross_dn(b.c, k) & (slope < 0))
+
+
+@register("roc_volume", "Momentum with Volume", "momentum", "research",
+          "N-bar rate of change beyond +/- thr on above-normal volume (first bar of the condition).",
+          {"n": 12, "thr": 0.06}, {"n": [6, 12, 24], "thr": [0.04, 0.06, 0.10]}, tf="4h")
+def _roc_volume(b, p):
+    r = np.nan_to_num(_ret(b.c, p["n"]))
+    vz = np.nan_to_num(F.zscore(b.v, 50)) > 1.0
+    lg, sh = (r > p["thr"]) & vz, (r < -p["thr"]) & vz
+    return _sig(lg & ~np.r_[False, lg[:-1]], sh & ~np.r_[False, sh[:-1]])
+
+
+@register("ema_ribbon", "EMA Ribbon Alignment", "trend", "community",
+          "EMA fast > mid > slow lines up (first bar of the alignment), or the reverse.",
+          {"fast": 8, "mid": 21, "slow": 55}, {"slow": [55, 100]}, tf="4h")
+def _ribbon(b, p):
+    f, m, sl = F.ema(b.c, p["fast"]), F.ema(b.c, p["mid"]), F.ema(b.c, p["slow"])
+    up, dn = (f > m) & (m > sl), (f < m) & (m < sl)
+    return _sig(up & ~np.r_[False, up[:-1]], dn & ~np.r_[False, dn[:-1]])
+
+
+@register("breakout_confirmed", "Breakout confirmed by Supertrend", "meta", "custom",
+          "A Keltner or Donchian breakout taken only when Supertrend points the same way (confluence).",
+          {"k": 2.5, "n": 100}, {"k": [2.0, 2.5], "n": [55, 100]}, tf="4h")
+def _bconf(b, p):
+    m, a = F.ema(b.c, 20), F.atr(b.h, b.l, b.c)
+    kel = _sig(F.cross_up(b.c, m + p["k"] * a), F.cross_dn(b.c, m - p["k"] * a))
+    hi = np.r_[np.nan, F.rolling_max(b.h, p["n"])[:-1]]
+    lo = np.r_[np.nan, F.rolling_min(b.l, p["n"])[:-1]]
+    don = _sig(b.c > hi, b.c < lo)
+    st = F.supertrend(b.h, b.l, b.c, 10, 3.0)
+    raw = np.where(kel != 0, kel, don)
+    return np.where(raw == st, raw, 0).astype(np.int8)
+
+
 # -------------------------------------------------------- mean reversion
 @register("rsi2", "Connors RSI(2)", "mean_reversion", "classic",
           "RSI(2) extreme against a 200 SMA trend filter (Connors & Alvarez).",
@@ -423,10 +497,13 @@ def _register_mirrors_and_votes():
             f"{base.name} traded in the opposite direction (the live engine's 'mirror' idea).",
             (lambda b, p, _f=base.fn: -_f(b, p)), dict(base.defaults), dict(base.grid), base.tf)
     trend = ["donchian", "keltner_break", "vol_breakout", "ichimoku", "ema_cross"]
+    swing = ["donchian", "keltner_break", "supertrend", "ichimoku", "kama_trend"]
     for sid, name, ids, mode, k in (
             ("vote2_trend", "Two of five trend strategies agree", trend, "vote", 2),
             ("vote3_trend", "Three of five trend strategies agree", trend, "vote", 3),
-            ("first_trend", "First trend strategy to fire", trend, "any", 1)):
+            ("first_trend", "First trend strategy to fire", trend, "any", 1),
+            ("vote2_swing", "Two of five swing strategies agree (with supertrend + KAMA)", swing, "vote", 2),
+            ("vote3_swing", "Three of five swing strategies agree", swing, "vote", 3)):
         REGISTRY[sid] = Strategy(sid, name, "meta", "custom", f"{name}; each member uses its default settings.",
                                  combine(ids, mode, k), {}, {}, "4h")
 
