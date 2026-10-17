@@ -1738,16 +1738,18 @@ async def _api_events(runner, request: web.Request) -> web.Response:
 
 async def _api_binance_symbols(runner, request: web.Request) -> web.Response:
     """
-    GET /api/binance/symbols?q=gold — search the pairs Binance actually lists.
+    GET /api/symbols/search?q=gold (old path /api/binance/symbols) — search the perpetuals Delta India lists, the venue
+    real money trades on (owner, 18 Oct 2026). Binance answers only when Delta does not.
 
-    Returns price, 24h change, 24h volume and whether a perpetual exists, so
-    a pair can be judged before it goes on the watchlist.
+    Returns price, 24h change and 24h volume, so a pair can be judged before it goes on the watchlist.
     """
-    from collectors.binance_symbols import search
+    from collectors import binance_symbols, delta_symbols
 
     q = (request.query.get("q") or "").strip()[:40]
     watchlist = set(await runner.crypto_store.get_symbols())
-    payload = await search(q, watchlist)
+    payload = await delta_symbols.search(q, watchlist)
+    if not payload.get("available"):
+        payload = {**await binance_symbols.search(q, watchlist), "venue": "Binance (Delta did not answer)"}
     return web.Response(text=json.dumps(payload), content_type="application/json")
 
 
@@ -2542,9 +2544,9 @@ section h2{color:var(--accent-soft)}
 <div id="tab-watchlist" class="tab-content">
   <section>
     <h2>Watchlist</h2>
-    <div class="cr-note">The engine follows only the pairs on this list. Search Binance, check the price and volume, then add the exact pair. For gold, search <b>gold</b>: Binance lists it as tokenised gold (PAXG, XAUT), not as XAUUSDT.</div>
+    <div class="cr-note">The engine follows only the pairs on this list. Search Delta India (the exchange real money trades on), check the price and volume, then add the exact pair. For gold, search <b>gold</b> or <b>xau</b>: Delta lists it as tokenised gold (XAUTUSD).</div>
     <div class="wl-search">
-      <input type="search" id="cr-add-input2" class="cr-input" placeholder="Search Binance: gold, sol, pepe…" autocomplete="off" aria-label="Search Binance pairs" onfocus="if(!this.value)wlSearchNow()" oninput="wlSearchSoon()" onkeydown="if(event.key==='Enter')wlSearchNow()">
+      <input type="search" id="cr-add-input2" class="cr-input" placeholder="Search Delta: gold, sol, pepe…" autocomplete="off" aria-label="Search Delta India pairs" onfocus="if(!this.value)wlSearchNow()" oninput="wlSearchSoon()" onkeydown="if(event.key==='Enter')wlSearchNow()">
       <div id="wl-results" class="wl-results" aria-live="polite"></div>
     </div>
     <h3 class="wl-sub">On the watchlist</h3>
@@ -3815,13 +3817,13 @@ async function wlSearchNow(){
   const box=document.getElementById('wl-results');
   const seq=++_wlSeq;
   box.innerHTML='<div class="wl-msg">Searching Binance…</div>';
-  const d=await jget('/api/binance/symbols?q='+encodeURIComponent(q),{results:[],available:false});
+  const d=await jget('/api/symbols/search?q='+encodeURIComponent(q),{results:[],available:false});
   if(seq!==_wlSeq) return;             // a newer search already answered
   box.textContent='';
   if(!d.available){ const m=document.createElement('div'); m.className='wl-msg';
     m.textContent=d.error||'Binance did not answer. Try again in a minute.'; box.appendChild(m); return; }
   if(!d.results.length){ const m=document.createElement('div'); m.className='wl-msg';
-    m.textContent='No Binance USDT pair matches "'+q+'".'; box.appendChild(m); return; }
+    m.textContent='No Delta India perpetual matches "'+q+'".'; box.appendChild(m); return; }
   for(const r of d.results){
     const row=document.createElement('div'); row.className='wl-row';
     const pair=document.createElement('div'); pair.className='wl-pair';
@@ -7822,6 +7824,7 @@ async def make_app(runner) -> web.Application:
     app.router.add_get("/api/debug/volume", _bind(_api_debug_volume))
     app.router.add_get("/api/crypto/watchlist", _bind(_api_crypto_watchlist))
     app.router.add_get("/api/binance/symbols", _bind(_api_binance_symbols))
+    app.router.add_get("/api/symbols/search", _bind(_api_binance_symbols))
     app.router.add_get("/api/events", _bind(_api_events))
     app.router.add_get("/api/moves", _bind(_api_moves))
     app.router.add_post("/api/moves/run", _bind(_api_moves_run))

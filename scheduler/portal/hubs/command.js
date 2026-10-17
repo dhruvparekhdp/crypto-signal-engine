@@ -378,8 +378,8 @@
   UI.widget("watch-add", {
     title: "ADD A PAIR", uses: [],
     mount: function (el, ctx) {
-      el.innerHTML = '<p class="small dim">Search Binance, check price and volume, then add the exact pair. For gold, search <b>gold</b> (PAXG, XAUT).</p>' +
-        '<div class="toolbar">' + C.search("find", "Search Binance: gold, sol, pepe…", "") + '</div><div data-slot="r" aria-live="polite"></div>';
+      el.innerHTML = '<p class="small dim">Search Delta India (where real money trades), check price and volume, then add the exact pair. For gold, search <b>gold</b> or <b>xau</b> (XAUTUSD).</p>' +
+        '<div class="toolbar">' + C.search("find", "Search Delta: gold, sol, pepe…", "") + '</div><div data-slot="r" aria-live="polite"></div>';
       ctx.s.seq = 0;
     },
     on: {
@@ -388,13 +388,13 @@
         var q = t.value.trim();
         ctx.s.timer = setTimeout(function () {
           var seq = ++ctx.s.seq, box = el.querySelector('[data-slot="r"]');
-          box.innerHTML = C.empty("Searching Binance…");
-          UI.Net.get("/api/binance/symbols?q=" + encodeURIComponent(q)).then(function (d) {
+          box.innerHTML = C.empty("Searching Delta India…");
+          UI.Net.get("/api/symbols/search?q=" + encodeURIComponent(q)).then(function (d) {
             if (seq !== ctx.s.seq) return;
-            if (!d.available) { box.innerHTML = C.empty(d.error || "Binance did not answer. Try again in a minute."); return; }
-            if (!d.results.length) { box.innerHTML = C.empty('No Binance USDT pair matches "' + q + '".'); return; }
+            if (!d.available) { box.innerHTML = C.empty(d.error || "Delta India did not answer. Try again in a minute."); return; }
+            if (!d.results.length) { box.innerHTML = C.empty('No ' + (d.venue || "Delta India") + ' perpetual matches "' + q + '".'); return; }
             box.innerHTML = '<div class="results">' + d.results.map(function (r) {
-              return '<div class="result"><div><b>' + e(r.symbol.toUpperCase()) + "</b> " + C.tag(r.pair || "", "neutral") + (r.futures === true ? " " + C.tag("perp", "") : r.futures === false ? " " + C.tag("spot only", "neutral") : "") +
+              return '<div class="result"><div><b>' + e(r.symbol.toUpperCase()) + "</b> " + C.tag(r.pair || "", "neutral") + (r.name ? ' <span class="tiny dim">' + e(r.name) + "</span>" : "") + (r.futures === true ? " " + C.tag("perp", "") : r.futures === false ? " " + C.tag("spot only", "neutral") : "") +
                 '<div class="mono tiny dim">' + e(r.price != null ? "$" + U.px(r.price) : "—") + " · 24h " + e(U.pct(r.change_pct)) + " · vol " + e(U.compact(r.quote_volume_24h)) + "</div></div>" +
                 (r.on_watchlist ? '<span class="mono tiny dim">on list</span>' : '<button class="mini" data-act="add" data-sym="' + e(r.symbol) + '">Add</button>') + "</div>";
             }).join("") + "</div>";

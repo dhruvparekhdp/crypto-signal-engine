@@ -263,6 +263,24 @@ class TestProtectedEndpoints(AioHTTPTestCase):
         self.assertEqual(resp.status, 200)
         self.assertEqual(self.runner.added, ["xautusdt"])
 
+    async def test_pair_search_asks_delta_first(self):
+        """18 Oct 2026: the watchlist search is Delta India's list; Binance is not called when Delta answers."""
+        delta = {"available": True, "venue": "Delta India", "results": [{"symbol": "xautusdt"}]}
+        with patch("collectors.delta_symbols.search", new=AsyncMock(return_value=delta)), \
+             patch("collectors.binance_symbols.search", new=AsyncMock(side_effect=AssertionError("binance called"))):
+            resp = await self.client.get("/api/symbols/search?q=gold")
+        self.assertEqual((await resp.json())["venue"], "Delta India")
+
+    async def test_pair_search_falls_back_to_binance_only_when_delta_is_down(self):
+        down = {"available": False, "results": [], "error": "no answer"}
+        binance = {"available": True, "results": [{"symbol": "paxgusdt"}]}
+        with patch("collectors.delta_symbols.search", new=AsyncMock(return_value=down)), \
+             patch("collectors.binance_symbols.search", new=AsyncMock(return_value=binance)):
+            resp = await self.client.get("/api/symbols/search?q=gold")
+        body = await resp.json()
+        self.assertEqual(body["results"], [{"symbol": "paxgusdt"}])
+        self.assertIn("Binance", body["venue"])
+
     async def test_the_watchlist_is_readable_without_a_token(self):
         resp = await self.client.get("/api/crypto/watchlist")
         self.assertEqual(resp.status, 200)
