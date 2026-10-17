@@ -7755,6 +7755,8 @@ async def make_app(runner) -> web.Application:
     _register_delta(app, runner)
     from scheduler.golive_api import register as _register_golive
     _register_golive(app, runner)
+    from scheduler.live_api import register as _register_live
+    _register_live(app, runner)
     from scheduler.api_docs import register as _register_api_docs
     _register_api_docs(app)
     app.router.add_get("/api/settings", _bind(_api_collector_states))

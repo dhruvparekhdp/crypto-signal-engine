@@ -19,6 +19,7 @@
     { id: "book", label: "Book", tabs: [
       { id: "swing", label: "Swing book", native: true },
       { id: "paper", label: "Paper cycle", native: true, aliases: ["/classic#paper"] },
+      { id: "live", label: "Live ₹ (real)", native: true },
       { id: "guard", label: "Session guard", native: true, aliases: ["/classic#guard"] },
       { id: "simulator", label: "Simulator", url: "/classic#simulator" },
       { id: "journal", label: "Journal", url: "/journal" }

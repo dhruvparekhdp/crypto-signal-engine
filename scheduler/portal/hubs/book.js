@@ -256,6 +256,76 @@
   });
   UI.view("book/paper", [["paper-strip"], ["paper-open"], ["paper-demo"], ["paper-history"]]);
 
+  // ------------------------------------------------------------- live, real money (owner, 18 Oct 2026)
+  function rs(x, signed) { return x == null ? "—" : U.inr(x, signed); }
+  UI.widget("live-strip", {
+    title: "LIVE · REAL MONEY · DELTA INDIA", uses: ["delta_live"],
+    render: function (el, D, ctx) {
+      var d = D.delta_live; if (!d) { el.innerHTML = C.state(D, "delta_live"); return; }
+      ctx.right("updated " + U.hms(new Date(d.generated_ms)) + " UTC · refreshes every 5 s");
+      var w = d.wallet || {}, day = d.day || {};
+      var state = d.kill_switch ? ["red", "KILL SWITCH ON: no new orders", "Open positions keep their exchange stops."] :
+        d.live ? ["ok", "LIVE: real orders are ON", "Swing signals are copied to Delta India with real money. Risk " + Math.round(d.risk_pct * 1000) / 10 + "% per trade, max " + d.max_open + " open, leverage ≥ " + d.min_leverage + "x."] :
+        ["amber", "Not live: no real orders (mode " + String(d.mode).toUpperCase() + (d.live_orders ? "" : ", live orders OFF") + ")", "Turn on 'Delta book mode = live' and 'Allow live Delta orders' on Settings to start."];
+      var dayLeft = day.limit_inr != null && day.pnl_inr != null ? day.limit_inr + Math.min(0, day.pnl_inr) : null;
+      el.innerHTML = C.flag(state[0], state[1], state[2], d.error || "") +
+        C.tiles([["WALLET", rs(w.total_inr), "available " + rs(w.available_inr)],
+                 ["TODAY", rs(day.pnl_inr, true), day.start_inr != null ? "from " + rs(day.start_inr) : "day starts at first check", day.pnl_inr < 0 ? "dn" : ""],
+                 ["DAILY LIMIT LEFT", dayLeft != null ? rs(dayLeft) : "—", "stops new orders at −" + Math.round(d.daily_loss_pct * 100) + "%"],
+                 ["FLOOR", rs(d.floor_inr), "no new orders below"],
+                 ["OPEN", (d.positions || []).length + " / " + d.max_open, ""]]);
+    }
+  });
+  UI.widget("live-positions", {
+    title: "LIVE POSITIONS · ON DELTA NOW", uses: ["delta_live", "paper"],
+    render: function (el, D) {
+      var d = D.delta_live; if (!d) { el.innerHTML = C.state(D, "delta_live"); return; }
+      var rows = d.positions || [];
+      var paper = {}; ((D.paper && D.paper.positions) || []).forEach(function (p) { paper[String(p.symbol).toUpperCase()] = p; });
+      el.innerHTML = C.table([
+        { label: "COIN", w: "80px", cell: function (r) { return "<b>" + e(String(r.symbol).replace(/USD$/, "")) + "</b>" + (r.flags && r.flags.length ? '<br><span class="dn tiny">' + e(r.flags.join(" · ")) + "</span>" : ""); } },
+        { label: "SIDE", w: "76px", cell: function (r) { return C.side(r.side); } },
+        { label: "CONTRACTS", w: "86px", cell: function (r) { return e(r.contracts) + (r.leverage ? '<br><span class="dim tiny">' + e(r.leverage) + "x</span>" : ""); } },
+        { label: "ENTRY", w: "100px", cell: function (r) { return e(U.px(r.entry)); } },
+        { label: "PRICE NOW", w: "100px", cell: function (r) { return "<b>" + e(U.px(r.mark)) + "</b>"; } },
+        { label: "P&L (₹)", w: "110px", cell: function (r) { return r.upnl_inr == null ? "—" : C.signed(r.upnl_inr, function (x) { return U.inr(x, true); }) + (r.upnl_pct_wallet != null ? '<br><span class="dim tiny">' + (r.upnl_pct_wallet > 0 ? "+" : "") + r.upnl_pct_wallet.toFixed(1) + "% wallet</span>" : ""); } },
+        { label: "R NOW", w: "70px", cell: function (r) { return r.r_now == null ? "—" : C.signed(r.r_now, function (x) { return (x > 0 ? "+" : "") + x.toFixed(2) + "R"; }); } },
+        { label: "STOP ON DELTA", w: "110px", cell: function (r) { return r.exchange_stop ? e(U.px(r.exchange_stop)) + (r.engine_stop && Math.abs(r.engine_stop - r.exchange_stop) > 1e-9 ? '<br><span class="dim tiny">engine lock ' + e(U.px(r.engine_stop)) + "</span>" : "") : '<b class="dn">NONE</b>'; } },
+        { label: "TARGET", w: "100px", cell: function (r) { return e(U.px(r.exchange_target)); } },
+        { label: "LIQUIDATION", w: "110px", cell: function (r) { return r.liquidation ? e(U.px(r.liquidation)) + (r.mark ? '<br><span class="dim tiny">' + (Math.abs(r.liquidation / r.mark - 1) * 100).toFixed(1) + "% away</span>" : "") : "—"; } },
+        { label: "MARGIN", w: "80px", cell: function (r) { return e(rs(r.margin_inr)); } },
+        { label: "PAPER", w: "110px", cell: function (r) { var p = paper[String(r.binance_symbol || "").toUpperCase()]; return p ? C.signed(p.unrealised, function (x) { return U.inr(x, true); }) : '<span class="dim">—</span>'; } }
+      ], rows, { minWidth: 1220, empty: d.live ? "No open live positions. The next swing signal that fits ₹" + Math.round((d.wallet || {}).total_inr || 0) + " will appear here." : "No live positions." });
+    }
+  });
+  UI.widget("live-orders", {
+    title: "ORDERS WAITING ON DELTA", uses: ["delta_live"],
+    render: function (el, D) {
+      var d = D.delta_live; if (!d) { el.innerHTML = C.state(D, "delta_live"); return; }
+      el.innerHTML = C.table([
+        { label: "COIN", w: "80px", cell: function (o) { return "<b>" + e(String(o.symbol || "").replace(/USD$/, "")) + "</b>"; } },
+        { label: "TYPE", w: "minmax(0,1fr)", cell: function (o) { return e(String(o.type || "").replace(/_order$/, "").replace(/_/g, " ")); } },
+        { label: "SIDE", w: "70px", cell: function (o) { return e(o.side); } },
+        { label: "SIZE", w: "70px", cell: function (o) { return e(o.size); } },
+        { label: "TRIGGER", w: "100px", cell: function (o) { return e(U.px(o.stop_price || o.limit_price)); } },
+        { label: "REDUCE-ONLY", w: "100px", cell: function (o) { return o.reduce_only ? "yes" : '<b class="dn">NO</b>'; } }
+      ], d.orders || [], { minWidth: 560, empty: "No orders waiting." });
+    }
+  });
+  UI.widget("live-journal", {
+    title: "LIVE ORDER LOG", uses: ["delta_live"],
+    render: function (el, D) {
+      var d = D.delta_live; if (!d) { el.innerHTML = C.state(D, "delta_live"); return; }
+      el.innerHTML = C.table([
+        { label: "TIME (UTC)", w: "96px", cell: function (r) { return '<span class="dim">' + (r.t ? U.hms(new Date(r.t)) : "—") + "</span>"; } },
+        { label: "EVENT", w: "minmax(0,1fr)", cell: function (r) { return "<b>" + e(r.event || (r.side ? "open " + (r.side === "sell" ? "short" : "long") : "signal")) + "</b>"; } },
+        { label: "CONTRACT", w: "90px", cell: function (r) { return e(r.delta_symbol || "—"); } },
+        { label: "RESULT", w: "minmax(0,1.6fr)", cell: function (r) { return r.error ? '<span class="dn small">' + e(String(r.error).slice(0, 90)) + "</span>" : '<span class="small">' + e((r.placed ? "placed" : (r.reason || "not placed")) + (r.size ? " · " + r.size + " ct" : "") + (r.leverage ? " · " + r.leverage + "x" : "")) + "</span>"; } }
+      ], (d.journal || []).slice().reverse(), { minWidth: 520, empty: "No live orders yet." });
+    }
+  });
+  UI.view("book/live", [["live-strip"], ["live-positions"], [{ w: "live-orders", size: "grow" }], ["live-journal"]]);
+
   // ------------------------------------------------------------- session guard
   function guard(trades) {
     var notional = function (t) { return Math.abs(t.margin) * (t.leverage || 1); };
