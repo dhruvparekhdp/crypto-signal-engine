@@ -273,24 +273,47 @@ class DeltaBook:
                 return MirrorPlan(False, "leverage_not_set", plan.mode, plan.binance_symbol, plan.delta_symbol,
                                   plan.product_id, plan.side, plan.size, plan.entry, plan.stop, plan.target,
                                   plan.notional_usd, plan.risk_inr, plan.inr_available, plan.leverage)
+        # Crash-safe order (18 Oct 2026): the record is saved BEFORE the entry, so a restart between the entry and its
+        # stop can never leave a position the 5-minute reconcile does not know about (it restores a missing stop).
+        record["pending"] = True
+        state = self._load_state()
+        state.setdefault("positions", {})[plan.delta_symbol] = record
+        self._save_state(state)
         try:
             entry_order = await self.client.place_market(plan.product_id, plan.side, plan.size)
+            record.update(entry_fill=(entry_order or {}).get("average_fill_price") or "filled")
+            self._update_record(plan.delta_symbol, record)
             close_side = "sell" if plan.side == "buy" else "buy"
-            stop_order = await self.client.place_stop_market(
-                plan.product_id, close_side, plan.size, plan.stop)
-            tp_order = await self.client.place_take_profit_market(
-                plan.product_id, close_side, plan.size, plan.target)
+            stop_order = None
+            for attempt in range(2):                         # the stop is not optional: retry once, else go flat
+                try:
+                    stop_order = await self.client.place_stop_market(plan.product_id, close_side, plan.size, plan.stop)
+                    break
+                except DeltaError as e:
+                    stop_err = e
+                    if attempt == 0:
+                        await asyncio.sleep(self.retry_delay_s)
+            if stop_order is None:
+                row.update(placed=True, entry_order=_trim(entry_order), error=f"stop_rejected_closed: {str(stop_err)[:150]}")
+                self._append_shadow(row)
+                await self.on_paper_close(binance_symbol, "stop_rejected")
+                return MirrorPlan(False, "stop_rejected_closed", plan.mode, plan.binance_symbol, plan.delta_symbol,
+                                  plan.product_id, plan.side, plan.size, plan.entry, plan.stop, plan.target,
+                                  plan.notional_usd, plan.risk_inr, plan.inr_available, plan.leverage)
+            try:
+                tp_order = await self.client.place_take_profit_market(plan.product_id, close_side, plan.size, plan.target)
+            except DeltaError as e:                          # the stop protects it; the engine still closes at target
+                tp_order = None
+                row["tp_error"] = str(e)[:150]
             row.update({
                 "placed": True,
                 "entry_order": _trim(entry_order),
                 "stop_order": _trim(stop_order),
-                "tp_order": _trim(tp_order),
+                "tp_order": _trim(tp_order) if tp_order else None,
             })
-            state = self._load_state()
-            record.update(stop_order_id=_oid(stop_order), tp_order_id=_oid(tp_order),
-                          entry_fill=(entry_order or {}).get("average_fill_price"))
-            state.setdefault("positions", {})[plan.delta_symbol] = record
-            self._save_state(state)
+            record.update(stop_order_id=_oid(stop_order), tp_order_id=_oid(tp_order) if tp_order else None,
+                          pending=False)
+            self._update_record(plan.delta_symbol, record)
             # the exchange's own liquidation price must sit beyond the stop; if not, get out now
             liq = None
             if hasattr(self.client, "liquidation_price"):
@@ -311,6 +334,8 @@ class DeltaBook:
             row["placed"] = False
             row["error"] = str(e)[:200]
             state = self._load_state()
+            if not record.get("entry_fill"):                  # the entry itself failed: nothing is open
+                (state.get("positions") or {}).pop(plan.delta_symbol, None)
             state.setdefault("errors", []).append({
                 "t": int(time.time() * 1000),
                 "error": str(e)[:200],
@@ -324,6 +349,11 @@ class DeltaBook:
         self._append_shadow(row)
         return plan
 
+
+    def _update_record(self, delta_sym: str, record: dict) -> None:
+        state = self._load_state()
+        state.setdefault("positions", {})[delta_sym] = record
+        self._save_state(state)
 
     # --- the profit ladder on the exchange (13 Oct 2026) -------------------------------------------------------------
 
@@ -422,6 +452,8 @@ class DeltaBook:
         state = self._load_state()
         events = []
         for delta_sym, pos in list((state.get("positions") or {}).items()):
+            if pos.get("pending") and time.time() * 1000 - int(pos.get("opened_ms") or 0) < 120_000:
+                continue                                    # an entry in flight right now: leave it to on_paper_open
             try:
                 size = await self.client.position_size(pos["product_id"])
             except DeltaError:
@@ -438,8 +470,12 @@ class DeltaBook:
                 except DeltaError:
                     pass
                 state["positions"].pop(delta_sym, None)
-                events.append({"delta_symbol": delta_sym, "event": "closed_on_exchange",
-                               "binance_symbol": pos.get("binance_symbol")})
+                if pos.get("pending") and not pos.get("entry_fill"):
+                    # saved before an entry that never filled (restart / rejection): nothing was ever open
+                    events.append({"delta_symbol": delta_sym, "event": "entry_never_filled"})
+                else:
+                    events.append({"delta_symbol": delta_sym, "event": "closed_on_exchange",
+                                   "binance_symbol": pos.get("binance_symbol")})
             else:
                 if abs(size) != int(pos["size"]):
                     events.append({"delta_symbol": delta_sym, "event": "size_mismatch", "ours": pos["size"],
