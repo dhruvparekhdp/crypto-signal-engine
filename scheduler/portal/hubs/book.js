@@ -139,6 +139,7 @@
         { label: "COIN", w: "80px", cell: function (r) { return "<b>" + e(U.base(r.symbol)) + "</b>"; }, sort: function (r) { return r.symbol; } },
         { label: "SIDE", w: "80px", cell: function (r) { return C.side(r.side); } },
         { label: "MODE", w: "80px", cell: function (r) { return '<span class="dim">' + e(r.trade_mode) + "</span>"; } },
+        { label: "STRATEGY", w: "130px", cell: function (r) { return e(String(r.signal_type || "").replace(/^swing_/, "").replace(/_/g, " ")) + (r.confidence != null ? '<br><span class="dim tiny">confidence ' + e(Math.round(r.confidence)) + "</span>" : ""); }, sort: function (r) { return r.signal_type || ""; } },
         { label: "ENTRY", w: "100px", cell: function (r) { return e(U.px(r.entry)); } },
         { label: "MARK", w: "100px", cell: function (r) { return e(U.px(r.mark)); } },
         { label: "STOP", w: "100px", cell: function (r) { return e(U.px(r.stop)) + (r.trailing ? ' <span class="acc tiny">trail</span>' : ""); } },
@@ -158,6 +159,13 @@
               e(k.next_lock_r <= 0 ? "BE" : U.rr(k.next_lock_r)) + "</span>"; } },
         { label: "TARGET", w: "100px", cell: function (r) { return e(U.px(r.target)); } },
         { label: "MARGIN", w: "90px", cell: function (r) { return e(U.inr(r.margin)); }, sort: function (r) { return r.margin; } },
+        { label: "LEVERAGE", w: "80px", cell: function (r) { return r.leverage ? "<b>" + e(r.leverage.toFixed(1)) + "x</b>" : "—"; }, sort: function (r) { return r.leverage || 0; } },
+        { label: "SIZE", w: "130px", cell: function (r) { return e((r.qty != null ? r.qty : "—") + " " + U.base(r.symbol)) + '<br><span class="dim tiny">' + e(U.inr(r.notional)) + " notional</span>"; }, sort: function (r) { return r.notional || 0; } },
+        { label: "LIQUIDATION", w: "120px", cell: function (r) { if (!r.liq) return "—"; var d = r.mark ? Math.abs(r.liq / r.mark - 1) * 100 : null;
+            return e(U.px(r.liq)) + (d != null ? '<br><span class="' + (d < 10 ? "dn" : "dim") + ' tiny">' + d.toFixed(1) + "% away</span>" : ""); }, sort: function (r) { return r.liq && r.mark ? Math.abs(r.liq / r.mark - 1) : 9; } },
+        { label: "AT STOP", w: "110px", cell: function (r) { if (r.qty == null || !r.stop || !r.entry) return "—";
+            var sgn = String(r.side).toLowerCase() === "short" ? -1 : 1, v = sgn * (r.stop - r.entry) * r.qty * (r.usdt_inr || 1);
+            return C.signed(v, function (x) { return U.inr(x, true); }) + '<br><span class="dim tiny">' + (v >= 0 ? "locked" : "at risk") + "</span>"; }, sort: function (r) { var sgn = String(r.side).toLowerCase() === "short" ? -1 : 1; return r.qty ? sgn * (r.stop - r.entry) * r.qty : 0; } },
         { label: "NET", w: "100px", cell: function (r) { return C.signed(r.unrealised, function (x) { return U.inr(x, true); }); }, sort: function (r) { return r.unrealised; } },
         { label: "ROE", w: "80px", cell: function (r) { return C.signed(r.roe_pct); }, sort: function (r) { return r.roe_pct; } },
         { label: "COSTS", w: "110px", cell: function (r) {
@@ -170,7 +178,7 @@
             var h = (new Date(r.expires_at).getTime() - Date.now()) / 3600000;
             return '<span class="' + (h < 12 ? "acc" : "dim") + '">' + (h <= 0 ? "now" : h < 48 ? h.toFixed(1) + "h" : (h / 24).toFixed(1) + "d") + "</span>";
           }, sort: function (r) { return r.expires_at || ""; } }
-      ], rows, { state: ctx.s.t, minWidth: 1500, empty: p.running ? "No open positions." : "No cycle running." });
+      ], rows, { state: ctx.s.t, minWidth: 2100, empty: p.running ? "No open positions." : "No cycle running." });
     }
   });
   UI.widget("paper-history", {
