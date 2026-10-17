@@ -41,3 +41,19 @@ async def test_live_endpoint_needs_admin(aiohttp_client=None):
     async with TestClient(TestServer(app)) as client:
         r = await client.get("/api/delta/live")
         assert r.status == 401
+
+
+@pytest.mark.asyncio
+async def test_portal_meta_reports_the_delta_live_book(monkeypatch):
+    # 18 Oct 2026: the top bar said "LIVE TRADING: OFF" while real Delta orders were ON (it read the Binance mode)
+    import json
+
+    from config.settings import settings
+    from scheduler.portal import api_meta
+    monkeypatch.setattr(settings, "delta_india_mode", "live")
+    monkeypatch.setattr(settings, "delta_india_live_orders", True)
+    monkeypatch.setattr(settings, "delta_india_risk_pct", 0.03)
+    d = json.loads((await api_meta(None)).text)
+    assert d["delta_live"] is True and d["delta_mode"] == "live" and d["delta_risk_pct"] == 0.03
+    monkeypatch.setattr(settings, "delta_india_live_orders", False)
+    assert json.loads((await api_meta(None)).text)["delta_live"] is False

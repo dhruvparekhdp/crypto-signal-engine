@@ -14,7 +14,7 @@
         ["PAPER TRADING", m ? (m.paper_trading_enabled ? "ON" : "OFF") : "—"],
         ["SWING BOOK", m ? (m.swing_enabled ? "ON" : "OFF") : "—"],
         ["MARKET FILTER", m ? String(m.regime_filter).toUpperCase() : "—"],
-        ["LIVE TRADING", m ? String(m.live_trading_mode).toUpperCase() : "—", "", F.live(D) ? "dn" : ""],
+        ["LIVE ₹ (DELTA)", m ? (m.delta_live ? (m.delta_kill_switch ? "KILL SWITCH" : "ON") : String(m.delta_mode || "off").toUpperCase()) : "—", m && m.delta_live ? Math.round((m.delta_risk_pct || 0) * 1000) / 10 + "% risk" : "", F.deltaLive(D) ? "dn" : ""],
         ["WALLET", sw && sw.wallet != null ? U.inr(sw.wallet) : "—"],
         ["EXCLUDED COINS", sw && sw.rules && sw.rules.excluded_coins ? String(sw.rules.excluded_coins).toUpperCase() : "—"]
       ]);

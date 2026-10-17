@@ -183,6 +183,11 @@ async def api_meta(request: web.Request) -> web.Response:
     from config.settings import settings
     return _json({
         "live_trading_mode": settings.live_trading_mode,
+        # the Delta India book is the real-money one (18 Oct 2026); live_trading_mode is the never-wired Binance book
+        "delta_mode": (settings.delta_india_mode or "off").lower(),
+        "delta_live": (settings.delta_india_mode or "").lower() == "live" and bool(settings.delta_india_live_orders),
+        "delta_kill_switch": bool(settings.delta_india_kill_switch),
+        "delta_risk_pct": settings.delta_india_risk_pct,
         "paper_trading_enabled": settings.paper_trading_enabled,
         "swing_enabled": settings.swing_enabled,
         "regime_filter": settings.swing_regime_filter,

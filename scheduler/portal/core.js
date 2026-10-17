@@ -123,7 +123,7 @@
   Store.def("coins", "/api/crypto/coins", 5000);
   Store.def("swing", "/api/swing", 30000);
   Store.def("signals", "/api/portal/signals?days=14&limit=40", 30000);
-  Store.def("meta", "/api/portal/meta", 300000);
+  Store.def("meta", "/api/portal/meta", 30000);
   Store.def("budget", "/api/llm/budget", 60000);
   Store.def("status", "/api/status", 30000);
   Store.def("paper", "/api/paper", 20000);
@@ -251,6 +251,7 @@
   F.riskPct = function (D) { var r = D.swing && D.swing.rules && D.swing.rules.risk_per_trade; return r == null ? null : (r <= 1 ? +(r * 100).toFixed(2) : r); };
   F.budgetShare = function (m) { var l = m.limits || {}; return l.tpd ? m.today_tokens / l.tpd : l.rpd ? m.today_calls / l.rpd : null; };
   F.live = function (D) { return !!(D.meta && D.meta.live_trading_mode && D.meta.live_trading_mode !== "off"); };
+  F.deltaLive = function (D) { return !!(D.meta && D.meta.delta_live); };   // the real-money Delta India book
 
   // ---------------------------------------------------------------- widget runtime
   var W = { defs: {}, views: {}, mounted: [] };
@@ -395,7 +396,11 @@
       : "WORST CASE −" + (open.length * risk).toFixed(1) + "% WALLET";
     var coins = D.coins || [], newest = coins.reduce(function (m, c) { return c.timestamp && c.timestamp > m ? c.timestamp : m; }, "");
     U.$("#stripFeed").textContent = coins.length ? "FEED " + coins.length + " COINS · " + U.ago(newest) : "FEED …";
-    U.$("#stripMode").textContent = F.live(D) ? "LIVE TRADING: " + String(D.meta.live_trading_mode).toUpperCase() : "LIVE TRADING: OFF · PAPER ONLY";
+    var m = D.meta || {};
+    U.$("#stripMode").textContent = F.deltaLive(D)
+      ? (m.delta_kill_switch ? "LIVE ₹ DELTA · KILL SWITCH ON" : "LIVE ₹ DELTA: ON · " + Math.round((m.delta_risk_pct || 0) * 1000) / 10 + "% RISK")
+      : F.live(D) ? "LIVE TRADING: " + String(m.live_trading_mode).toUpperCase()
+      : "LIVE TRADING: OFF · PAPER" + (m.delta_mode === "testnet" ? " + DEMO" : " ONLY");
   }
   var tapeKey = "";
   function drawTape() {
