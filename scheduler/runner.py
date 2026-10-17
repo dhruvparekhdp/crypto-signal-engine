@@ -1426,16 +1426,35 @@ class AppRunner:
             except Exception as e:  # noqa: BLE001
                 log.warning("delta_india_mirror_failed", symbol=pos.symbol, error=str(e)[:160])
 
-    async def _delta_call(self, method: str, *args, usdt_inr: float = 83.0):
-        """Run one DeltaBook method with a fresh client (shadow or live per settings). None when Delta is off or
-        no key is saved. Never raises: a Delta problem must not break the paper tick."""
+    @staticmethod
+    def _delta_targets() -> list[str]:
+        """Which Delta books get every paper swing event, real money first. The demo (testnet) keeps running next to
+        live when delta_testnet_mirror is on (owner, 18 Oct 2026: keep paper and demo going alongside live)."""
         mode = (settings.delta_india_mode or "off").lower()
-        testnet = mode == "testnet"          # demo account, fake money: real orders on cdn-ind.testnet.deltaex.org
+        targets = [mode] if mode in ("live", "shadow") else []
+        if mode == "testnet" or (settings.delta_testnet_mirror and mode != "off"):
+            targets.append("testnet")
+        return targets
+
+    async def _delta_call(self, method: str, *args, usdt_inr: float = 83.0):
+        """Run one DeltaBook method on every active target (live first, then the demo). Returns the first target's
+        result. Never raises: a Delta problem must not break the paper tick, and one target never blocks another."""
+        out = None
+        for i, target in enumerate(self._delta_targets()):
+            r = await self._delta_call_one(target, method, *args, usdt_inr=usdt_inr)
+            if i == 0:
+                out = r
+        return out
+
+    async def _delta_call_one(self, target: str, method: str, *args, usdt_inr: float = 83.0):
+        """One DeltaBook method on one target: 'live' (real money, both gates), 'shadow' (log only) or 'testnet'
+        (the demo account: fake money, real order flow). None when that target has no key. Never raises."""
+        testnet = target == "testnet"
         k_obj = settings.delta_india_testnet_api_key if testnet else settings.delta_india_api_key
         s_obj = settings.delta_india_testnet_api_secret if testnet else settings.delta_india_api_secret
         key = k_obj.get_secret_value() if k_obj else ""
         secret = s_obj.get_secret_value() if s_obj else ""
-        if mode == "off" or not key or not secret:
+        if target not in ("live", "shadow", "testnet") or not key or not secret:
             return None
         try:
             from pathlib import Path
@@ -1448,12 +1467,13 @@ class AppRunner:
                     else settings.delta_india_base_url or "https://api.india.delta.exchange")
             async with httpx.AsyncClient(timeout=15, headers={"User-Agent": USER_AGENT}) as http:
                 client = DeltaIndia(key, secret, base_url=base, client=http)
-                book = DeltaBook(client, mode="live" if testnet else mode,
+                book = DeltaBook(client, mode="live" if testnet else target,
                                  live_orders=True if testnet else bool(settings.delta_india_live_orders),
                                  risk_pct=float(settings.delta_testnet_risk_pct if testnet else settings.delta_india_risk_pct),
                                  max_open=int(settings.delta_testnet_max_open if testnet else settings.delta_india_max_open),
-                                 usd_inr=float(settings.delta_india_usd_inr or usdt_inr or 83.0),
-                                 kill_switch=bool(settings.delta_india_kill_switch),
+                                 usd_inr=float(settings.delta_india_usd_inr or usdt_inr or 85.0),
+                                 # the kill switch is for real money; the demo keeps testing
+                                 kill_switch=False if testnet else bool(settings.delta_india_kill_switch),
                                  backstop_r=float(settings.delta_india_backstop_r),
                                  daily_loss_pct=float(settings.delta_india_daily_loss_pct),
                                  min_wallet_inr=0.0 if testnet else float(settings.delta_india_min_wallet_inr),
@@ -1462,40 +1482,45 @@ class AppRunner:
                                  state_path=Path("data/delta_testnet_state.json") if testnet else STATE_PATH)
                 return await getattr(book, method)(*args)
         except Exception as e:  # noqa: BLE001
-            log.warning("delta_india_call_failed", method=method, error=str(e)[:160])
+            log.warning("delta_india_call_failed", target=target, method=method, error=str(e)[:160])
             return None
 
     async def _delta_reconcile_job(self) -> None:
-        """Every few minutes in live mode: Delta's own positions vs ours; alert on anything Delta closed itself."""
-        events = await self._delta_call("reconcile") or []
-        # a read error (exchange 'unavailable') alerts only when the same contract fails two runs in a row
+        """Every few minutes: each Delta book's positions vs ours; alert on anything Delta closed itself."""
         fails = getattr(self, "_delta_read_fails", {})
-        failed_now = {e.get("delta_symbol") for e in events if e.get("event") == "reconcile_error"}
-        self._delta_read_fails = {s: fails.get(s, 0) + 1 for s in failed_now}
-        for e in events:
-            log.warning("delta_reconcile", **{k: v for k, v in e.items() if k != "event"}, kind=e.get("event"))
-            if e.get("event") == "reconcile_error" and self._delta_read_fails.get(e.get("delta_symbol"), 0) < 2:
-                continue
-            try:
-                await self.notifier.send_text(f"⚖️ Delta India reconcile: {e.get('event')} {e.get('delta_symbol')} "
-                                              + ", ".join(f"{k}={v}" for k, v in e.items()
-                                                          if k not in ("event", "delta_symbol")))
-            except Exception:  # noqa: BLE001
-                pass
+        seen: dict = {}
+        for target in self._delta_targets():
+            events = await self._delta_call_one(target, "reconcile") or []
+            # a read error (exchange 'unavailable') alerts only when the same contract fails two runs in a row
+            for e in events:
+                if e.get("event") == "reconcile_error":
+                    k = (target, e.get("delta_symbol"))
+                    seen[k] = fails.get(k, 0) + 1
+            for e in events:
+                log.warning("delta_reconcile", target=target, **{k: v for k, v in e.items() if k != "event"},
+                            kind=e.get("event"))
+                if e.get("event") == "reconcile_error" and seen.get((target, e.get("delta_symbol")), 0) < 2:
+                    continue
+                label = "Delta India LIVE ₹" if target == "live" else "Delta DEMO" if target == "testnet" else "Delta shadow"
+                try:
+                    await self.notifier.send_text(f"⚖️ {label} reconcile: {e.get('event')} {e.get('delta_symbol')} "
+                                                  + ", ".join(f"{k}={v}" for k, v in e.items()
+                                                              if k not in ("event", "delta_symbol")))
+                except Exception:  # noqa: BLE001
+                    pass
+        self._delta_read_fails = seen
 
     async def _mirror_delta_india(self, symbol: str, side_word: str, entry: float, stop: float,
                                   target: float, signal_type: str, usdt_inr: float = 83.0) -> None:
-        """Copy a paper swing open to Delta India (shadow log or live order — see settings)."""
-        mode = (settings.delta_india_mode or "off").lower()
-        if mode == "off":
-            return
-        plan = await self._delta_call("on_paper_open", symbol, side_word, entry, stop, target, signal_type,
-                                      usdt_inr=usdt_inr)
-        if plan is None:
-            return
-        log.info("delta_india_mirror", symbol=symbol, mode=mode, ok=plan.ok, reason=plan.reason,
-                 delta=plan.delta_symbol, size=plan.size, risk_inr=round(plan.risk_inr, 2),
-                 live_orders=bool(settings.delta_india_live_orders))
+        """Copy a paper swing open to every active Delta book (live first, then the demo)."""
+        for book in self._delta_targets():
+            plan = await self._delta_call_one(book, "on_paper_open", symbol, side_word, entry, stop, target,
+                                              signal_type, usdt_inr=usdt_inr)
+            if plan is None:
+                continue
+            log.info("delta_india_mirror", symbol=symbol, target=book, ok=plan.ok, reason=plan.reason,
+                     delta=plan.delta_symbol, size=plan.size, risk_inr=round(plan.risk_inr, 2),
+                     leverage=getattr(plan, "leverage", 0), live_orders=bool(settings.delta_india_live_orders))
 
     async def _log_signal(self, sig, suppressed_by: str = "", **extra) -> int:
         """

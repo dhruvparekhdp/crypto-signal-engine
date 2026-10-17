@@ -43,19 +43,20 @@ async def test_a_read_that_keeps_failing_is_reported(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_alert_only_on_the_second_failed_run():
+async def test_alert_only_on_the_second_failed_run(monkeypatch):
     from scheduler.runner import AppRunner
     r = AppRunner.__new__(AppRunner)
     r.notifier = SimpleNamespace(send_text=AsyncMock())
+    monkeypatch.setattr(AppRunner, "_delta_targets", staticmethod(lambda: ["live"]))
     err = [{"delta_symbol": "SOLUSD", "event": "reconcile_error", "error": "unavailable"}]
-    r._delta_call = AsyncMock(return_value=err)
+    r._delta_call_one = AsyncMock(return_value=err)
     await r._delta_reconcile_job()
     assert r.notifier.send_text.await_count == 0
     await r._delta_reconcile_job()
     assert r.notifier.send_text.await_count == 1
-    r._delta_call = AsyncMock(return_value=[])                    # recovered: counter resets
+    r._delta_call_one = AsyncMock(return_value=[])                # recovered: counter resets
     await r._delta_reconcile_job()
-    r._delta_call = AsyncMock(return_value=err)
+    r._delta_call_one = AsyncMock(return_value=err)
     await r._delta_reconcile_job()
     assert r.notifier.send_text.await_count == 1
 

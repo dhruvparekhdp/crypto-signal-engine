@@ -275,6 +275,9 @@ class Settings(BaseSettings):
     # delta_india_mode = "testnet": mirror paper swing trades onto the DEMO account (fake money, real order flow)
     delta_testnet_risk_pct: float = 0.03       # same risk as the paper book, so demo results compare to paper
     delta_testnet_max_open: int = 10
+    # Keep the demo copying paper swing trades even while the real-money book is live (owner, 18 Oct 2026: paper,
+    # demo and live run side by side; test data is analysed from all three). The kill switch never stops the demo.
+    delta_testnet_mirror: bool = True
     # Kill switch: ON = no new Delta orders (open ones are still protected and can be closed by the engine)
     delta_india_kill_switch: bool = False
     # Server-side backstop on Delta: the exchange stop trails the engine's profit lock by this many R, so an engine

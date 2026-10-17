@@ -311,6 +311,9 @@ FIELDS: tuple[Field, ...] = (
     Field("intraday_margin_cap_frac", "signals", "Intraday: max margin per trade (share of equity)",
           "Caps each intraday trade's margin so intraday can never crowd out the swing book.",
           kind="float", lo=0.0, hi=0.5),
+    Field("delta_testnet_mirror", "delta", "Also copy trades to the demo account",
+          "ON = every paper swing trade is also placed on the Delta demo (fake money) while live runs, for testing. "
+          "The kill switch does not stop the demo.", kind="bool"),
     Field("delta_india_kill_switch", "delta", "Delta KILL SWITCH",
           "ON = no new Delta orders at all. Open positions keep their exchange stops.", kind="bool"),
     Field("delta_india_daily_loss_pct", "delta", "Delta daily loss limit (share of wallet)",
@@ -423,7 +426,7 @@ def _is_set(settings, key: str) -> bool:
 MAIN_SECTIONS: dict[str, tuple[str, ...]] = {
     "Live ₹ · Delta India": ("delta_india_kill_switch", "delta_india_mode", "delta_india_live_orders",
                              "delta_india_risk_pct", "delta_india_max_open", "delta_india_daily_loss_pct",
-                             "delta_india_min_wallet_inr", "delta_india_min_leverage"),
+                             "delta_india_min_wallet_inr", "delta_india_min_leverage", "delta_testnet_mirror"),
     "Paper book": ("paper_open_families",),
     "News & AI": ("event_blackout_enabled", "news_sentiment_enabled", "event_monitor_enabled",
                   "move_attribution_enabled", "groq_postmortem_enabled"),
