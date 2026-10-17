@@ -60,6 +60,11 @@ def _read_dir(root: Path, market: str, symbol: str, interval: str) -> pd.DataFra
         raise MissingData(f"no {interval} klines for {symbol} under {root}")
     cols = ["open_time", "open", "high", "low", "close", "volume", "taker_buy_volume"]
     df = pd.concat([pd.read_parquet(f, columns=cols) for f in files], ignore_index=True)
+    # Binance's spot archive switched open_time to MICROseconds from 2025 (futures stayed in ms): convert those rows,
+    # whole-row exact, so the clock check below still catches anything genuinely wrong (17 Oct 2026, PAXG spot)
+    us = df["open_time"] >= 1e15
+    if us.any():
+        df.loc[us, "open_time"] = df.loc[us, "open_time"] // 1000
     df = df.drop_duplicates("open_time").sort_values("open_time").reset_index(drop=True)
     check_clock(df["open_time"], interval, f"{symbol} {interval}")
     return df
