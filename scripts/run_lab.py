@@ -61,6 +61,12 @@ EXITS = {
                        ("slow", ((1.5, 0.0), (2.0, 0.5), (2.5, 1.0))),
                        ("fast", ((0.75, 0.0), (1.25, 0.5), (1.75, 1.0), (2.25, 1.5))))
        for cf in (None, 60, 240) for bf in (0.0, 0.25)},
+    # 18 Oct 2026 owner: "at 1.28R the lock should be 0.75-1R" - a tight trail from 1R, lock = best - gap, stepped
+    # every 0.25R, with the live 1h-close confirmation (compare with rb_std_c60_b25, the live ladder)
+    **{f"own_gap{int(g * 100):02d}_c60": ExitModel(stop_atr=3.0, rr=3.0, max_hold_min=10080, lock_confirm_min=60,
+                                                    ladder=tuple((1.0 + 0.25 * i, round(1.0 + 0.25 * i - g, 2))
+                                                                 for i in range(8)))
+       for g in (0.5, 0.3)},
     # 15 Oct 2026 intraday research (owner: 1h minimum): two exit styles for 1h/2h signals
     "intra_a": ExitModel(stop_atr=2.0, rr=2.0, max_hold_min=1440),
     "intra_b": ExitModel(stop_atr=1.5, rr=3.0, max_hold_min=2880),
