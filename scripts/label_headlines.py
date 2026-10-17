@@ -20,6 +20,8 @@ BATCH, PACE_S = 30, 45
 
 
 async def main() -> None:
+    from scripts._ai_guard import require_quota_window
+    require_quota_window()
     from sqlalchemy import select
 
     from config.overrides import apply

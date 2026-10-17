@@ -94,6 +94,8 @@ async def finbert(sample: list[dict]) -> dict:
 
 
 async def main() -> None:
+    from scripts._ai_guard import require_quota_window
+    require_quota_window()
     from config.overrides import apply
     from config.settings import settings
     from scheduler.keys_page import _stored

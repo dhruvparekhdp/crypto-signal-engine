@@ -2672,11 +2672,24 @@ class AppRunner:
                 log.info("event_monitor_daily_cap_reached", calls=self._monitor_calls)
                 return
             async with AsyncSessionFactory() as session:
-                rows = await Repository(session).recent_events(14)
+                repo_ = Repository(session)
+                rows = await repo_.recent_events(14)
+                heads = await repo_.news_sentiment_since(6)
             active = active_window([
                 ActiveEvent(r.id, r.title, r.category, r.level_current, r.happened_at, r.direction)
                 for r in rows if r.status == "active"], now)
             max_level = max((e.level for e in active), default=0)
+            # 18 Oct 2026: run only when something happened (most runs found nothing or got no answer)
+            from analysis.ai_gates import btc_shock, event_near, fresh_news_count
+            btc = await self.crypto_store.get("btcusdt")
+            closes = [c.close for c in (btc.candles_1m if btc else [])]
+            reasons = [r for r, ok in (("release_near", event_near(now)), ("btc_shock", btc_shock(closes)),
+                                       ("live_event", max_level >= 3),
+                                       ("news", fresh_news_count(heads, getattr(self, "_monitor_last_run", None), now) >= 3))
+                       if ok]
+            if not reasons:
+                log.info("event_monitor_skipped_quiet")
+                return
             self._monitor_calls += 1
             self._monitor_last_run = now
             reply = await ask_json(monitor_model_role(max_level), MONITOR_SYSTEM,
@@ -2844,6 +2857,21 @@ class AppRunner:
         if _briefing_can_wait(self.latest_briefing, datetime.now(UTC), self._blackout(now_utc()) is not None):
             log.info("market_briefing_skipped_quiet")
             return
+        # 18 Oct 2026: 75-95% of 1,800 stored briefings said "nothing new" - brief only when our feeds have
+        # something since the last briefing, or a scheduled release is close
+        from analysis.ai_gates import event_near, fresh_news_count
+        try:
+            now_n = datetime.now(UTC).replace(tzinfo=None)
+            async with AsyncSessionFactory() as session:
+                repo = Repository(session)
+                last = self.latest_briefing or await repo.latest_briefing()
+                rows = await repo.news_sentiment_since(12)
+            since = getattr(last, "created_at", None)
+            if not event_near(now_n) and fresh_news_count(rows, since, now_n) == 0:
+                log.info("market_briefing_skipped_no_news", since=str(since)[:16])
+                return
+        except Exception as e:  # noqa: BLE001 - if the check fails, brief as before
+            log.debug("briefing_gate_failed", error=str(e)[:120])
         try:
             got = await fetch_briefing()
             # fetch_briefing returns a Reply when no model answered, or a tuple
@@ -3042,6 +3070,21 @@ class AppRunner:
             if not moves:
                 log.info("move_attribution_skipped", reason="no stored prices yet")
                 return
+            # 18 Oct 2026: explain only coins that really moved (>= 3% in 4 h), at most N runs a day
+            from analysis.ai_gates import big_movers
+            movers = big_movers(moves, settings.move_attribution_min_move_pct)
+            day = now.date()
+            if getattr(self, "_attr_day", None) != day:
+                self._attr_day, self._attr_runs = day, 0
+            if not movers:
+                log.info("move_attribution_skipped", reason="no coin moved enough")
+                return
+            if self._attr_runs >= settings.move_attribution_daily_cap:
+                log.info("move_attribution_skipped", reason="daily cap reached")
+                return
+            self._attr_runs += 1
+            keep = {m.symbol for m in movers} | {"btcusdt"}
+            moves = [m for m in moves if m.symbol in keep]
             digest = signals_digest(sigs)
             news = context_block(briefing, headlines, "*", limit=20)
             btc = next((m for m in moves if m.symbol == "btcusdt"), None)

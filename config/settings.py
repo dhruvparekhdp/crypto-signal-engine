@@ -156,7 +156,7 @@ class Settings(BaseSettings):
     move_attribution_enabled: bool = True
     # The event monitor: adaptive, jittered web checks with a daily cap.
     event_monitor_enabled: bool = True
-    event_monitor_daily_cap: int = 30           # 104 searches/day found nothing new and spent Groq's daily quota
+    event_monitor_daily_cap: int = 8            # 18 Oct: runs only when something happened (analysis/ai_gates.py)
     llm_chain_briefing_calm: str = (
         "gemini:gemini-3.1-flash-lite+search, gemini:gemini-3.5-flash-lite+search, "
         "groq:openai/gpt-oss-20b+search, openrouter:nvidia/nemotron-3-ultra-550b-a55b:free+search")
@@ -361,6 +361,8 @@ class Settings(BaseSettings):
     cold_storage_dir: str = "data/archive"
     move_attribution_minutes: int = 180         # hourly searching calls exhausted Groq's daily quota
     move_attribution_window_hours: int = 12
+    move_attribution_min_move_pct: float = 3.0   # explain only coins that moved this much in 4 h (18 Oct 2026)
+    move_attribution_daily_cap: int = 4
     # Reviewing what is already open.
     #
     # A losing position has to keep earning the right to stay open: the local
