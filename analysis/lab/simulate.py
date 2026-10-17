@@ -47,6 +47,12 @@ class ExitModel:
     # fires only when a bar of this many minutes CLOSES beyond it, not on a wick. The original stop stays intrabar.
     lock_confirm_min: int | None = None
     lock_buffer_r: float = 0.0             # place every lock this many R further away (room for noise)
+    # 18 Oct 2026 smart switch (owner: "fixed values are not smart"), on top of the ladder:
+    flip_ema: int | None = None            # momentum flip: hourly close back across this-hour EMA AGAINST the trade...
+    flip_gap_r: float = 0.5                # ...tightens the lock to best - gap (only once best >= flip_min_r)
+    flip_min_r: float = 1.0
+    decay_after_min: int | None = None     # no new best for this long (and best >= 1R) -> lock decay_frac of open profit
+    decay_frac: float = 0.5
 
     def key(self) -> str:
         k = (f"sl{self.stop_atr}_rr{self.rr}_h{self.max_hold_min}_be{self.be_trigger_r}"
@@ -63,6 +69,10 @@ class ExitModel:
             k += f"_cf{self.lock_confirm_min}"
         if self.lock_buffer_r:
             k += f"_buf{self.lock_buffer_r:g}"
+        if self.flip_ema:
+            k += f"_flip{self.flip_ema}g{self.flip_gap_r:g}m{self.flip_min_r:g}"
+        if self.decay_after_min:
+            k += f"_decay{self.decay_after_min}x{self.decay_frac:g}"
         return k
 
 
@@ -122,6 +132,13 @@ def simulate_symbol(sig_bars: Bars, signals: np.ndarray, ex: Bars, exit: ExitMod
         reason = "time"
         exit_px = None
         j_end = min(n - 1, e + max_bars)
+        ema, last_best_t = None, int(ex.t[e])
+        if exit.flip_ema:                            # seed the hourly EMA from the hours before entry
+            kf = 2 / (exit.flip_ema + 1)
+            for jj in range(max(0, e - exit.flip_ema * 3 * 60), e):
+                if (int(ex.t[jj]) + INTERVAL_MS[ex.interval]) % 3_600_000 == 0:
+                    cc = float(ex.c[jj])
+                    ema = cc if ema is None else ema + (cc - ema) * kf
         Hw, Lw, Ow = ex.h[e:j_end + 1].tolist(), ex.l[e:j_end + 1].tolist(), ex.o[e:j_end + 1].tolist()
         j = e
         while j <= j_end:
@@ -174,10 +191,14 @@ def simulate_symbol(sig_bars: Bars, signals: np.ndarray, ex: Bars, exit: ExitMod
                     reason = "trail"
                     break
             # arm dynamic stops for the NEXT bar
+            prev_best = best
             if side > 0:
                 best = max(best, hi)
             else:
                 best = min(best, lo)
+            bar_end = int(ex.t[j]) + INTERVAL_MS[ex.interval]
+            if best != prev_best:
+                last_best_t = bar_end
             if be_px is not None and not armed_be and ((side > 0 and best >= be_px) or (side < 0 and best <= be_px)):
                 armed_be = True
                 if (side > 0 and be_stop > stop) or (side < 0 and be_stop < stop):
@@ -195,6 +216,21 @@ def simulate_symbol(sig_bars: Bars, signals: np.ndarray, ex: Bars, exit: ExitMod
                     if (side > 0 and cand > stop) or (side < 0 and cand < stop):
                         stop = cand
                         armed_trail = True
+            if exit.flip_ema and bar_end % 3_600_000 == 0:
+                cc = float(ex.c[j])
+                ema = cc if ema is None else ema + (cc - ema) * (2 / (exit.flip_ema + 1))
+                against = (side > 0 and cc < ema) or (side < 0 and cc > ema)
+                if against and best_r >= exit.flip_min_r:
+                    cand = entry + side * (best_r - exit.flip_gap_r) * r_unit
+                    if (side > 0 and cand > stop) or (side < 0 and cand < stop):
+                        stop = cand
+                        armed_trail = True
+            if (exit.decay_after_min and best_r >= 1.0
+                    and bar_end - last_best_t >= exit.decay_after_min * 60_000):
+                cand = entry + (best - entry) * exit.decay_frac
+                if (side > 0 and cand > stop) or (side < 0 and cand < stop):
+                    stop = cand
+                    armed_trail = True
             if exit.giveback_after_r is not None and best_r >= exit.giveback_after_r:
                 cand = entry + (best - entry) * (1 - exit.giveback_frac)
                 if (side > 0 and cand > stop) or (side < 0 and cand < stop):

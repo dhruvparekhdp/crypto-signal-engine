@@ -67,6 +67,14 @@ EXITS = {
                                                     ladder=tuple((1.0 + 0.25 * i, round(1.0 + 0.25 * i - g, 2))
                                                                  for i in range(8)))
        for g in (0.5, 0.3)},
+    # 18 Oct 2026 smart switch on top of the live ladder (1/1.5/2/2.5R, 0.25R buffer, 1h-close confirmation)
+    **{name: ExitModel(stop_atr=3.0, rr=3.0, max_hold_min=10080, lock_confirm_min=60, lock_buffer_r=0.25,
+                       ladder=((1.0, 0.0), (1.5, 0.5), (2.0, 1.0), (2.5, 1.5)), **extra)
+       for name, extra in (("smart_flip20_g05", {"flip_ema": 20, "flip_gap_r": 0.5}),
+                           ("smart_flip20_g075", {"flip_ema": 20, "flip_gap_r": 0.75}),
+                           ("smart_decay3d", {"decay_after_min": 4320, "decay_frac": 0.5}),
+                           ("smart_flip_decay", {"flip_ema": 20, "flip_gap_r": 0.75, "decay_after_min": 4320,
+                                                 "decay_frac": 0.5}))},
     # 15 Oct 2026 intraday research (owner: 1h minimum): two exit styles for 1h/2h signals
     "intra_a": ExitModel(stop_atr=2.0, rr=2.0, max_hold_min=1440),
     "intra_b": ExitModel(stop_atr=1.5, rr=3.0, max_hold_min=2880),
