@@ -62,6 +62,20 @@ def parse_delta_candles(rows: list) -> list[dict]:
     return out
 
 
+def ticker_24h(row: dict) -> dict | None:
+    """24h open/high/low and base-asset volume from one Delta ticker row (open/high/low are the last 24 h; volume is
+    turnover in USD / price, so it is in coins like Binance's), or None when the row lacks them."""
+    try:
+        o, hi, lo = float(row.get("open") or 0), float(row.get("high") or 0), float(row.get("low") or 0)
+        close = float(row.get("close") or row.get("mark_price") or 0)
+        turnover = float(row.get("turnover_usd") or row.get("turnover") or 0)
+    except (TypeError, ValueError):
+        return None
+    if o <= 0 or hi <= 0 or lo <= 0:
+        return None
+    return {"open": o, "high": hi, "low": lo, "volume": turnover / close if close > 0 else 0.0}
+
+
 class DeltaMarket:
     """Polls Delta India for 1m candles (watchlist) and mark prices."""
 
@@ -77,6 +91,9 @@ class DeltaMarket:
         self.last_success: datetime | None = None
         self._price_cache: dict[str, float] = {}
         self._price_cache_at = 0.0
+        # 24h open/high/low/base volume per Binance-shaped symbol, from the same tickers call (18 Oct 2026: in
+        # Delta-only mode nothing filled these, so every coin read +0.00% on the price tape)
+        self._stats: dict[str, dict] = {}
 
     def _headers(self) -> dict:
         return {"User-Agent": USER_AGENT, "Accept": "application/json"}
@@ -121,6 +138,7 @@ class DeltaMarket:
             self.last_error = f"tickers: {type(e).__name__}: {e}"
             return self._price_cache
         out: dict[str, float] = {}
+        stats: dict[str, dict] = {}
         for row in rows:
             sym = (row.get("symbol") or "").upper()
             if not sym.endswith("USD") or sym.endswith("USDT"):
@@ -136,9 +154,14 @@ class DeltaMarket:
                 continue
             # BTCUSD -> BTCUSDT for internal lookups
             out[sym[:-3] + "USDT"] = px
+            st = ticker_24h(row)
+            if st:
+                stats[sym[:-3] + "USDT"] = st
         if out:
             self._price_cache = out
             self._price_cache_at = time.time()
+        if stats:
+            self._stats = stats
         return self._price_cache
 
     async def fetch(self) -> int:
@@ -174,8 +197,14 @@ class DeltaMarket:
             now = datetime.now(UTC)
             for sym in list(self.refreshed):
                 px = marks.get(sym.upper())
-                if px and px > 0:
+                # the crypto store has no update_price (prices come from the 1m candles); calling it raised and
+                # silently skipped everything after it in this loop until 18 Oct 2026
+                if px and px > 0 and hasattr(self.store, "update_price"):
                     await self.store.update_price(sym, px, now)
+                st = self._stats.get(sym.upper())
+                if st and hasattr(self.store, "update_24h_stats"):
+                    await self.store.update_24h_stats(symbol=sym, price_24h_ago=st["open"], volume_24h=st["volume"],
+                                                      high_24h=st["high"], low_24h=st["low"])
         except Exception as e:  # noqa: BLE001
             log.debug("delta_mark_price_push_failed", error=str(e)[:120])
         if self.refreshed:

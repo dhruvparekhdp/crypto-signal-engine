@@ -59,3 +59,47 @@ class SwingBarsTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+def test_ticker_24h_fills_the_change_high_low_and_volume():
+    # 18 Oct 2026: in Delta-only mode every coin read +0.00% on the price tape - nothing filled the 24h stats
+    from collectors.delta_market import ticker_24h
+    row = {"symbol": "BTCUSD", "close": 81525.0, "open": 81390.0, "high": 81797.5, "low": 80888.5,
+           "mark_price": "81524.87", "turnover_usd": 425359570.28}
+    st = ticker_24h(row)
+    assert st["open"] == 81390.0 and st["high"] == 81797.5 and st["low"] == 80888.5
+    assert abs(st["volume"] - 425359570.28 / 81525.0) < 1e-6
+    assert ticker_24h({"symbol": "X", "open": 0}) is None
+
+
+def test_fetch_pushes_24h_stats_so_the_change_is_not_zero():
+    import asyncio
+
+    from analysis.crypto_state_store import CryptoStateStore
+    from collectors.delta_market import DeltaMarket
+
+    async def go():
+        store = CryptoStateStore()
+        await store.add_symbol("btcusdt") if hasattr(store, "add_symbol") else None
+        m = DeltaMarket(store)
+        bars = [{"timestamp": 1_792_000_000_000 + i * 60_000, "open": 81000.0, "high": 81100.0, "low": 80900.0,
+                 "close": 81500.0, "volume": 1.0} for i in range(30)]
+
+        async def fake_candles(sym, res, limit=360):
+            return bars
+
+        async def fake_marks():
+            m._stats = {"BTCUSDT": {"open": 80000.0, "high": 82000.0, "low": 79000.0, "volume": 5000.0}}
+            return {"BTCUSDT": 81500.0}
+        m.fetch_candles, m.fetch_mark_prices = fake_candles, fake_marks
+        store.get_symbols = (lambda: _syms())
+        await m.fetch()
+        st = await store.get("btcusdt") if hasattr(store, "get") else store._states.get("btcusdt")
+        return st
+
+    async def _syms():
+        return ["btcusdt"]
+    st = asyncio.run(go())
+    if st is not None:
+        assert round(st.price_change_24h_pct, 2) == round((81500 - 80000) / 80000 * 100, 2)
+        assert st.high_24h == 82000.0 and st.volume_24h == 5000.0
