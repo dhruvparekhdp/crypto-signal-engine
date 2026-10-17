@@ -34,7 +34,11 @@ LIMITS: dict[str, dict] = {
     "groq/openai/gpt-oss-20b": {"rpm": 30, "rpd": 1000, "tpm": 8000, "tpd": 200_000},
     "groq/*": {"rpm": 30, "rpd": 1000, "tpm": 6000, "tpd": 200_000},
     "openrouter/*": {"rpm": 20, "rpd": 50, "tpm": None, "tpd": None},
-    "gemini/*": {"rpm": 10, "rpd": 250, "tpm": 250_000, "tpd": None},
+    # Gemini API free tier on the owner's key (AI Studio rate-limit page, 18 Oct 2026). Search grounding has no free
+    # quota (429), so Gemini "+search" means our own headlines + web snippets injected by llm_client.
+    "gemini/gemini-3.5-flash-lite": {"rpm": 15, "rpd": 500, "tpm": 250_000, "tpd": None},
+    "gemini/gemini-3.1-flash-lite": {"rpm": 15, "rpd": 500, "tpm": 250_000, "tpd": None},
+    "gemini/*": {"rpm": 5, "rpd": 20, "tpm": 250_000, "tpd": None},             # the 3.x Flash models: 20 a day
     "hf/analyst": {"rpm": 2, "rpd": None, "tpm": None, "tpd": None},          # our CPU Space: one at a time
     "hf/classify": {"rpm": 20, "rpd": None, "tpm": None, "tpd": None},        # our Space: batched headline scoring
     "hf/*": {"rpm": 5, "rpd": 100, "tpm": None, "tpd": None},

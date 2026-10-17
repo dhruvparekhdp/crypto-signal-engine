@@ -43,12 +43,13 @@ class TestChainShape(unittest.TestCase):
                 self.assertLess(best, 3)
 
     def test_search_roles_keep_search_on_every_entry(self):
-        # Groq searches with its own tool; a free OpenRouter model gets DuckDuckGo results put in its prompt
-        # (collectors/llm_client.py), never OpenRouter's paid search plugin.
+        # Groq searches with its own tool; free OpenRouter and Gemini models get our own headlines + DuckDuckGo
+        # results put in their prompt (collectors/llm_client.py) - never OpenRouter's paid plugin or Google's grounding
+        # tool (no free quota on the owner's Gemini key, 18 Oct 2026).
         for role in SEARCH_ROLES:
             with self.subTest(role=role):
                 for provider, model in _chain(role):
-                    self.assertIn(provider, ("groq", "openrouter", "hf"))
+                    self.assertIn(provider, ("groq", "openrouter", "hf", "gemini"))
                     self.assertTrue(model.endswith("+search"), model)
                     if provider == "openrouter":
                         self.assertTrue(model.endswith(":free+search"), model)

@@ -134,28 +134,32 @@ class Settings(BaseSettings):
     # (OpenRouter Nemotron answered single small questions honestly; it fails on 30-item batches). Claude gets its own
     # roles in phase B (owner brief, trade notes, weekly audit) instead of leading these.
     llm_chain_pre_trade: str = (
-        "groq:openai/gpt-oss-120b, groq:openai/gpt-oss-20b, openrouter:nvidia/nemotron-3-ultra-550b-a55b:free")
+        "groq:openai/gpt-oss-120b, gemini:gemini-3.5-flash-lite, groq:openai/gpt-oss-20b, "
+        "openrouter:nvidia/nemotron-3-ultra-550b-a55b:free")
     llm_chain_post_trade: str = (
-        "groq:openai/gpt-oss-120b+search, groq:openai/gpt-oss-20b, openrouter:nvidia/nemotron-3-ultra-550b-a55b:free")
+        "groq:openai/gpt-oss-120b, gemini:gemini-3.5-flash-lite, groq:openai/gpt-oss-20b, "
+        "gemini:gemini-3.1-flash-lite, openrouter:nvidia/nemotron-3-ultra-550b-a55b:free")
     # The world-events briefing. Every entry can actually search.
+    # 18 Oct 2026: Gemini Flash-Lite first (500 free calls/day each) with our own headlines injected; Groq's browser
+    # search (10-36k tokens a call, spent the free daily quota) only as the fallback
     llm_chain_briefing: str = (
-        "groq:openai/gpt-oss-20b+search, groq:openai/gpt-oss-120b+search, "
-        "openrouter:nvidia/nemotron-3-ultra-550b-a55b:free+search")
+        "gemini:gemini-3.5-flash-lite+search, gemini:gemini-3.1-flash-lite+search, "
+        "groq:openai/gpt-oss-20b+search, openrouter:nvidia/nemotron-3-ultra-550b-a55b:free+search")
     market_briefing_enabled: bool = True
     market_briefing_minutes: int = 180         # 15 Oct: briefing news had no predictive value; it is a risk radar
     # After a briefing that found nothing, wait this long before the next one unless an event is near.
     market_briefing_quiet_minutes: int = 120
     # Hourly: why each watchlist coin moved, and how our signals fared.
     llm_chain_attribution: str = (
-        "groq:openai/gpt-oss-20b+search, groq:openai/gpt-oss-120b+search, "
-        "openrouter:nvidia/nemotron-3-ultra-550b-a55b:free+search")
+        "gemini:gemini-3.5-flash-lite+search, gemini:gemini-3.1-flash-lite+search, "
+        "groq:openai/gpt-oss-20b+search, openrouter:nvidia/nemotron-3-ultra-550b-a55b:free+search")
     move_attribution_enabled: bool = True
     # The event monitor: adaptive, jittered web checks with a daily cap.
     event_monitor_enabled: bool = True
     event_monitor_daily_cap: int = 30           # 104 searches/day found nothing new and spent Groq's daily quota
     llm_chain_briefing_calm: str = (
-        "groq:openai/gpt-oss-20b+search, groq:openai/gpt-oss-120b+search, "
-        "openrouter:nvidia/nemotron-3-ultra-550b-a55b:free+search")
+        "gemini:gemini-3.1-flash-lite+search, gemini:gemini-3.5-flash-lite+search, "
+        "groq:openai/gpt-oss-20b+search, openrouter:nvidia/nemotron-3-ultra-550b-a55b:free+search")
     # Labelling past moves from the Binance lake (scripts/review_history.py).
     # Local first: it is bulk work and the free Groq requests are shared with
     # live trading. The biggest moves use web search to find that day's news.
@@ -440,17 +444,18 @@ class Settings(BaseSettings):
     # a few hundred headlines a day it is also the one that would cost the
     # most through a metered API. Local first, and the free tiers behind it.
     llm_chain_news_scoring: str = (
-        "groq:qwen/qwen3.8-27b, groq:openai/gpt-oss-20b, openrouter:nvidia/nemotron-3-ultra-550b-a55b:free")
+        "groq:qwen/qwen3.8-27b, gemini:gemini-3.5-flash-lite, groq:openai/gpt-oss-20b, "
+        "openrouter:nvidia/nemotron-3-ultra-550b-a55b:free")
 
     # Groq leads, not the laptop: this call sits inside the 30-second paper
     # tick with a 12-second budget, and an 8B model on the i5 needs 10-25 s
     # just to read the prompt. gemini-2.5-* is being shut down in October.
     llm_chain_position_review: str = (
-        "groq:openai/gpt-oss-20b, openrouter:nvidia/nemotron-3-ultra-550b-a55b:free")
+        "groq:openai/gpt-oss-20b, gemini:gemini-3.1-flash-lite, openrouter:nvidia/nemotron-3-ultra-550b-a55b:free")
 
     # weekly, low volume, batch: Sonnet not Opus (cost), Gemini Pro free tier, Groq when neither key is saved
     llm_chain_research: str = (
-        "anthropic:claude-sonnet-5-5, gemini:gemini-3.1-pro-preview, groq:openai/gpt-oss-120b")
+        "anthropic:claude-sonnet-5-5, gemini:gemini-3.8-flash, groq:openai/gpt-oss-120b")
 
     # Precedent-based event context (28 Sep) — NOT a price-direction
     # forecaster; the owner was told plainly no detector stack here can

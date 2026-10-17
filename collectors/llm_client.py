@@ -320,11 +320,19 @@ async def _call_openai_shaped(provider: Provider, model: str, system: str,
         else:
             # No built-in search here: fetch DuckDuckGo results on this server and put them in the prompt,
             # as _call_hf does, so a search role still has a free fallback when Groq's daily quota is spent.
+            # Fresh context without Groq's token-hungry browser tool (18 Oct 2026: ~10-36k tokens per call spent
+            # Groq's free daily quota by evening): our own feeds' latest headlines, plus web snippets when DDG answers
+            heads = await _fresh_headlines_block()
             snippets = await asyncio.to_thread(_search_ddg, _derive_search_query(user), 5)
+            blocks = []
+            if heads:
+                blocks.append(f"Latest headlines from our news feeds (newest first, UTC):\n{heads}")
             if snippets:
+                blocks.append(f"Real-time web search results (retrieved just now):\n{snippets}")
+            if blocks:
                 payload["messages"][0]["content"] = (
-                    f"{system}\n\nReal-time web search results (retrieved just now):\n{snippets}\n\n"
-                    "Ground your answer in these results. Output valid JSON only.")
+                    f"{system}\n\n" + "\n\n".join(blocks) + "\n\nGround your answer in these items only; "
+                    "never report a result for something dated after the current time. Output valid JSON only.")
             search = False                      # json_object mode is fine without tools
     if provider.name != "gemini" and not search:
         payload["response_format"] = {"type": "json_object"}
@@ -392,6 +400,31 @@ async def _call_anthropic(model: str, system: str, user: str,
         messages=[{"role": "user", "content": user}],
     )
     return "".join(b.text for b in message.content if b.type == "text")
+
+
+_HEADS_CACHE: dict = {"t": 0.0, "v": ""}
+
+
+async def _fresh_headlines_block(hours: int = 8, limit: int = 40) -> str:
+    """Our RSS feeds' newest scored headlines (not AI briefing rows, not noise, not future-dated), cached 60 s."""
+    if time.time() - _HEADS_CACHE["t"] < 60:
+        return _HEADS_CACHE["v"]
+    text = ""
+    try:
+        from datetime import UTC, datetime, timedelta
+
+        from storage.database import AsyncSessionFactory
+        from storage.repository import Repository
+        async with AsyncSessionFactory() as session:
+            rows = await Repository(session).news_sentiment_since(hours)
+        now = datetime.now(UTC).replace(tzinfo=None)
+        keep = [r for r in rows if r.headline and r.published_at and r.published_at <= now + timedelta(minutes=15)
+                and not (r.source or "").startswith("web_briefing") and r.event_type != "noise"][:limit]
+        text = "\n".join(f"- {r.published_at:%m-%d %H:%M} [{(r.source or '').split(':')[0]}] {r.headline}" for r in keep)
+    except Exception:  # noqa: BLE001 - no database (tests, scripts): web snippets only
+        text = ""
+    _HEADS_CACHE.update(t=time.time(), v=text)
+    return text
 
 
 def _search_ddg(query: str, max_results: int = 5) -> str:
