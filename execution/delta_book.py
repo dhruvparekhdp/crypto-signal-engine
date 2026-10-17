@@ -377,6 +377,10 @@ class DeltaBook:
         if not pos:
             return {"ok": False, "reason": "not_open_on_delta"}
         side = 1 if pos["side"] == "buy" else -1
+        if pos.get("stop") != lock_stop:          # the engine's current lock, shown on the Live page (18 Oct review:
+            pos["stop"] = lock_stop               # it kept showing the original stop after the ladder moved)
+            state[where][delta_sym] = pos
+            self._save_state(state)
         want = round_to_tick(self.backstop_for(side, pos["init_stop"], pos["risk"], lock_stop), pos.get("tick", 0), side)
         cur = pos["exchange_stop"]
         tighter = want > cur if side > 0 else want < cur

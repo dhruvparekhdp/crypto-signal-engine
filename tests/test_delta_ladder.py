@@ -256,3 +256,15 @@ async def test_sizing_refuses_a_hair_thin_stop_and_never_exceeds_wallet_margin(t
     plan = await book.on_paper_open("xrpusdt", "short", 1.40, 1.41, 1.37, "x")          # 0.7% stop: wants a lot
     max_contracts = int((500 / 86.0) * 10 * 0.9 // 1.40)
     assert plan.ok and plan.size <= max_contracts
+
+
+@pytest.mark.asyncio
+async def test_the_engines_lock_is_recorded_even_when_the_exchange_stop_stays(tmp_path):
+    """The Live page shows the engine's stop from the record; it stayed at the original stop after the ladder moved."""
+    import json
+    fake = FakeDelta()
+    book = _book(tmp_path, fake)
+    await _open_short(book)                                   # short 1.40, stop 1.47, 1R = 0.07
+    await book.on_stop_change("xrpusdt", 1.4175)              # ladder: lock at -0.25R; backstop stays at the stop
+    rec = json.loads((tmp_path / "state.json").read_text())["positions"]["XRPUSD"]
+    assert rec["stop"] == 1.4175 and rec["init_stop"] == 1.47
