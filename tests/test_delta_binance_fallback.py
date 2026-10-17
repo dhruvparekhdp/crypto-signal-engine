@@ -59,7 +59,9 @@ async def test_delta_is_used_when_it_works(monkeypatch):
             calls.append(url)
             return FakeResp(200, {"result": rows})
     bars = await sb.fetch_bars(Client(), "XRPUSDT", now, "4h")
-    assert bars is not None and len(bars.c) > 100 and all("delta" in u for u in calls)
+    assert bars is not None and len(bars.c) > 100 and "delta" in calls[0]
+    assert all("delta" in u for u in calls[1:] if "fapi.binance.com" not in u)      # prices: Delta only
+    assert sum("fapi.binance.com" in u for u in calls) <= 1                          # one volume read (18 Oct)
 
 
 @pytest.mark.asyncio
@@ -190,3 +192,30 @@ def test_8h_bars_from_newest_first_delta_rows_keep_open_and_close_in_order():
             {"time": t0, "open": 100, "high": 106, "low": 98, "close": 105, "volume": 1}]           # 1st half
     bar = _aggregate_delta_rows(rows, 14_400, 28_800)[0]
     assert (bar["time"], bar["open"], bar["high"], bar["low"], bar["close"], bar["volume"]) == (t0, 100, 112, 98, 110, 3)
+
+
+@pytest.mark.asyncio
+async def test_delta_bars_carry_binance_volume_for_the_volume_strategy(monkeypatch):
+    """vol_breakout was backtested on Binance volume; on Delta's thin volume it fired on the same bar only 36-41% of
+    the time (18 Oct 2026). Prices stay Delta's; the volume column comes from Binance when it covers every bar."""
+    monkeypatch.setattr(settings, "delta_only_mode", True)
+    now = 1_792_000_000_000
+    step = 4 * 3_600_000
+    opens = [now - (300 - i + 1) * step for i in range(300)]
+    delta_rows = [{"time": t // 1000, "open": 1, "high": 1.1, "low": 0.9, "close": 1.05, "volume": 7} for t in opens]
+    binance = [[t, "1", "1.1", "0.9", "1.04", str(1000 + i), t + step - 1, "0", 0, "0", "0", "0"]
+               for i, t in enumerate(opens + [now - step])]
+
+    class Client:
+        def __init__(self, binance_ok=True):
+            self.binance_ok = binance_ok
+
+        async def get(self, url, params=None, headers=None, timeout=None):
+            if "delta" in url:
+                return FakeResp(200, {"result": list(reversed(delta_rows))})      # Delta answers newest first
+            return FakeResp(200, binance) if self.binance_ok else FakeResp(502, {})
+    bars = await sb.fetch_bars(Client(), "XRPUSDT", now, "4h")
+    assert bars.c[-1] == 1.05                                  # Delta's price
+    assert list(bars.v[-3:]) == [1297.0, 1298.0, 1299.0]       # Binance's volume, matched by bar open time
+    bars = await sb.fetch_bars(Client(binance_ok=False), "XRPUSDT", now, "4h")
+    assert set(bars.v) == {7.0}                                # Binance down: Delta volume, whole

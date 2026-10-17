@@ -190,7 +190,7 @@ async def fetch_bars(client, symbol: str, now_ms: int, tf: str = TF, limit: int 
         try:
             bars = await _fetch_bars_delta(client, symbol, now_ms, tf, limit)
             if bars is not None and len(bars.c) > 0:
-                return bars
+                return await with_binance_volume(client, bars, symbol, tf, limit)
             why = "empty"
         except Exception as e:  # noqa: BLE001 - fall back below
             why = f"{type(e).__name__}: {str(e)[:80]}"
@@ -200,6 +200,28 @@ async def fetch_bars(client, symbol: str, now_ms: int, tf: str = TF, limit: int 
                          timeout=15)
     r.raise_for_status()
     return bars_from_klines(symbol, r.json(), now_ms, tf)
+
+
+async def with_binance_volume(client, bars: Bars, symbol: str, tf: str, limit: int) -> Bars:
+    """Delta prices with Binance USD-M volume. 18 Oct 2026 venue check over 900 recent bars x 10 coins: Delta and Binance
+    closes differ by a median 0.003-0.13% and donchian/ichimoku/keltner fire on the same bars 80-99% of the time, but
+    vol_breakout (a volume z-score, backtested on Binance volume) agreed only 36-41% on Delta's thin volume - a different
+    strategy. So participation is measured on the deep market; prices, levels and orders stay Delta's. If Binance does
+    not cover every bar, Delta's own volume is kept whole (two scales are never mixed in one z-score)."""
+    try:
+        from collectors.binance_klines import venue_symbol
+        r = await client.get(FAPI_KLINES, params={"symbol": venue_symbol(symbol), "interval": tf, "limit": min(limit + 10, 1500)},
+                             timeout=15)
+        r.raise_for_status()
+        vol = {int(k[0]): float(k[5]) for k in r.json()}
+    except Exception as e:  # noqa: BLE001 - Delta volume is the fallback
+        import structlog
+        structlog.get_logger().info("swing_binance_volume_unavailable", symbol=symbol, tf=tf, error=str(e)[:80])
+        return bars
+    if not all(int(t) in vol for t in bars.t):
+        return bars
+    return Bars(bars.symbol, bars.interval, bars.t, bars.o, bars.h, bars.l, bars.c,
+                np.array([vol[int(t)] for t in bars.t], dtype=float), bars.tb)
 
 
 async def _fetch_bars_delta(client, symbol: str, now_ms: int, tf: str, limit: int) -> Bars | None:
