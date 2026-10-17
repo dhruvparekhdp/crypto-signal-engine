@@ -9,6 +9,14 @@ from analysis import swing_book as sb
 from tests.test_swing_selection import run
 
 
+@pytest.fixture(autouse=True)
+def _paper_own_rules(monkeypatch):
+    """These tests pin the paper book's own rules (paper_mirrors_live off). The production default - paper on the live
+    Delta book's rules - is tested in tests/test_paper_mirrors_live.py."""
+    from config.settings import settings as _s
+    monkeypatch.setattr(_s, "paper_mirrors_live", False)
+
+
 def test_margin_cap_raises_leverage_instead_of_locking_the_wallet():
     # Rs3,000 wallet, 3% risk, 1.5% stop -> Rs6,000 notional. Old sizing: 2.2x on Rs2,700 (90% of the wallet).
     margin, lev = sb.size(3000, 3000, 0.03, 100.0, 98.5, 0.0, 10.0, max_margin_frac=0.15)

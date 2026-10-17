@@ -15,6 +15,14 @@ from storage.models import Base
 LAKE = Path("data/lake/um/klines/BTCUSDT/1m")
 
 
+@pytest.fixture(autouse=True)
+def _paper_own_rules(monkeypatch):
+    """These tests pin the paper book's own rules (paper_mirrors_live off). The production default - paper on the live
+    Delta book's rules - is tested in tests/test_paper_mirrors_live.py."""
+    from config.settings import settings as _s
+    monkeypatch.setattr(_s, "paper_mirrors_live", False)
+
+
 def walk(n, vol, seed=0, drift=0.0):
     rng = np.random.default_rng(seed)
     c = 100 * np.exp(np.cumsum(rng.normal(drift, vol, n)))

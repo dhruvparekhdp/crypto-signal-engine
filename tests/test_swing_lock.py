@@ -6,6 +6,14 @@ from analysis.swing_book import swing_lock
 # short at 100, initial stop 106 (1R = 6 = 3 ATR, so 1 ATR = 2)
 
 
+@pytest.fixture(autouse=True)
+def _paper_own_rules(monkeypatch):
+    """These tests pin the paper book's own rules (paper_mirrors_live off). The production default - paper on the live
+    Delta book's rules - is tested in tests/test_paper_mirrors_live.py."""
+    from config.settings import settings as _s
+    monkeypatch.setattr(_s, "paper_mirrors_live", False)
+
+
 def test_off_changes_nothing_but_tracks_the_best_price():
     assert swing_lock(-1, 100, 106, 106, 0, 95, "off", 2.0, 3.0) == (106, 95)
 

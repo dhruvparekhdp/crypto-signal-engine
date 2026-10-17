@@ -12,6 +12,14 @@ from storage.models import Base
 PRICES = {"BTCUSDT": 60000.0, "SOLUSDT": 150.0, "DOGEUSDT": 0.2, "XRPUSDT": 0.6, "BCHUSDT": 400.0}
 
 
+@pytest.fixture(autouse=True)
+def _paper_own_rules(monkeypatch):
+    """These tests pin the paper book's own rules (paper_mirrors_live off). The production default - paper on the live
+    Delta book's rules - is tested in tests/test_paper_mirrors_live.py."""
+    from config.settings import settings as _s
+    monkeypatch.setattr(_s, "paper_mirrors_live", False)
+
+
 async def run(signals, cap=2, binance_rules=False, seed=None):
     engine = create_async_engine("sqlite+aiosqlite:///:memory:")
     async with engine.begin() as conn:

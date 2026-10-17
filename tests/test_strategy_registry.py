@@ -12,6 +12,14 @@ from tests.test_swing_selection import run
 T0 = datetime(2026, 10, 1)
 
 
+@pytest.fixture(autouse=True)
+def _paper_own_rules(monkeypatch):
+    """These tests pin the paper book's own rules (paper_mirrors_live off). The production default - paper on the live
+    Delta book's rules - is tested in tests/test_paper_mirrors_live.py."""
+    from config.settings import settings as _s
+    monkeypatch.setattr(_s, "paper_mirrors_live", False)
+
+
 def _trade(r_mult, i, key=("swing_donchian", "4h")):
     # long, entry 100, stop 95 (risk 5%): exit sets the R; no costs
     return SimpleNamespace(side="long", entry_price=100.0, stop_price=95.0, exit_price=100 + 5 * r_mult,

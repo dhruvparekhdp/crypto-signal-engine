@@ -317,6 +317,11 @@ FIELDS: tuple[Field, ...] = (
     Field("swing_extra_symbols", "signals", "Extra swing coins (paper + demo)",
           "Comma list traded by the swing book beyond the original 12, e.g. XAUTUSDT (gold), TIAUSDT. Live needs "
           "the coin in 'Coins allowed on live' too.", kind="str"),
+    Field("paper_mirrors_live", "signals", "Paper uses the live rules",
+          "ON = paper swing trades use the live Delta book's risk %, max open (over live coins; gold/TIA never take a "
+          "live slot), daily loss limit, leverage rule, whole Delta contracts and Delta's rupee rate - and none of the "
+          "extra paper blocks (losing-streak pause, side-risk cap, strategy pause, floor). Live only copies trades paper "
+          "opens, so a paper-only block also stopped live.", kind="bool"),
     Field("delta_testnet_mirror", "delta", "Also copy trades to the demo account",
           "ON = every paper swing trade is also placed on the Delta demo (fake money) while live runs, for testing. "
           "The kill switch does not stop the demo.", kind="bool"),
@@ -435,7 +440,7 @@ MAIN_SECTIONS: dict[str, tuple[str, ...]] = {
                              "delta_india_risk_pct", "delta_india_max_open", "delta_india_daily_loss_pct",
                              "delta_india_min_wallet_inr", "delta_india_min_leverage", "delta_live_coins",
                              "delta_testnet_mirror"),
-    "Paper book": ("paper_open_families", "swing_extra_symbols"),
+    "Paper book": ("paper_mirrors_live", "paper_open_families", "swing_extra_symbols"),
     "News & AI": ("event_blackout_enabled", "news_sentiment_enabled", "event_monitor_enabled",
                   "move_attribution_enabled", "groq_postmortem_enabled"),
 }

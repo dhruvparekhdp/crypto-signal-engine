@@ -129,7 +129,7 @@ def format_cycle_end(cycle, outcome: str, summary: dict) -> str:
     """The scorecard when a cycle finishes, so the next one can be judged against it."""
     headline = {
         "hit_target": "\U0001f3af Target reached",
-        "busted": "\U0001f480 Wallet exhausted",
+        "busted": "\U0001f4a5 WE BUSTED THE PAPER CYCLE \u2014 wallet exhausted",   # owner 18 Oct: say it plainly
         "stopped": "\u23f9 Cycle stopped",
     }.get(outcome, outcome)
 

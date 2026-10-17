@@ -11,6 +11,14 @@ from scheduler.runner import AppRunner
 from storage.models import Base
 
 
+@pytest.fixture(autouse=True)
+def _paper_own_rules(monkeypatch):
+    """These tests pin the paper book's own rules (paper_mirrors_live off). The production default - paper on the live
+    Delta book's rules - is tested in tests/test_paper_mirrors_live.py."""
+    from config.settings import settings as _s
+    monkeypatch.setattr(_s, "paper_mirrors_live", False)
+
+
 @pytest.mark.asyncio
 async def test_swing_trade_opens_holds_its_stop_and_closes_at_target():
     engine = create_async_engine("sqlite+aiosqlite:///:memory:")

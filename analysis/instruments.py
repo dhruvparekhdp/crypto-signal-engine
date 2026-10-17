@@ -85,6 +85,19 @@ for _alias in ("XAUT", "PAXG"):
     _SPECS[_alias] = _SPECS["XAU"]
 
 
+# Delta India perpetual contract sizes (coins per contract) from GET /v2/products, 18 Oct 2026. Orders are whole
+# contracts, so this is the lot a paper trade rounds down to when it copies the live book (paper_mirrors_live).
+DELTA_CONTRACT: dict[str, float] = {
+    "BTC": 0.001, "ETH": 0.01, "SOL": 1.0, "XRP": 1.0, "BNB": 0.1, "ADA": 1.0, "DOGE": 100.0, "AVAX": 1.0,
+    "LINK": 1.0, "SUI": 1.0, "TIA": 1.0, "XAUT": 0.001, "PAXG": 0.001,
+}
+
+
+def delta_contract_for(symbol: str) -> float | None:
+    """Coins in one Delta India contract, or None for a coin not in the table."""
+    return DELTA_CONTRACT.get(base_asset(symbol))
+
+
 def base_asset(symbol: str) -> str:
     """"ethusdt" -> "ETH". One definition, rather than the five that had grown."""
     s = symbol.upper()

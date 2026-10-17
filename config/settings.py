@@ -247,6 +247,14 @@ class Settings(BaseSettings):
     # Coins the swing book trades beyond the original 12 (owner, 18 Oct 2026: gold and TIA, paper + demo first). They
     # must also be on the watchlist so prices are collected. Live trading is gated separately by delta_live_coins.
     swing_extra_symbols: str = "XAUTUSDT,TIAUSDT"
+    # Owner, 18 Oct 2026: "make paper cycle setup as same as delta live from leverage to all the options... remove other
+    # blocking setting keep basic daily loss and one direction... no floor". On: paper swing trades use the live Delta
+    # book's risk (delta_india_risk_pct, fixed), max open (delta_india_max_open, counted over live coins; gold/TIA are
+    # paper-only and do not take a live slot), daily loss limit (delta_india_daily_loss_pct), leverage rule, stop checks,
+    # whole Delta contracts and Delta's USD-INR rate. Off: no losing-streak pause, side-risk cap, strategy-registry
+    # pause, adaptive or half risk, margin-slot cap or floor. Signal rules stay: BTC-volatility filter, release-window
+    # skip, excluded coins, one trade per coin.
+    paper_mirrors_live: bool = True
     # Live swing book (execution/live_book.py): copies swing entries to a small Binance USD-M futures account.
     # "off" | "testnet" (testnet.binancefuture.com, fake money) | "live". Keys come from the environment only:
     # futures-enabled, withdrawals disabled, IP-restricted to this server.

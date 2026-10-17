@@ -113,6 +113,7 @@ class DeltaBook:
         self.min_wallet_inr = min_wallet_inr      # no new orders at all once the wallet is below this
         self.min_leverage = int(min_leverage)
         self.retry_delay_s = 1.0
+        self.rate_seen = False                    # True once usd_inr came from the exchange's own wallet rows
 
     @property
     def live(self) -> bool:
@@ -147,14 +148,18 @@ class DeltaBook:
                 inr, rate = await self.client.wallet_inr()
                 if rate:
                     self.usd_inr = rate                     # size with the exchange's own conversion rate
+                    self.rate_seen = True
             else:
                 inr = await self.client.inr_available()
+            # risk is a share of the WHOLE wallet, margin held by open trades included - the paper book sizes on
+            # equity the same way (18 Oct 2026 review: sizing on the available balance shrank every 2nd and 3rd trade)
+            total = await self.client.wallet_total_inr() if hasattr(self.client, "wallet_total_inr") else inr
         except DeltaError as e:
             return MirrorPlan(False, f"wallet_{e}", self.mode, binance_symbol, delta_sym)
         side = "buy" if side_word.lower() in ("long", "buy") else "sell"
         # Shadow with an empty INR wallet still sizes against a ₹5,000 notional so the
         # log shows a realistic order; live mode always uses the real balance.
-        sizing_equity = inr if self.mode == "live" else max(inr, 5000.0)
+        sizing_equity = max(total, inr) if self.mode == "live" else max(inr, 5000.0)
         if entry > 0 and abs(entry - stop) / entry < MIN_STOP_FRAC:
             return MirrorPlan(False, "stop_too_close", self.mode, binance_symbol, delta_sym, product.id, side,
                               0, entry, stop, target, 0.0, 0.0, inr)
@@ -168,7 +173,8 @@ class DeltaBook:
             # the minimum leverage would put liquidation within 1.2x of the stop: do not trade this one
             return MirrorPlan(False, "stop_too_wide_for_leverage", self.mode, binance_symbol, delta_sym, product.id,
                               side, 0, entry, stop, target, 0.0, 0.0, inr, lev)
-        max_notional_usd = (sizing_equity / self.usd_inr) * lev * 0.9 if self.usd_inr else 0.0
+        margin_inr = inr if self.mode == "live" else sizing_equity     # what can actually be put up as margin now
+        max_notional_usd = (margin_inr / self.usd_inr) * lev * 0.9 if self.usd_inr else 0.0
         if size and product.contract_value * entry > 0:
             cap = int(max_notional_usd // (product.contract_value * entry))
             if size > cap:
@@ -449,6 +455,13 @@ class DeltaBook:
         if not self.live:
             return []
         await self._loss_guard()               # rolls the day's starting wallet even on days with no new trade
+        if hasattr(self.client, "wallet_inr"):  # Delta's own INR-per-USD rate, which paper copies of live trades use
+            try:
+                _, rate = await self.client.wallet_inr()
+                if rate:
+                    self.usd_inr, self.rate_seen = rate, True
+            except DeltaError:
+                pass
         state = self._load_state()
         events = []
         for delta_sym, pos in list((state.get("positions") or {}).items()):

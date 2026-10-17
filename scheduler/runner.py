@@ -86,6 +86,14 @@ def _binance_only() -> bool:
     return bool(settings.binance_only_mode) and not bool(getattr(settings, "delta_only_mode", False))
 
 
+def open_risk_frac(p) -> float:
+    """Share of entry price still at risk to the stop. A stop locked beyond entry (profit locked) risks nothing - the
+    side-risk cap used abs(entry - stop) and counted locked profit as risk (18 Oct 2026: it blocked SUI, the first
+    signal after live started, with 5 shorts open of which 2 were locked)."""
+    side = 1 if getattr(p.side, "value", p.side) == "long" else -1
+    return max(0.0, side * (p.entry_price - p.stop_price) / p.entry_price) if p.entry_price > 0 else 0.0
+
+
 def delta_rows_for_store(bars: list[dict], symbol: str, interval: str, now: datetime) -> list[dict]:
     """Delta candles (collectors.delta_market shape) -> market_candles rows: closed bars only, bad prices dropped."""
     step = {"1m": 60, "5m": 300, "15m": 900, "1h": 3600, "4h": 14400, "1d": 86400}[interval]
@@ -1162,9 +1170,12 @@ class AppRunner:
         except OSError:
             pass
 
-    def _swing_account_guard(self, closed_swing_trades, now, equity: float) -> str | None:
+    def _swing_account_guard(self, closed_swing_trades, now, equity: float, daily_loss_pct: float | None = None,
+                             streak_pause: bool = True) -> str | None:
         """Daily-loss limit and losing-streak pause for the swing book (sized for 3% risk trades, not the intraday
-        3% daily limit, which one swing stop-out would already reach). Returns a skip reason or None."""
+        3% daily limit, which one swing stop-out would already reach). Returns a skip reason or None.
+        daily_loss_pct (percent) overrides swing_daily_loss_pct; streak_pause=False keeps only the daily limit (the
+        live book has no streak pause)."""
         from analysis.protections import RecentTrade, losing_streak
         today0 = now.replace(tzinfo=None, hour=0, minute=0, second=0, microsecond=0)
         today = [RecentTrade(t.symbol, (t.closed_at.replace(tzinfo=None) if t.closed_at.tzinfo else t.closed_at),
@@ -1172,13 +1183,22 @@ class AppRunner:
                  if t.closed_at is not None and (t.closed_at.replace(tzinfo=None) if t.closed_at.tzinfo else t.closed_at) >= today0]
         lost = -sum(t.net_pnl for t in today)
         start = equity + lost
-        if start > 0 and lost >= start * settings.swing_daily_loss_pct / 100.0:
+        limit = settings.swing_daily_loss_pct if daily_loss_pct is None else daily_loss_pct
+        if start > 0 and limit > 0 and lost >= start * limit / 100.0:
             return "daily_loss_limit"
+        if not streak_pause:
+            return None
         streak, last = losing_streak(today)
         if (streak >= settings.swing_streak_pause_after and last is not None
                 and now.replace(tzinfo=None) - last < timedelta(minutes=settings.swing_streak_pause_minutes)):
             return "losing_streak_pause"
         return None
+
+    def _delta_usd_inr(self) -> float:
+        """Delta India's own INR-per-USD rate, as last read from a Delta wallet (live or demo); the saved fallback
+        until one has been read. Paper trades that copy the live book convert at this rate, not paper_usdt_inr."""
+        rate = getattr(self, "_delta_rate", 0.0) or 0.0
+        return float(rate) if 50 < rate < 200 else float(settings.delta_india_usd_inr or 85.0)
 
     async def _perp_prices(self) -> dict:
         """Mark/last prices for every symbol, one call, cached 10 s.
@@ -1377,7 +1397,16 @@ class AppRunner:
         open_syms = {p.symbol for p in cstate.positions}
         n_swing = sum(1 for p in cstate.positions if getattr(p, "trade_mode", "") == "swing")
         equity0 = cstate.wallet + sum(p.margin for p in cstate.positions)
-        guard_block = self._swing_account_guard(closed, now, equity0) if settings.swing_account_guards else None
+        mirror = bool(settings.paper_mirrors_live)        # paper runs on the live Delta book's rules (owner 18 Oct)
+        live_coins = {x.strip().lower() for x in (settings.delta_live_coins or "").split(",") if x.strip()}
+        n_live_slots = sum(1 for p in cstate.positions
+                           if getattr(p, "trade_mode", "") == "swing" and p.symbol.lower() in live_coins)
+        if mirror:
+            guard_block = self._swing_account_guard(closed, now, equity0,
+                                                    daily_loss_pct=settings.delta_india_daily_loss_pct * 100,
+                                                    streak_pause=False)
+        else:
+            guard_block = self._swing_account_guard(closed, now, equity0) if settings.swing_account_guards else None
         blackout = self._blackout(now) if settings.swing_news_guard else None
         news_bias = self._event_bias_for(blackout, states) if (blackout is not None and settings.event_bias_mode) else None
         for sig in sigs:
@@ -1389,10 +1418,16 @@ class AppRunner:
                 await self._mark_skipped(log_id, "coin_without_edge")
                 continue
             reg_row = registry.get(reg_mod.key_of_signal(sig.signal_type, sig.timeframe)) if registry else None
-            if reg_row is not None and reg_row.status not in reg_mod.TRADING:
+            if reg_row is not None and reg_row.status not in reg_mod.TRADING and not mirror:
                 await self._mark_skipped(log_id, f"spec_{reg_row.status}")
                 continue
-            if settings.swing_max_open and n_swing >= settings.swing_max_open:
+            if mirror:
+                # the live book's slot limit, counted over live coins; a paper-only coin (gold, TIA) never takes one
+                if (sig.symbol.lower() in live_coins and settings.delta_india_max_open
+                        and n_live_slots >= settings.delta_india_max_open):
+                    await self._mark_skipped(log_id, "book_full_like_live")
+                    continue
+            elif settings.swing_max_open and n_swing >= settings.swing_max_open:
                 await self._mark_skipped(log_id, "swing_book_full")
                 continue
             side_word = sig.direction
@@ -1413,8 +1448,8 @@ class AppRunner:
                     if not allows(sig.direction, news_bias):
                         await self._mark_skipped(log_id, "against_news_bias")
                         continue
-            if settings.swing_max_side_risk_pct:             # plan L3/O5: same-side trades are one market bet
-                side_risk = sum(abs(p.entry_price - p.stop_price) / p.entry_price * p.margin * p.leverage
+            if settings.swing_max_side_risk_pct and not mirror:   # plan L3/O5: same-side trades are one market bet
+                side_risk = sum(open_risk_frac(p) * p.margin * p.leverage
                                 for p in cstate.positions
                                 if getattr(p, "trade_mode", "") == "swing"
                                 and getattr(p.side, "value", p.side) == sig.direction and p.entry_price > 0)
@@ -1439,17 +1474,32 @@ class AppRunner:
             stop, target = price - side * dist, price + side * sb.REWARD_RISK * dist
             equity = cstate.wallet + sum(p.margin for p in cstate.positions)
             trusted = reg_row is not None and reg_row.status == "trusted"
-            risk = sb.risk_for(sig.signal_type, sig.timeframe, dd, streak, trusted)
+            risk = settings.delta_india_risk_pct if mirror else sb.risk_for(sig.signal_type, sig.timeframe, dd, streak,
+                                                                             trusted)
+            usdt_inr = pcfg.usdt_inr
+            if mirror:
+                from execution.delta_book import MIN_STOP_FRAC, leverage_for, liquidation_distance
+                stop_frac = abs(price - stop) / price if price > 0 else 0.0
+                if stop_frac < MIN_STOP_FRAC:                # the live book's own refusals, in the same order
+                    await self._mark_skipped(log_id, "stop_too_close")
+                    continue
+                if liquidation_distance(leverage_for(stop_frac, settings.delta_india_min_leverage)) < stop_frac * 1.2:
+                    await self._mark_skipped(log_id, "stop_too_wide_for_leverage")
+                    continue
+                usdt_inr = self._delta_usd_inr()
             sized = sb.size(equity, cstate.wallet, risk, price, stop, stop_out_costs(sig.symbol, cfg),
-                            settings.swing_max_leverage, settings.swing_max_margin_frac,
+                            settings.swing_max_leverage, 0.0 if mirror else settings.swing_max_margin_frac,
                             min_leverage=settings.delta_india_min_leverage)     # same leverage rule as live
             if sized is None:
                 await self._mark_skipped(log_id, "no_free_margin")
                 continue
             margin, leverage = sized
             spec = spec_for(sig.symbol)
-            rules = bfilters.rules_for(sig.symbol) if settings.swing_binance_rules else None
+            rules = bfilters.rules_for(sig.symbol) if (settings.swing_binance_rules and not mirror) else None
             lot_step = rules.step if rules is not None else spec.lot_step
+            if mirror:
+                from analysis.instruments import delta_contract_for
+                lot_step = delta_contract_for(sig.symbol) or spec.lot_step     # whole Delta contracts, like live
             if rules is not None:
                 qty = bfilters.round_qty(sig.symbol, margin * leverage / (pcfg.usdt_inr * price))   # margin is INR
                 why = bfilters.check_order(sig.symbol, qty, price)
@@ -1463,9 +1513,9 @@ class AppRunner:
                 stop_price=stop, target_price=target, opened_at=now, signal_type=sig.signal_type,
                 timeframe=sig.timeframe, confidence=sig.confidence,
                 expires_at=now + timedelta(minutes=settings.swing_hold_minutes),
-                usdt_inr=pcfg.usdt_inr, lot_step=lot_step, slippage=cfg.slippage, trade_mode="swing")
+                usdt_inr=usdt_inr, lot_step=lot_step, slippage=cfg.slippage, trade_mode="swing")
             if pos.coin_qty <= 0:
-                await self._mark_skipped(log_id, "below_one_lot")
+                await self._mark_skipped(log_id, "below_one_contract" if mirror else "below_one_lot")
                 continue
             cstate.wallet -= pos.margin
             row = await repo.open_position_atomic(cycle.id, pos, cstate.wallet)
@@ -1479,9 +1529,10 @@ class AppRunner:
                 pos, cycle.id, now, "opened", "entry", new=f"{price:.6g}",
                 note=(f"SWING {sig.timeframe} {pos.side.value} {sig.signal_type} · stop {stop:.6g} ({risk_pct:.2f}% away, 3xATR {sig.timeframe}) · "
                       f"target {target:.6g} (3R) · {leverage:.1f}x · margin {pos.margin:.0f} · "
-                      f"risking {risk * 100:.2f}% of the wallet ({sb.risk_reason(sig.signal_type, sig.timeframe, dd, streak, trusted)}; "
-                      f"range {settings.swing_risk_min * 100:g}-{settings.swing_risk_pct * 100:g}%) · "
-                      f"closes only at stop, target or after 7 days" + sf_txt
+                      + (f"risking {risk * 100:.2f}% of the wallet (same rules as the live Delta book) · " if mirror else
+                         f"risking {risk * 100:.2f}% of the wallet ({sb.risk_reason(sig.signal_type, sig.timeframe, dd, streak, trusted)}; "
+                         f"range {settings.swing_risk_min * 100:g}-{settings.swing_risk_pct * 100:g}%) · ")
+                      + "closes only at stop, target or after 7 days" + sf_txt
                       + (f" · signal rating {sig.rating['grade']} (backtest {sig.rating['expected_r']:+.2f}R)"
                          if getattr(sig, "rating", None) else "")
                       + (f" · {verdict.tag()} ({settings.swing_regime_filter})" if verdict is not None else "")))])
@@ -1489,6 +1540,7 @@ class AppRunner:
             cstate.positions.append(pos)
             open_syms.add(sig.symbol)
             n_swing += 1
+            n_live_slots += sig.symbol.lower() in live_coins
             if reg_row is not None and reg_row.live_from is None:     # first trade of this exact code + params
                 try:
                     async with AsyncSessionFactory() as session:
@@ -1574,7 +1626,10 @@ class AppRunner:
                                  min_leverage=int(settings.delta_india_min_leverage),
                                  shadow_path=Path("data/delta_testnet.jsonl") if testnet else SHADOW_PATH,
                                  state_path=Path("data/delta_testnet_state.json") if testnet else STATE_PATH)
-                return await getattr(book, method)(*args)
+                out = await getattr(book, method)(*args)
+                if getattr(book, "rate_seen", False):
+                    self._delta_rate = book.usd_inr        # Delta's own conversion, for paper trades that copy live
+                return out
         except Exception as e:  # noqa: BLE001
             log.warning("delta_india_call_failed", target=target, method=method, error=str(e)[:160])
             return None
