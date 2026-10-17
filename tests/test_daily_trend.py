@@ -61,9 +61,8 @@ class TestDailyTrendJobFetchesConcurrently(unittest.IsolatedAsyncioTestCase):
         fake.klines = types.SimpleNamespace(
             fetch_candles=fake_fetch_candles, FETCH_CONCURRENCY=5)
 
-        async def delta_has_nothing(symbol, resolution="1d", limit=61):   # Delta first (18 Oct); here it is empty
-            await asyncio.sleep(delay)
-            return []
+        async def delta_has_nothing(symbol, resolution="1d", limit=61):   # Delta first (18 Oct); empty at once, so
+            return []                                                     # the timed round trip is the fallback
         fake.delta_market = types.SimpleNamespace(fetch_candles=delta_has_nothing)
 
         start = time.monotonic()
