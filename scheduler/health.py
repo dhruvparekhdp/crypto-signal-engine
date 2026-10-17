@@ -1605,12 +1605,12 @@ async def _api_crypto_watchlist_add(runner, request: web.Request) -> web.Respons
         # does not list is a symbol that silently never gets data. Refused
         # when Binance's list is known; allowed with a warning when it could
         # not be fetched, because "unreachable" is not "unlisted".
-        listed = None
-        if _SETTINGS.delta_only_mode:                  # Delta is the venue: a Delta India perpetual is enough
-            listed = await _delta_lists(symbol)
-        if not listed:
-            from collectors.binance_symbols import is_listed
-            listed = await is_listed(symbol) or listed
+        # Delta is the venue (live money is on Delta): a Delta India perpetual is enough (XAUT has no Binance spot
+        # pair). Otherwise Binance's spot list decides; refused only when every list that answered says no.
+        on_delta = await _delta_lists(symbol) if _SETTINGS.delta_only_mode else None
+        from collectors.binance_symbols import is_listed
+        on_binance = None if on_delta else await is_listed(symbol)
+        listed = True if (on_delta or on_binance) else (False if on_binance is False else None)
         if listed is False:
             return web.Response(text=json.dumps({
                 "error": f"{symbol.upper()} is not a Binance spot USDT pair (for gold, use PAXGUSDT). "

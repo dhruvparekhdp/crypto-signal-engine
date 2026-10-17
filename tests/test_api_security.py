@@ -231,7 +231,9 @@ class TestProtectedEndpoints(AioHTTPTestCase):
 
     async def test_a_pair_binance_does_not_list_is_refused(self):
         """xauusdt is the case that mattered: no candles, then a stand-in, then 4.3e-05."""
-        with patch("collectors.binance_symbols.is_listed", new=AsyncMock(return_value=False)):
+        # Delta's own list is checked first (18 Oct 2026); stub it as unreachable so this test is about Binance
+        with patch("scheduler.health._delta_lists", new=AsyncMock(return_value=None)), \
+             patch("collectors.binance_symbols.is_listed", new=AsyncMock(return_value=False)):
             resp = await self.client.post(
                 "/api/crypto/watchlist/add", json={"symbol": "xauusdt"},
                 headers={"Authorization": "Bearer test-token-abc"})
@@ -241,13 +243,25 @@ class TestProtectedEndpoints(AioHTTPTestCase):
 
     async def test_an_unreachable_binance_does_not_block_adding(self):
         """Unknown is not unlisted: add it, and say it was not confirmed."""
-        with patch("collectors.binance_symbols.is_listed", new=AsyncMock(return_value=None)):
+        # Delta's own list is checked first (18 Oct 2026); stub it as unreachable so this test is about Binance
+        with patch("scheduler.health._delta_lists", new=AsyncMock(return_value=None)), \
+             patch("collectors.binance_symbols.is_listed", new=AsyncMock(return_value=None)):
             resp = await self.client.post(
                 "/api/crypto/watchlist/add", json={"symbol": "paxgusdt"},
                 headers={"Authorization": "Bearer test-token-abc"})
         self.assertEqual(resp.status, 200)
         self.assertIn("warning", await resp.json())
         self.assertEqual(self.runner.added, ["paxgusdt"])
+
+    async def test_a_delta_perpetual_is_accepted_without_a_binance_spot_pair(self):
+        """18 Oct 2026: gold on Delta is XAUTUSD; Binance spot has no XAUTUSDT. Delta (the venue) is enough."""
+        with patch("scheduler.health._delta_lists", new=AsyncMock(return_value=True)), \
+             patch("collectors.binance_symbols.is_listed", new=AsyncMock(return_value=False)):
+            resp = await self.client.post(
+                "/api/crypto/watchlist/add", json={"symbol": "xautusdt"},
+                headers={"Authorization": "Bearer test-token-abc"})
+        self.assertEqual(resp.status, 200)
+        self.assertEqual(self.runner.added, ["xautusdt"])
 
     async def test_the_watchlist_is_readable_without_a_token(self):
         resp = await self.client.get("/api/crypto/watchlist")
