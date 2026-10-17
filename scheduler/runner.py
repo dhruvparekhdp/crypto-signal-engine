@@ -2880,9 +2880,15 @@ class AppRunner:
 
             async def _one(st) -> None:
                 async with sem:
-                    bars = await self.klines.fetch_candles(st.symbol, interval="1d", limit=60)
-                    # The last daily bar is still forming; average closed days only.
-                    closes = [b["close"] for b in (bars or [])][:-1]
+                    # Delta India first (owner 18 Oct: Delta is the default for all data), Binance if Delta has none
+                    bars = await self.delta_market.fetch_candles(st.symbol, "1d", limit=61)
+                    if bars:
+                        day0 = datetime.now(UTC).replace(hour=0, minute=0, second=0, microsecond=0)
+                        closes = [b["close"] for b in bars if b["timestamp"] < day0]   # closed days only
+                    else:
+                        bars = await self.klines.fetch_candles(st.symbol, interval="1d", limit=60)
+                        # The last daily bar is still forming; average closed days only.
+                        closes = [b["close"] for b in (bars or [])][:-1]
                     st.daily_sma20 = sma(closes, 20)
                     st.daily_trend_at = datetime.now(UTC)
                     if st.daily_sma20 is None:

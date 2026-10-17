@@ -219,3 +219,20 @@ async def test_delta_bars_carry_binance_volume_for_the_volume_strategy(monkeypat
     assert list(bars.v[-3:]) == [1297.0, 1298.0, 1299.0]       # Binance's volume, matched by bar open time
     bars = await sb.fetch_bars(Client(binance_ok=False), "XRPUSDT", now, "4h")
     assert set(bars.v) == {7.0}                                # Binance down: Delta volume, whole
+
+
+@pytest.mark.asyncio
+async def test_daily_trend_reads_delta_daily_closes():
+    from datetime import UTC, datetime, timedelta
+
+    from scheduler.runner import AppRunner
+    r = AppRunner.__new__(AppRunner)
+    day0 = datetime.now(UTC).replace(hour=0, minute=0, second=0, microsecond=0)
+    bars = [{"timestamp": day0 - timedelta(days=30 - i), "open": 1, "high": 1, "low": 1, "close": float(i), "volume": 1}
+            for i in range(30)] + [{"timestamp": day0, "open": 1, "high": 1, "low": 1, "close": 999.0, "volume": 1}]
+    st = SimpleNamespace(symbol="xrpusdt", daily_sma20=None, daily_trend_at=None)
+    r.crypto_store = SimpleNamespace(get_all=AsyncMock(return_value=[st]))
+    r.delta_market = SimpleNamespace(fetch_candles=AsyncMock(return_value=bars))
+    r.klines = SimpleNamespace(FETCH_CONCURRENCY=5, fetch_candles=AsyncMock(side_effect=AssertionError("Binance")))
+    await r._daily_trend_job()
+    assert st.daily_sma20 == pytest.approx(sum(range(10, 30)) / 20)       # last 20 closed days; today's 999 ignored
