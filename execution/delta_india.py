@@ -288,6 +288,16 @@ class DeltaIndia:
     async def cancel_order(self, order_id: int, product_id: int) -> dict:
         return await self._request("DELETE", "/v2/orders", body={"id": int(order_id), "product_id": int(product_id)})
 
+    async def trading_status(self, symbol: str) -> str:
+        """Live trading status of one contract, read fresh (the product list is cached 10 min): 'operational', or
+        e.g. 'disrupted_cancel_only' (the whole demo exchange on 17 Oct 2026), when new orders are refused."""
+        r = await self._client.get(f"{self.base}/v2/products/{symbol.upper()}",
+                                   headers={"User-Agent": USER_AGENT, "Accept": "application/json"}, timeout=10)
+        data = r.json()
+        if r.status_code >= 400:
+            raise DeltaError(r.status_code, data)
+        return str((data.get("result") or {}).get("trading_status") or "")
+
     async def set_leverage(self, product_id: int, leverage: int) -> dict:
         """Order leverage for one product on this account (POST /v2/products/{id}/orders/leverage). Delta keeps it
         per product per account; a live account's default can be 100x+ (17 Oct 2026 review)."""

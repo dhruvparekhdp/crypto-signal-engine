@@ -22,6 +22,8 @@ import time
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
+import httpx
+
 from execution.delta_india import DeltaError, DeltaIndia, Product, binance_to_delta_symbol, round_to_tick
 
 SHADOW_PATH = Path("data/delta_shadow.jsonl")
@@ -232,7 +234,19 @@ class DeltaBook:
             self._save_state(state)
             return plan
 
-        # LIVE path — real orders. Leverage first: if it cannot be set, no order (fail closed).
+        # LIVE path — real orders. The market must be taking orders (not cancel-only), then leverage: if either
+        # cannot be confirmed, no order (fail closed).
+        if hasattr(self.client, "trading_status"):
+            try:
+                status = await self.client.trading_status(plan.delta_symbol)
+            except (DeltaError, httpx.HTTPError, ValueError) as e:
+                status = f"unknown ({str(e)[:80]})"
+            if status != "operational":
+                row.update(placed=False, error=f"market_not_operational: {status}")
+                self._append_shadow(row)
+                return MirrorPlan(False, f"market_{status.split(' ')[0]}", plan.mode, plan.binance_symbol,
+                                  plan.delta_symbol, plan.product_id, plan.side, plan.size, plan.entry, plan.stop,
+                                  plan.target, plan.notional_usd, plan.risk_inr, plan.inr_available, plan.leverage)
         if hasattr(self.client, "set_leverage"):
             try:
                 await self.client.set_leverage(plan.product_id, plan.leverage)

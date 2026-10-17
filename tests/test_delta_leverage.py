@@ -70,3 +70,35 @@ async def test_size_is_capped_by_the_chosen_leverage(tmp_path):
     book = _book(tmp_path, fake)
     plan = await book.on_paper_open("xrpusdt", "short", 1.40, 1.4084, 1.37, "t")
     assert plan.ok and plan.size * 1.40 <= (500 / 86.0) * plan.leverage * 0.9 + 1e-9
+
+
+class StatusDelta(LevDelta):
+    def __init__(self, status):
+        super().__init__(liq=2.0)
+        self.status = status
+
+    async def trading_status(self, symbol):
+        if isinstance(self.status, Exception):
+            raise self.status
+        return self.status
+
+
+@pytest.mark.asyncio
+async def test_no_order_when_the_market_is_cancel_only(tmp_path):
+    # 17 Oct 2026: the whole demo exchange went 'disrupted_cancel_only'
+    fake = StatusDelta("disrupted_cancel_only")
+    plan = await _open_short(_book(tmp_path, fake))
+    assert not plan.ok and plan.reason == "market_disrupted_cancel_only"
+    assert not [c for c in fake.calls if c[0] in ("market", "leverage")]
+
+
+@pytest.mark.asyncio
+async def test_unreadable_market_status_fails_closed(tmp_path):
+    fake = StatusDelta(DeltaError(500, {"error": "down"}))
+    plan = await _open_short(_book(tmp_path, fake))
+    assert not plan.ok and plan.reason == "market_unknown"
+
+
+@pytest.mark.asyncio
+async def test_operational_market_trades(tmp_path):
+    assert (await _open_short(_book(tmp_path, StatusDelta("operational")))).ok
