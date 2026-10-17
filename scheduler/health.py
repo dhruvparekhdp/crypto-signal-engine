@@ -1572,6 +1572,21 @@ async def _api_crypto_forecasts(runner, request: web.Request) -> web.Response:
     return web.Response(text=json.dumps(forecasts), content_type="application/json")
 
 
+async def _delta_lists(symbol: str) -> bool | None:
+    """True when Delta India lists the perpetual for this coin (XAUTUSDT -> XAUTUSD), None when unreachable."""
+    try:
+        import httpx
+
+        from execution.delta_india import INDIA_URL, USER_AGENT, binance_to_delta_symbol
+        async with httpx.AsyncClient(timeout=10, headers={"User-Agent": USER_AGENT}) as c:
+            r = await c.get(f"{INDIA_URL}/v2/products/{binance_to_delta_symbol(symbol)}")
+        if r.status_code == 404:
+            return False
+        return bool((r.json() or {}).get("result")) if r.status_code == 200 else None
+    except Exception:  # noqa: BLE001
+        return None
+
+
 async def _api_crypto_watchlist_add(runner, request: web.Request) -> web.Response:
     """POST /api/crypto/watchlist/add  body: {"symbol": "dogeusdt"}"""
     from scheduler.security import check_bearer_auth
@@ -1590,8 +1605,12 @@ async def _api_crypto_watchlist_add(runner, request: web.Request) -> web.Respons
         # does not list is a symbol that silently never gets data. Refused
         # when Binance's list is known; allowed with a warning when it could
         # not be fetched, because "unreachable" is not "unlisted".
-        from collectors.binance_symbols import is_listed
-        listed = await is_listed(symbol)
+        listed = None
+        if _SETTINGS.delta_only_mode:                  # Delta is the venue: a Delta India perpetual is enough
+            listed = await _delta_lists(symbol)
+        if not listed:
+            from collectors.binance_symbols import is_listed
+            listed = await is_listed(symbol) or listed
         if listed is False:
             return web.Response(text=json.dumps({
                 "error": f"{symbol.upper()} is not a Binance spot USDT pair (for gold, use PAXGUSDT). "

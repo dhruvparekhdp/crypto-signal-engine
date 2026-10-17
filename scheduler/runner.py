@@ -1214,7 +1214,8 @@ class AppRunner:
                 except Exception as e:  # noqa: BLE001 - registry trouble must not stop the scan
                     log.warning("strategy_registry_sync_failed", error=str(e)[:160])
             states = {st.symbol: st for st in await self.crypto_store.get_all()}
-            symbols = [s_ for s_ in CRYPTO if s_.lower() in states]
+            extra = [x.strip().upper() for x in (settings.swing_extra_symbols or "").split(",") if x.strip()]
+            symbols = [s_ for s_ in dict.fromkeys(CRYPTO + extra) if s_.lower() in states]
             now = datetime.now(UTC)
             now_ms = int(now.timestamp() * 1000)
             from analysis.lab.data import INTERVAL_MS
@@ -1474,6 +1475,11 @@ class AppRunner:
         """One DeltaBook method on one target: 'live' (real money, both gates), 'shadow' (log only) or 'testnet'
         (the demo account: fake money, real order flow). None when that target has no key. Never raises."""
         testnet = target == "testnet"
+        if target == "live" and method == "on_paper_open" and args:
+            allowed = {x.strip().upper() for x in (settings.delta_live_coins or "").split(",") if x.strip()}
+            if str(args[0]).upper() not in allowed:
+                log.info("delta_live_coin_not_allowed", symbol=args[0], note="paper + demo only")
+                return None
         k_obj = settings.delta_india_testnet_api_key if testnet else settings.delta_india_api_key
         s_obj = settings.delta_india_testnet_api_secret if testnet else settings.delta_india_api_secret
         key = k_obj.get_secret_value() if k_obj else ""

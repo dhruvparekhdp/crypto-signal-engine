@@ -55,6 +55,7 @@ VENUE_SYMBOL = {
     # Silver is NOT gold: xagusdt used to map here too, which would have
     # priced and measured silver off gold's bars.
     "xauusdt": "PAXGUSDT",
+    "xautusdt": "PAXGUSDT",     # Delta's XAUTUSD has no Binance spot pair; PAX Gold is the same ounce (fallback only)
 }
 
 

@@ -14,7 +14,7 @@ def test_every_main_and_advanced_key_is_a_real_field():
 
 def test_the_page_is_short():
     visible = [f for f in FIELDS if tier_of(f.key, f.group) == "main"]
-    assert len(visible) <= 15
+    assert len(visible) <= 18          # 17 on 18 Oct: + demo copy, live coins, extra swing coins
     assert [k for k in MAIN_SECTIONS["Live ₹ · Delta India"]][:3] == ["delta_india_kill_switch", "delta_india_mode",
                                                                        "delta_india_live_orders"]
 

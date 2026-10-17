@@ -80,6 +80,11 @@ _SPECS: dict[str, InstrumentSpec] = {
 DEFAULT_SPEC = InstrumentSpec("", _CRYPTO_TAKER, _CRYPTO_MM, 0.0, 0.0)
 
 
+# Tokenised gold trades at gold's fees on Delta India (XAUTUSD; PAXG on Binance) - 18 Oct 2026, gold added to paper
+for _alias in ("XAUT", "PAXG"):
+    _SPECS[_alias] = _SPECS["XAU"]
+
+
 def base_asset(symbol: str) -> str:
     """"ethusdt" -> "ETH". One definition, rather than the five that had grown."""
     s = symbol.upper()

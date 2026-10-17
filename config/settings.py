@@ -240,6 +240,9 @@ class Settings(BaseSettings):
     swing_max_same_side: int = 0              # 0 = no limit (2 was the best backtest setting; see design notes)
     # Five years show no edge on these: original and mirror both average about zero.
     swing_exclude_symbols: str = "BCHUSDT,LTCUSDT"
+    # Coins the swing book trades beyond the original 12 (owner, 18 Oct 2026: gold and TIA, paper + demo first). They
+    # must also be on the watchlist so prices are collected. Live trading is gated separately by delta_live_coins.
+    swing_extra_symbols: str = "XAUTUSDT,TIAUSDT"
     # Live swing book (execution/live_book.py): copies swing entries to a small Binance USD-M futures account.
     # "off" | "testnet" (testnet.binancefuture.com, fake money) | "live". Keys come from the environment only:
     # futures-enabled, withdrawals disabled, IP-restricted to this server.
@@ -278,6 +281,9 @@ class Settings(BaseSettings):
     # Keep the demo copying paper swing trades even while the real-money book is live (owner, 18 Oct 2026: paper,
     # demo and live run side by side; test data is analysed from all three). The kill switch never stops the demo.
     delta_testnet_mirror: bool = True
+    # Coins allowed on the REAL-MONEY book. Any other coin is paper + demo only until it is added here (owner, 18 Oct
+    # 2026: new coins prove themselves in paper and demo before live).
+    delta_live_coins: str = "BTCUSDT,ETHUSDT,SOLUSDT,XRPUSDT,BNBUSDT,ADAUSDT,DOGEUSDT,AVAXUSDT,LINKUSDT,SUIUSDT"
     # Kill switch: ON = no new Delta orders (open ones are still protected and can be closed by the engine)
     delta_india_kill_switch: bool = False
     # Server-side backstop on Delta: the exchange stop trails the engine's profit lock by this many R, so an engine

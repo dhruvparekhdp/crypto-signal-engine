@@ -311,6 +311,12 @@ FIELDS: tuple[Field, ...] = (
     Field("intraday_margin_cap_frac", "signals", "Intraday: max margin per trade (share of equity)",
           "Caps each intraday trade's margin so intraday can never crowd out the swing book.",
           kind="float", lo=0.0, hi=0.5),
+    Field("delta_live_coins", "delta", "Coins allowed on live (real money)",
+          "Comma list. A swing trade on any other coin goes to paper and the demo only. Add a coin here once it has "
+          "proved itself in paper.", kind="str"),
+    Field("swing_extra_symbols", "signals", "Extra swing coins (paper + demo)",
+          "Comma list traded by the swing book beyond the original 12, e.g. XAUTUSDT (gold), TIAUSDT. Live needs "
+          "the coin in 'Coins allowed on live' too.", kind="str"),
     Field("delta_testnet_mirror", "delta", "Also copy trades to the demo account",
           "ON = every paper swing trade is also placed on the Delta demo (fake money) while live runs, for testing. "
           "The kill switch does not stop the demo.", kind="bool"),
@@ -426,8 +432,9 @@ def _is_set(settings, key: str) -> bool:
 MAIN_SECTIONS: dict[str, tuple[str, ...]] = {
     "Live ₹ · Delta India": ("delta_india_kill_switch", "delta_india_mode", "delta_india_live_orders",
                              "delta_india_risk_pct", "delta_india_max_open", "delta_india_daily_loss_pct",
-                             "delta_india_min_wallet_inr", "delta_india_min_leverage", "delta_testnet_mirror"),
-    "Paper book": ("paper_open_families",),
+                             "delta_india_min_wallet_inr", "delta_india_min_leverage", "delta_live_coins",
+                             "delta_testnet_mirror"),
+    "Paper book": ("paper_open_families", "swing_extra_symbols"),
     "News & AI": ("event_blackout_enabled", "news_sentiment_enabled", "event_monitor_enabled",
                   "move_attribution_enabled", "groq_postmortem_enabled"),
 }
