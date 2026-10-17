@@ -405,6 +405,14 @@ async def _call_anthropic(model: str, system: str, user: str,
 _HEADS_CACHE: dict = {"t": 0.0, "v": ""}
 
 
+def format_headlines(rows) -> str:
+    """One line per headline with its own time in UTC and IST, so a model quoting a time never has to convert
+    (18 Oct 2026: a briefing stamped every event with the current time instead)."""
+    from datetime import timedelta
+    return "\n".join(f"- {r.published_at:%m-%d %H:%M} UTC ({r.published_at + timedelta(hours=5, minutes=30):%H:%M} IST) "
+                     f"[{(r.source or '').split(':')[0]}] {r.headline}" for r in rows)
+
+
 async def _fresh_headlines_block(hours: int = 8, limit: int = 40) -> str:
     """Our RSS feeds' newest scored headlines (not AI briefing rows, not noise, not future-dated), cached 60 s."""
     if time.time() - _HEADS_CACHE["t"] < 60:
@@ -420,7 +428,7 @@ async def _fresh_headlines_block(hours: int = 8, limit: int = 40) -> str:
         now = datetime.now(UTC).replace(tzinfo=None)
         keep = [r for r in rows if r.headline and r.published_at and r.published_at <= now + timedelta(minutes=15)
                 and not (r.source or "").startswith("web_briefing") and r.event_type != "noise"][:limit]
-        text = "\n".join(f"- {r.published_at:%m-%d %H:%M} [{(r.source or '').split(':')[0]}] {r.headline}" for r in keep)
+        text = format_headlines(keep)
     except Exception:  # noqa: BLE001 - no database (tests, scripts): web snippets only
         text = ""
     _HEADS_CACHE.update(t=time.time(), v=text)

@@ -112,3 +112,16 @@ class TestWiring(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+def test_each_headline_carries_its_own_ist_time():
+    """18 Oct 2026: a briefing wrote '03:38 IST' (the run time) for an arrest reported at 23:44 IST."""
+    from datetime import datetime
+    from types import SimpleNamespace
+
+    from collectors.llm_client import format_headlines
+    from collectors.market_briefing import BRIEFING_SYSTEM
+    row = SimpleNamespace(published_at=datetime(2026, 10, 17, 18, 14), source="theblock:rss",
+                          headline="Turkey confirms Hex founder arrest")
+    assert format_headlines([row]) == "- 10-17 18:14 UTC (23:44 IST) [theblock] Turkey confirms Hex founder arrest"
+    assert "never the current time" in BRIEFING_SYSTEM

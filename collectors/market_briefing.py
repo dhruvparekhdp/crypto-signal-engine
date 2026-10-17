@@ -45,7 +45,8 @@ BRIEFING_SYSTEM = (
     f"event_type, use only these: {', '.join(EVENT_TYPES)}\n\n"
     "The reader is in India: in every text field (summary, titles, notes) "
     "write times in IST (UTC+5:30), e.g. '19:05 IST'. Only the `when` field "
-    "stays ISO UTC, because code reads it.\n\n"
+    "stays ISO UTC, because code reads it. A time you mention is when that item happened (each headline shows its "
+    "own IST time) - never the current time.\n\n"
     "Reply with JSON only, no prose around it:\n"
     '{"risk_tone": -1.0 to 1.0 (negative = risk-off for crypto), '
     '"summary": "3 to 5 plain sentences on what matters for crypto right now", '
