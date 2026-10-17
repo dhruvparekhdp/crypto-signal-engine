@@ -155,6 +155,8 @@ class CryptoState:
     large_trades: list[TapeEvent] = field(default_factory=list)
 
     timestamp: datetime = field(default_factory=lambda: datetime.now(UTC))
+    # epoch ms of the last real-time tick (Delta WebSocket); 0 = never. While fresh, the socket owns current_price.
+    last_tick_ms: int = 0
 
     @property
     def price_change_24h_pct(self) -> float:

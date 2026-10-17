@@ -210,6 +210,14 @@ def recalculate_indicators(state: CryptoState) -> None:
     state.atr_14 = _compute_atr(state.candles_1m[-(_ATR_PERIOD + 1):], _ATR_PERIOD)
 
 
+TICK_FRESH_MS = 15_000
+
+
+def _now_ms() -> int:
+    import time
+    return int(time.time() * 1000)
+
+
 class CryptoStateStore:
     """
     Thread-safe in-memory cache for live crypto states.
@@ -234,6 +242,29 @@ class CryptoStateStore:
                     base = sym.replace("usdt", "").replace("busd", "").upper()
                     self._states[sym] = CryptoState(symbol=sym, base_asset=base)
             self.symbols_version += 1
+
+    async def update_tick(self, symbol: str, price: float, ts_ms: int) -> bool:
+        """One real-time price from the Delta WebSocket: current price, timestamp and the forming 1m candle. A tick
+        more than 20% from the current price is refused (a bad print must not trip stops). True when applied."""
+        sym = symbol.lower()
+        async with self._lock:
+            state = self._states.get(sym)
+            if not state or price <= 0:
+                return False
+            cur = state.current_price
+            if cur > 0 and abs(price / cur - 1) > 0.20:
+                return False
+            state.current_price = price
+            state.last_tick_ms = int(ts_ms)
+            state.timestamp = datetime.fromtimestamp(ts_ms / 1000, UTC)
+            if state.candles_1m:
+                last = state.candles_1m[-1]
+                last_ms = int(last.timestamp.timestamp() * 1000) if isinstance(last.timestamp, datetime) else int(last.timestamp)
+                if not last.is_closed and last_ms // 60_000 == int(ts_ms) // 60_000:
+                    last.close = price
+                    last.high = max(last.high, price)
+                    last.low = min(last.low, price)
+            return True
 
     async def update_kline(
         self,
@@ -382,8 +413,12 @@ class CryptoStateStore:
                 (settings.binance_only_mode and not settings.binance_ws_enabled)
                 or delta_only
             )
-            if state.current_price <= 0 or sole_candle_feed:
+            # 18 Oct 2026: the Delta WebSocket owns the price while it is ticking (fresher than any 15 s poll);
+            # the candles take it back only when the socket has been quiet for TICK_FRESH_MS
+            socket_fresh = state.last_tick_ms and (_now_ms() - state.last_tick_ms) < TICK_FRESH_MS
+            if state.current_price <= 0 or (sole_candle_feed and not socket_fresh):
                 state.current_price = state.candles_1m[-1].close
+                state.timestamp = datetime.now(UTC)      # "updated" means updated (it froze at the restart time)
             recalculate_indicators(state)
 
     async def update_24h_stats(

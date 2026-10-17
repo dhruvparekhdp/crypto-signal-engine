@@ -257,6 +257,8 @@ class AppRunner:
         self.binance_ws = BinanceWSCollector(self.crypto_store)
         self.klines = BinanceKlines(self.crypto_store)
         self.delta_market = DeltaMarket(self.crypto_store)
+        from collectors.delta_ws import DeltaWSCollector
+        self.delta_ws = DeltaWSCollector(self.crypto_store)        # real-time Delta prices (18 Oct 2026)
         self.twelvedata_ws = TwelveDataWSCollector(self.commodity_store)
         self.cryptopanic = CryptoPanicCollector()
         self.sentiment = SentimentAnalyzer()
@@ -3703,6 +3705,9 @@ class AppRunner:
 
         # Launch continuous WebSocket tasks concurrently (non-blocking)
         self._sync_binance_ws()
+        if getattr(settings, "delta_only_mode", False) and settings.delta_ws_enabled:
+            self._ws_tasks.append(asyncio.create_task(self.delta_ws.run_forever(), name="delta_ws"))
+            log.info("delta_ws_task_spawned")
 
         if self.collector_enabled.get("twelvedata_ws", True) and settings.twelvedata_api_key:
             task = asyncio.create_task(self.twelvedata_ws.run_forever(), name="twelvedata_ws")
@@ -3785,6 +3790,7 @@ class AppRunner:
                 "binance_ws_connected": (self.binance_ws._running
                                         and self.binance_ws._consecutive_failures == 0),
                 "binance_messages_received": self.binance_ws._total_messages_received,
+                "delta_ws": self.delta_ws.status() if getattr(self, "delta_ws", None) else None,
                 "signals_today": len(self.crypto_engine.get_recent_signals(24)),
                 "sentiment_mode": self.sentiment._mode,
                 "cryptopanic_token": bool(settings.cryptopanic_auth_token),
@@ -3795,6 +3801,8 @@ class AppRunner:
     async def stop(self) -> None:
         self.scheduler.shutdown(wait=False)
         self.binance_ws.stop()
+        if getattr(self, "delta_ws", None):
+            self.delta_ws.stop()
         self.twelvedata_ws.stop()
         for task in self._ws_tasks:
             task.cancel()

@@ -281,6 +281,9 @@ class Settings(BaseSettings):
     # Keep the demo copying paper swing trades even while the real-money book is live (owner, 18 Oct 2026: paper,
     # demo and live run side by side; test data is analysed from all three). The kill switch never stops the demo.
     delta_testnet_mirror: bool = True
+    # Real-time prices over Delta India's WebSocket (mark price ~2 s + every trade); the 15 s candle poll stays as the
+    # history source and the backup when the socket is quiet (owner, 18 Oct 2026)
+    delta_ws_enabled: bool = True
     # Coins allowed on the REAL-MONEY book. Any other coin is paper + demo only until it is added here (owner, 18 Oct
     # 2026: new coins prove themselves in paper and demo before live).
     delta_live_coins: str = "BTCUSDT,ETHUSDT,SOLUSDT,XRPUSDT,BNBUSDT,ADAUSDT,DOGEUSDT,AVAXUSDT,LINKUSDT,SUIUSDT"
