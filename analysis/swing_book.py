@@ -148,9 +148,11 @@ def _aggregate_delta_rows(rows: list, src_secs: int, dst_secs: int) -> list:
     if dst_secs <= src_secs or dst_secs % src_secs:
         return list(rows) if isinstance(rows, list) else []
     buckets: dict[int, dict] = {}
-    for r in rows if isinstance(rows, list) else []:
-        if not isinstance(r, dict):
-            continue
+    # Delta answers NEWEST FIRST. Without this sort each 8h bar took its open from the later 4h half and its close from
+    # the earlier one (18 Oct 2026 review) - every 8h close-based signal read the wrong close.
+    ordered = sorted((r for r in (rows if isinstance(rows, list) else []) if isinstance(r, dict) and "time" in r),
+                     key=lambda r: float(r["time"]))
+    for r in ordered:
         try:
             t = int(r["time"])
             if t > 1e12:

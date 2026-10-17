@@ -180,3 +180,13 @@ async def test_swing_outcomes_replay_on_delta_bars(monkeypatch):
     monkeypatch.setattr(httpx.AsyncClient, "get", no_binance)
     await r._swing_outcomes_job()
     assert resolved and resolved[0][:2] == (7, "won")             # the 3R target was hit on the 4th Delta bar
+
+
+def test_8h_bars_from_newest_first_delta_rows_keep_open_and_close_in_order():
+    """Delta's /v2/history/candles answers newest first; an 8h bar's open is its first 4h open, its close the last."""
+    from analysis.swing_book import _aggregate_delta_rows
+    t0 = 1_792_000_000 // 28_800 * 28_800                                   # an 8h boundary (UTC 00/08/16)
+    rows = [{"time": t0 + 14_400, "open": 105, "high": 112, "low": 104, "close": 110, "volume": 2},   # 2nd half
+            {"time": t0, "open": 100, "high": 106, "low": 98, "close": 105, "volume": 1}]           # 1st half
+    bar = _aggregate_delta_rows(rows, 14_400, 28_800)[0]
+    assert (bar["time"], bar["open"], bar["high"], bar["low"], bar["close"], bar["volume"]) == (t0, 100, 112, 98, 110, 3)
