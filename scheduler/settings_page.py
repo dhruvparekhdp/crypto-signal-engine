@@ -402,13 +402,12 @@ th{color:var(--muted2);font-weight:600}
 <aside class="settings-sidebar raise">
   <div class="side-title">Quick Jump</div>
   <a href="#sec-data" class="side-nav-btn">📡 Market data</a>
-  <a href="#sec-signals" class="side-nav-btn">📈 Signals & Modes</a>
-  <a href="#sec-exits" class="side-nav-btn">🔒 Exits</a>
-  <a href="#sec-protect" class="side-nav-btn">🛡️ Protections</a>
-  <a href="#sec-ai" class="side-nav-btn">🤖 AI Sentinel</a>
-  <a href="#sec-paper" class="side-nav-btn">🧪 Paper trading</a>
+  <a href="#sec-live" class="side-nav-btn">🇮🇳 Live ₹ · Delta</a>
+  <a href="#sec-paperbook" class="side-nav-btn">📒 Paper book</a>
+  <a href="#sec-newsai" class="side-nav-btn">🤖 News & AI</a>
+  <a href="#sec-advanced" class="side-nav-btn">⚙️ Advanced</a>
+  <a href="#sec-paper" class="side-nav-btn">🧪 Paper wallet</a>
   <a href="#sec-models" class="side-nav-btn">🧠 AI models</a>
-  <a href="#sec-keys" class="side-nav-btn">🔑 API keys</a>
   <a href="#sec-themes" class="side-nav-btn">🎨 Theme</a>
 </aside>
 <div class="settings-content" style="display:grid;gap:18px">
@@ -423,7 +422,7 @@ th{color:var(--muted2);font-weight:600}
 by the engine. A <span class="tag acc">restart</span> tag means it takes effect after the next
 restart; everything else applies the moment you save.</p></section>
 <div id="groups"></div>
-<details class="raise" id="sec-paper"><summary>🧪 Paper trading</summary><div class="rows" id="paper"></div></details>
+<details class="raise" id="sec-paper"><summary>🧪 Paper wallet (advanced)</summary><div class="rows" id="paper"></div></details>
 <details class="raise" id="sec-models"><summary>🤖 AI models in use</summary><div class="rows" id="models"></div></details>
 <details class="raise" id="speed"><summary>⚡ Speed (why pages are slow)</summary>
 <div class="rows" id="perf"><p class="muted small">Log in to see timings.</p></div></details>
@@ -530,25 +529,31 @@ const PAPER_FIELDS=[['enabled','Paper trading on','bool'],['starting_wallet','St
   ['trailing_enabled','Trailing stop','bool'],['alert_telegram','Telegram alerts','bool']];
 function renderGroups(){
   document.getElementById('sources').innerHTML=(LAST_SOURCES_ON||[]).map(s=>'<span>'+esc(s)+'</span>').join('');
-  const groups={}; FIELDS.forEach(f=>(groups[f.group_label]=groups[f.group_label]||[]).push(f));
-  const icons={'Market data':'📡','Signals':'📈','Exits (profit lock)':'🔒','Protections':'🛡️','AI':'🤖','v2 strategy':'🧭','Delta India (INR futures)':'🇮🇳','Storage':'🗄️','API keys':'🔑'};
-  const secId={'Market data':'sec-data','Signals':'sec-signals','Exits (profit lock)':'sec-exits','Protections':'sec-protect','AI':'sec-ai','v2 strategy':'sec-v2','Delta India (INR futures)':'sec-delta','Storage':'sec-storage','API keys':'sec-keys'};
-  const groupNote={'API keys':'Paste a new key and save — leave a box blank to keep '
-    +'whatever key is already set. Once saved a key is never shown again, here or in any '
-    +'API response, only whether one is set.',
-    'Delta India (INR futures)':'Mirrors paper swing signals onto Delta India. Start in '
-    +'<b>shadow</b> (logs only, Read key OK). Real orders need mode=<b>live</b> AND '
-    +'“Allow live Delta orders” ON AND a Trading key. Keys are pasted on /keys.'};
-  document.getElementById('groups').innerHTML=Object.entries(groups).map(([g,fs],i)=>
-    '<details class="raise" id="'+(secId[g]||'sec-'+i)+'" style="margin-bottom:18px"'+(i===0?' open':'')+'><summary>'+(icons[g]||'')
-    +' '+esc(g)+'</summary><div class="rows">'
-    +(groupNote[g]?'<p class="small muted" style="padding:0 4px 8px">'+groupNote[g]+'</p>':'')
-    +fs.map(f=>'<div class="row inset" id="r-'+f.key+'" style="display:'+(isFieldVisible(f)?'':'none')+'"><div>'
+  // 18 Oct 2026: only what matters is shown; retired options are hidden (their saved values still apply)
+  const order=['Live ₹ · Delta India','Paper book','News & AI'];
+  const secId={'Live ₹ · Delta India':'sec-live','Paper book':'sec-paperbook','News & AI':'sec-newsai'};
+  const icons={'Live ₹ · Delta India':'🇮🇳','Paper book':'📒','News & AI':'🤖'};
+  const note={'Live ₹ · Delta India':'Real money. Orders go out only when mode is <b>live</b> AND “Allow live Delta orders” is ON. '
+    +'The <b>kill switch</b> stops new orders at once; open positions keep their stops on Delta. Keys are on <a href="/keys">/keys</a>.',
+    'Paper book':'The paper book runs on real prices with fake money, alongside live.',
+    'News & AI':'News pauses trading around big releases; the AI jobs write briefings and notes, they never place trades.'};
+  const row=f=>'<div class="row inset" id="r-'+f.key+'" style="display:'+(isFieldVisible(f)?'':'none')+'"><div>'
     +'<div class="l">'+esc(f.label)+'</div>'+(f.help?'<div class="h">'+esc(f.help)+'</div>':'')
     +'<div class="b">'+(f.live?'':'<span class="tag acc">restart</span>')
     +(f.source==='saved'?'<span class="tag">saved</span>':'<span class="tag">default</span>')
-    +(f.depends_on && f.depends_on.binance_only_mode===false?'<span class="tag">multi-feed</span>':'')
-    +'</div></div><div>'+control(f)+'</div></div>').join('')+'</div></details>').join('');
+    +'</div></div><div>'+control(f)+'</div></div>';
+  const main=order.map(sec=>{const fs=FIELDS.filter(f=>f.section===sec).sort((a,b)=>a.rank-b.rank);
+    return '<details class="raise" id="'+secId[sec]+'" style="margin-bottom:18px" open><summary>'+icons[sec]+' '+esc(sec)+'</summary><div class="rows">'
+      +'<p class="small muted" style="padding:0 4px 8px">'+note[sec]+'</p>'+fs.map(row).join('')+'</div></details>';}).join('');
+  const adv=FIELDS.filter(f=>f.tier==='advanced'), sub={};
+  adv.forEach(f=>(sub[f.group_label]=sub[f.group_label]||[]).push(f));
+  const retired=FIELDS.filter(f=>f.tier==='retired').length;
+  const advHtml='<details class="raise" id="sec-advanced" style="margin-bottom:18px"><summary>⚙️ Advanced (rarely needed)</summary><div class="rows">'
+    +'<p class="small muted" style="padding:0 4px 8px">Data feeds, storage and the (switched-off) intraday rules. Leave these alone unless something is broken.</p>'
+    +Object.entries(sub).map(([g,fs])=>'<h3 class="small muted" style="padding:10px 4px 4px">'+esc(g)+'</h3>'+fs.map(row).join('')).join('')
+    +'<p class="small muted" style="padding:10px 4px 0">'+retired+' retired options are hidden (the old intraday book, mirror review, profit lock, sessions, '
+    +'precedent research, v2). Their saved values are kept and still apply; hiding them changed nothing.</p></div></details>';
+  document.getElementById('groups').innerHTML=main+advHtml;
   updateVisibility();
 }
 function renderModels(d){

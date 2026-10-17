@@ -417,6 +417,36 @@ def _is_set(settings, key: str) -> bool:
     return bool(v.get_secret_value()) if hasattr(v, "get_secret_value") else bool(v)
 
 
+# What /settings shows (owner, 18 Oct 2026: "too many options, most of them are of no use and confusing").
+# main: a few plain sections, in this order. advanced: one collapsed section. Everything else (not a key) is
+# retired: hidden on the page, but its saved value is still applied - hiding never changes how the engine runs.
+MAIN_SECTIONS: dict[str, tuple[str, ...]] = {
+    "Live ₹ · Delta India": ("delta_india_kill_switch", "delta_india_mode", "delta_india_live_orders",
+                             "delta_india_risk_pct", "delta_india_max_open", "delta_india_daily_loss_pct",
+                             "delta_india_min_wallet_inr", "delta_india_min_leverage"),
+    "Paper book": ("paper_open_families",),
+    "News & AI": ("event_blackout_enabled", "news_sentiment_enabled", "event_monitor_enabled",
+                  "move_attribution_enabled", "groq_postmortem_enabled"),
+}
+ADVANCED = frozenset({
+    "delta_india_base_url", "delta_only_mode", "delta_india_data_enabled", "delta_klines_seconds",
+    "binance_only_mode", "binance_klines_enabled", "binance_klines_seconds", "binance_ws_enabled",
+    "binance_oi_enabled", "coindcx_enabled", "coingecko_enabled", "twelvedata_enabled", "db_retention_days",
+    "intraday_min_confidence", "intraday_min_timeframe_minutes", "intraday_max_open", "intraday_margin_cap_frac",
+})
+_MAIN_SECTION = {k: sec for sec, keys in MAIN_SECTIONS.items() for k in keys}
+_RANK = {k: i for keys in MAIN_SECTIONS.values() for i, k in enumerate(keys)}
+
+
+def tier_of(key: str, group: str) -> str:
+    """'main' | 'advanced' | 'retired' | 'key' (API keys live on /keys)."""
+    if group == "keys":
+        return "key"
+    if key in _MAIN_SECTION:
+        return "main"
+    return "advanced" if key in ADVANCED else "retired"
+
+
 def describe(settings, stored: dict) -> list[dict]:
     """
     Every field with its current value and where that value comes from.
@@ -433,4 +463,5 @@ def describe(settings, stored: dict) -> list[dict]:
         "is_set": _is_set(settings, f.key) if f.kind == "secret" else None,
         "source": "saved" if f.key in stored else "default",
         "depends_on": f.depends_on,
+        "tier": tier_of(f.key, f.group), "section": _MAIN_SECTION.get(f.key, ""), "rank": _RANK.get(f.key, 99),
     } for f in FIELDS]
