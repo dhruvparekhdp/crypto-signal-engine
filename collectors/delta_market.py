@@ -195,11 +195,13 @@ class DeltaMarket:
         try:
             marks = await self.fetch_mark_prices()
             now = datetime.now(UTC)
-            for sym in list(self.refreshed):
+            # every followed coin, not only the ones whose Delta candles loaded: the tickers endpoint kept working
+            # while the candle history answered 502 (17 Oct 2026), so the 24h change stays real either way
+            for sym in symbols:
                 px = marks.get(sym.upper())
                 # the crypto store has no update_price (prices come from the 1m candles); calling it raised and
                 # silently skipped everything after it in this loop until 18 Oct 2026
-                if px and px > 0 and hasattr(self.store, "update_price"):
+                if px and px > 0 and sym in self.refreshed and hasattr(self.store, "update_price"):
                     await self.store.update_price(sym, px, now)
                 st = self._stats.get(sym.upper())
                 if st and hasattr(self.store, "update_24h_stats"):

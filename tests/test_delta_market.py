@@ -103,3 +103,27 @@ def test_fetch_pushes_24h_stats_so_the_change_is_not_zero():
     if st is not None:
         assert round(st.price_change_24h_pct, 2) == round((81500 - 80000) / 80000 * 100, 2)
         assert st.high_24h == 82000.0 and st.volume_24h == 5000.0
+
+
+def test_24h_stats_are_pushed_even_when_delta_candles_fail():
+    import asyncio
+
+    from analysis.crypto_state_store import CryptoStateStore
+    from collectors.delta_market import DeltaMarket
+
+    async def go():
+        store = CryptoStateStore()
+        await store.add_symbol("btcusdt")
+        m = DeltaMarket(store)
+
+        async def no_candles(sym, res, limit=360):
+            return []
+
+        async def marks():
+            m._stats = {"BTCUSDT": {"open": 80000.0, "high": 82000.0, "low": 79000.0, "volume": 5000.0}}
+            return {"BTCUSDT": 81500.0}
+        m.fetch_candles, m.fetch_mark_prices = no_candles, marks
+        await m.fetch()
+        return await store.get("btcusdt")
+    st = asyncio.run(go())
+    assert st.high_24h == 82000.0 and st.price_24h_ago == 80000.0
