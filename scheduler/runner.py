@@ -223,6 +223,28 @@ def _family_may_trade(sig) -> bool:
         return True
     return ("swing" if swing else "intraday") in allowed
 
+# Live order refusals worth a Telegram message; routine skips (too small, book full, already open) stay quiet.
+_QUIET_LIVE_REASONS = ("below_one_contract", "delta_book_full", "already_open_on_delta", "stop_too_close",
+                       "stop_too_wide_for_leverage", "no_delta_product", "kill_switch", "mode_off")
+
+
+def live_order_alert(plan, risk_pct: float) -> str:
+    """Telegram text for a real-money Delta order: placed (with its stop, target and Rs risk) or refused for a reason
+    the owner should know about. '' when there is nothing worth sending (owner, 18 Oct 2026)."""
+    coin = (getattr(plan, "delta_symbol", "") or "").removesuffix("USD") or "?"
+    if getattr(plan, "ok", False):
+        side = "LONG 🟢" if getattr(plan, "side", "") == "buy" else "SHORT 🔴"
+        return (f"💰 <b>LIVE ₹ ORDER · Delta India</b>\n<b>{coin}</b> · {side} · {plan.size} contracts · "
+                f"{getattr(plan, 'leverage', 0)}x\nEntry ~{getattr(plan, 'entry', 0):,.6g} · Stop <b>{getattr(plan, 'stop', 0):,.6g}</b> · "
+                f"Target {getattr(plan, 'target', 0):,.6g}\nRisk ₹{getattr(plan, 'risk_inr', 0):,.0f} of ₹{getattr(plan, 'inr_available', 0):,.0f} "
+                f"({risk_pct * 100:g}% rule) · stop and target are on Delta\nBook → Live ₹ for the live view")
+    reason = str(getattr(plan, "reason", "") or "")
+    if not reason or reason.startswith(_QUIET_LIVE_REASONS):
+        return ""
+    return (f"⚠️ <b>LIVE ₹ order NOT placed · {coin}</b>\nReason: {reason[:160]}\n"
+            "Paper and the demo still take the trade. Book → Live ₹ shows the order log.")
+
+
 class AppRunner:
     def __init__(self) -> None:
         self.notifier = TelegramNotifier()
@@ -1551,6 +1573,13 @@ class AppRunner:
             log.info("delta_india_mirror", symbol=symbol, target=book, ok=plan.ok, reason=plan.reason,
                      delta=plan.delta_symbol, size=plan.size, risk_inr=round(plan.risk_inr, 2),
                      leverage=getattr(plan, "leverage", 0), live_orders=bool(settings.delta_india_live_orders))
+            if book == "live":
+                try:                                     # an alert failure must never touch the order
+                    text = live_order_alert(plan, settings.delta_india_risk_pct)
+                    if text:
+                        await self.notifier.send_text(text, parse_mode=ParseMode.HTML)
+                except Exception as e:  # noqa: BLE001
+                    log.warning("live_order_alert_failed", error=str(e)[:120])
 
     async def _log_signal(self, sig, suppressed_by: str = "", **extra) -> int:
         """
