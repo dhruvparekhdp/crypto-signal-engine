@@ -367,9 +367,9 @@
         { label: "PRICE", w: "120px", cell: function (c) { return e(U.px(c.price)); } },
         { label: "24H", w: "90px", cell: function (c) { return C.signed(c.change_24h_pct); }, sort: function (c) { return c.change_24h_pct; } },
         { label: "VOLUME 24H", w: "110px", cell: function (c) { return e(U.compact(c.volume_24h)); }, sort: function (c) { return c.volume_24h || 0; } },
-        { label: "VOL RATIO", w: "90px", cell: function (c) { return e(U.num(c.volume_ratio) ? c.volume_ratio.toFixed(2) : "—"); }, sort: function (c) { return c.volume_ratio || 0; } },
+        { label: "VOL RATIO", w: "90px", cell: function (c) { return e(U.num(c.volume_ratio) && c.volume_ratio > 0 ? c.volume_ratio.toFixed(2) : "—"); }, sort: function (c) { return c.volume_ratio || 0; } },
         { label: "RSI", w: "60px", cell: function (c) { return e(U.num(c.rsi_14) ? Math.round(c.rsi_14) : "—"); }, sort: function (c) { return c.rsi_14 || 0; } },
-        { label: "ATR", w: "80px", cell: function (c) { return e(U.num(c.atr_pct) ? c.atr_pct.toFixed(2) + "%" : "—"); }, sort: function (c) { return c.atr_pct || 0; } },
+        { label: "ATR 1M", w: "80px", cell: function (c) { return e(U.num(c.atr_pct) ? c.atr_pct.toFixed(2) + "%" : "—"); }, sort: function (c) { return c.atr_pct || 0; } },
         { label: "UPDATED", w: "90px", cell: function (c) { return '<span class="dim">' + e(U.ago(c.timestamp)) + "</span>"; } },
         { label: "", w: "90px", cell: function (c) { return '<button class="mini" data-act="remove" data-sym="' + e(c.symbol) + '">Remove</button>'; } }
       ], D.coins, { state: ctx.s.t, minWidth: 860, empty: "No pairs on the watchlist." });

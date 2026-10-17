@@ -80,6 +80,27 @@ from storage.repository import Repository
 log = structlog.get_logger()
 
 
+def _binance_only() -> bool:
+    """Binance-only data mode, unless Delta-only is on (18 Oct 2026: production had both saved; the stale Binance-only
+    flag kept the Fear & Greed and news jobs off while every price already came from Delta)."""
+    return bool(settings.binance_only_mode) and not bool(getattr(settings, "delta_only_mode", False))
+
+
+def delta_rows_for_store(bars: list[dict], symbol: str, interval: str, now: datetime) -> list[dict]:
+    """Delta candles (collectors.delta_market shape) -> market_candles rows: closed bars only, bad prices dropped."""
+    step = {"1m": 60, "5m": 300, "15m": 900, "1h": 3600, "4h": 14400, "1d": 86400}[interval]
+    out = []
+    for b in bars:
+        t = b["timestamp"]
+        o, h, lo, c = b["open"], b["high"], b["low"], b["close"]
+        if min(o, h, lo, c) <= 0 or h < lo or (t + timedelta(seconds=step)) > now:
+            continue
+        out.append({"symbol": symbol.lower(), "interval": interval, "open_time": t.replace(tzinfo=None),
+                    "open": o, "high": h, "low": lo, "close": c, "volume": b.get("volume", 0.0),
+                    "quote_volume": 0.0, "trades": 0, "taker_buy_volume": 0.0, "source": "delta"})
+    return out
+
+
 def _trade_snapshot(pos) -> dict:
     return {"stop": pos.stop_price, "target": pos.target_price, "trail": pos.trail_active,
             "trail_r": pos.trail_r_override, "lock": pos.locked_roe}
@@ -1098,16 +1119,30 @@ class AppRunner:
         from collectors.binance_history import BinanceHistory
         now = datetime.now(UTC)
         states = await self.crypto_store.get_all()
-        saved = 0
+        saved, from_binance = 0, 0
         for st in states:
             for interval, back in (("5m", timedelta(hours=3)), ("1h", timedelta(hours=8))):
                 try:
+                    # Delta India first (owner, 18 Oct 2026: Delta is the default for every data); Binance only if
+                    # Delta returns nothing for this coin
+                    rows = await self._delta_closed_bars(st.symbol, interval, back, now)
+                    if rows:
+                        async with AsyncSessionFactory() as session:
+                            saved += await Repository(session).save_candles(rows)
+                        continue
+                    from_binance += 1
                     async for batch in BinanceHistory().fetch_range(st.symbol.upper(), interval, now - back, now):
                         async with AsyncSessionFactory() as session:
                             saved += await Repository(session).save_candles(batch)
                 except Exception as e:  # noqa: BLE001 - a coin failing must not stop the rest
                     log.warning("candle_refresh_failed", symbol=st.symbol, interval=interval, error=str(e)[:120])
-        log.info("candle_refresh_done", saved=saved)
+        log.info("candle_refresh_done", saved=saved, binance_fallbacks=from_binance)
+
+    async def _delta_closed_bars(self, symbol: str, interval: str, back: timedelta, now: datetime) -> list[dict]:
+        """Closed Delta India bars of the last `back`, as market_candles rows; [] when Delta did not answer."""
+        step = {"5m": 300, "1h": 3600}.get(interval, 3600)
+        bars = await self.delta_market.fetch_candles(symbol, interval, limit=int(back.total_seconds() // step) + 2)
+        return delta_rows_for_store(bars, symbol, interval, now)
 
     _SWING_SEEN_FILE = "data/swing_seen.json"
 
@@ -2238,12 +2273,19 @@ class AppRunner:
                     start = int(ts.timestamp() * 1000)
                     if now_ms - start < 3_600_000 or not (r.current_price > 0 and r.stop_loss > 0 and r.target_price > 0):
                         continue
-                    resp = await client.get("https://fapi.binance.com/fapi/v1/klines", timeout=15, params={
-                        "symbol": r.symbol.upper(), "interval": "1h", "startTime": start - 3_600_000, "limit": 200})
-                    k = [x for x in resp.json() if int(x[0]) + 3_600_000 <= now_ms]      # closed bars only
+                    # Delta India 1h bars first (the venue real money trades on); Binance only if Delta has none
+                    hours = int((now_ms - start) // 3_600_000) + 2
+                    bars = await self.delta_market.fetch_candles(r.symbol, "1h", limit=min(hours, 2000))
+                    k = [(int(b["timestamp"].timestamp() * 1000), b["high"], b["low"], b["close"]) for b in bars]
+                    k = [x for x in k if x[0] >= start - 3_600_000 and x[0] + 3_600_000 <= now_ms]   # closed bars only
+                    if not k:
+                        resp = await client.get("https://fapi.binance.com/fapi/v1/klines", timeout=15, params={
+                            "symbol": r.symbol.upper(), "interval": "1h", "startTime": start - 3_600_000, "limit": 200})
+                        k = [(int(x[0]), float(x[2]), float(x[3]), float(x[4])) for x in resp.json()
+                             if int(x[0]) + 3_600_000 <= now_ms]
                     res = regime_gate.virtual_outcome(
-                        r.direction, r.current_price, r.stop_loss, r.target_price, [int(x[0]) for x in k],
-                        [float(x[2]) for x in k], [float(x[3]) for x in k], [float(x[4]) for x in k], start, hold_ms, now_ms)
+                        r.direction, r.current_price, r.stop_loss, r.target_price, [x[0] for x in k],
+                        [x[1] for x in k], [x[2] for x in k], [x[3] for x in k], start, hold_ms, now_ms)
                     if res is None:
                         continue
                     outcome, rr = res
@@ -3527,7 +3569,7 @@ class AppRunner:
             next_run_time=datetime.now(UTC) + timedelta(minutes=2),
         )
 
-        if settings.sentiment_feeds_enabled and not settings.binance_only_mode:
+        if settings.sentiment_feeds_enabled and not _binance_only():
             self.scheduler.add_job(
                 self._refresh_sentiment_job,
                 "interval",
@@ -3707,7 +3749,7 @@ class AppRunner:
             id="hermes_rss",
             max_instances=1,
         )
-        if not settings.binance_only_mode:
+        if not _binance_only():
             self.scheduler.add_job(
                 self._crypto_news_job,
                 "interval",
