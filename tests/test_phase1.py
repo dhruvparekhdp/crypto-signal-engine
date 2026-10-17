@@ -72,9 +72,11 @@ async def _swing(signals, patches=None, setup=None):
 
 
 @pytest.mark.asyncio
-async def test_l3_total_same_side_risk_is_capped():
+async def test_l3_total_same_side_risk_is_capped(monkeypatch):
     """Two 3%-risk longs = 6% on one market move; with a 6% cap the third and fourth longs are refused, the short
-    still opens (the cap is per direction)."""
+    still opens (the cap is per direction). The paper book's own rule: off when paper copies the live book."""
+    from config.settings import settings
+    monkeypatch.setattr(settings, "paper_mirrors_live", False)
     sigs = [("BTCUSDT", "donchian", 1, 60000.0), ("SOLUSDT", "vol_breakout", 1, 150.0),
             ("DOGEUSDT", "keltner_break", 1, 0.2), ("XRPUSDT", "ichimoku", 1, 0.6),
             ("ETHUSDT", "donchian", -1, 3000.0)]
@@ -148,6 +150,7 @@ def test_l4_live_stop_fills_at_the_gap_price():
 async def test_l1_swing_positions_and_entries_use_perp_prices(monkeypatch):
     from config.settings import settings
     monkeypatch.setattr(settings, "swing_perp_prices", True)
+    monkeypatch.setattr(settings, "paper_mirrors_live", False)      # small test wallet: below one Delta contract
 
     async def fake_perp(self):
         return {"BTCUSDT": 60300.0}
