@@ -63,6 +63,14 @@ FEEDS: list[tuple[str, str]] = [
     ("decrypt", "https://decrypt.co/feed"),
     ("cryptoslate", "https://cryptoslate.com/feed/"),
     ("cnbc_economy", "https://www.cnbc.com/id/20910258/device/rss/rss.html"),
+    # 18 Oct 2026, owner: more crypto desks (alchemy.com's crypto-news list). Each answered 200 with items from today
+    # when fetched from the EC2 server; the others on the list were 403/404, empty, stale, NFT-only or press releases.
+    ("coingape", "https://coingape.com/feed/"),
+    ("ambcrypto", "https://ambcrypto.com/feed/"),
+    ("u_today", "https://u.today/rss.php"),
+    ("coinpedia", "https://coinpedia.org/feed/"),
+    ("dailycoin", "https://dailycoin.com/feed/"),
+    ("unchained", "https://unchainedcrypto.com/feed/"),
 ]
 
 # A closed vocabulary, for the reason every other vocabulary in this codebase
