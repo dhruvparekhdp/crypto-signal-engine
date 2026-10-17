@@ -179,3 +179,23 @@ async def test_the_five_minute_reconcile_learns_deltas_rupee_rate(tmp_path):
     book = _book(tmp_path, Rate())
     await book.reconcile()
     assert book.rate_seen and book.usd_inr == 85.37
+
+
+@pytest.mark.asyncio
+async def test_old_paper_trades_never_block_live(tmp_path, monkeypatch):
+    """With real money on, the live book's own open positions are the slots. Paper held 5 trades from before live
+    started (18 Oct 2026) while live held none - those must not stop the next live trade."""
+    import json as _json
+
+    from execution import delta_book
+    from scheduler.runner import AppRunner
+    state = tmp_path / "delta_state.json"
+    state.write_text(_json.dumps({"positions": {"SUIUSD": {}}}))
+    monkeypatch.setattr(delta_book, "STATE_PATH", state)
+    monkeypatch.setattr(settings, "delta_india_mode", "live")
+    monkeypatch.setattr(settings, "delta_india_live_orders", True)
+    legacy = [SimpleNamespace(trade_mode="swing", symbol=s) for s in ("ethusdt", "linkusdt", "bnbusdt", "solusdt", "xrpusdt")]
+    coins = {"ethusdt", "linkusdt", "bnbusdt", "solusdt", "xrpusdt", "suiusdt"}
+    assert AppRunner._live_slots_used(legacy, coins) == 1                # live's own book: 1 of 3 used
+    monkeypatch.setattr(settings, "delta_india_live_orders", False)
+    assert AppRunner._live_slots_used(legacy, coins) == 5                # no real money: paper counts its own

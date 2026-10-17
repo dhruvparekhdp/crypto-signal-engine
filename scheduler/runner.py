@@ -1194,6 +1194,19 @@ class AppRunner:
             return "losing_streak_pause"
         return None
 
+    @staticmethod
+    def _live_slots_used(positions, live_coins: set[str]) -> int:
+        """Slots the live Delta book is using. While real money is on, its own open positions decide - so paper opens a
+        live coin exactly when live has room, and trades paper still holds from before live started never block it
+        (18 Oct 2026: paper held 5 such trades, live none). Otherwise paper's own swing trades on live coins."""
+        if (settings.delta_india_mode or "").lower() == "live" and settings.delta_india_live_orders:
+            try:
+                from execution.delta_book import STATE_PATH
+                return len(json.loads(STATE_PATH.read_text()).get("positions") or {})
+            except (OSError, ValueError):
+                pass
+        return sum(1 for p in positions if getattr(p, "trade_mode", "") == "swing" and p.symbol.lower() in live_coins)
+
     def _delta_usd_inr(self) -> float:
         """Delta India's own INR-per-USD rate, as last read from a Delta wallet (live or demo); the saved fallback
         until one has been read. Paper trades that copy the live book convert at this rate, not paper_usdt_inr."""
@@ -1399,8 +1412,7 @@ class AppRunner:
         equity0 = cstate.wallet + sum(p.margin for p in cstate.positions)
         mirror = bool(settings.paper_mirrors_live)        # paper runs on the live Delta book's rules (owner 18 Oct)
         live_coins = {x.strip().lower() for x in (settings.delta_live_coins or "").split(",") if x.strip()}
-        n_live_slots = sum(1 for p in cstate.positions
-                           if getattr(p, "trade_mode", "") == "swing" and p.symbol.lower() in live_coins)
+        n_live_slots = self._live_slots_used(cstate.positions, live_coins)
         if mirror:
             guard_block = self._swing_account_guard(closed, now, equity0,
                                                     daily_loss_pct=settings.delta_india_daily_loss_pct * 100,
@@ -1540,7 +1552,6 @@ class AppRunner:
             cstate.positions.append(pos)
             open_syms.add(sig.symbol)
             n_swing += 1
-            n_live_slots += sig.symbol.lower() in live_coins
             if reg_row is not None and reg_row.live_from is None:     # first trade of this exact code + params
                 try:
                     async with AsyncSessionFactory() as session:
@@ -1566,6 +1577,7 @@ class AppRunner:
                                               sig.signal_type, usdt_inr=pcfg.usdt_inr)
             except Exception as e:  # noqa: BLE001
                 log.warning("delta_india_mirror_failed", symbol=pos.symbol, error=str(e)[:160])
+            n_live_slots = self._live_slots_used(cstate.positions, live_coins)     # after live took it (or not)
 
     @staticmethod
     def _delta_targets() -> list[str]:
