@@ -1406,7 +1406,8 @@ class AppRunner:
             trusted = reg_row is not None and reg_row.status == "trusted"
             risk = sb.risk_for(sig.signal_type, sig.timeframe, dd, streak, trusted)
             sized = sb.size(equity, cstate.wallet, risk, price, stop, stop_out_costs(sig.symbol, cfg),
-                            settings.swing_max_leverage, settings.swing_max_margin_frac)
+                            settings.swing_max_leverage, settings.swing_max_margin_frac,
+                            min_leverage=settings.delta_india_min_leverage)     # same leverage rule as live
             if sized is None:
                 await self._mark_skipped(log_id, "no_free_margin")
                 continue

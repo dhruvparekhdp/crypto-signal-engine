@@ -332,13 +332,17 @@ def risk_reason(signal_type: str, timeframe: str, dd: float, streak: int, truste
 
 
 def size(wallet: float, free: float, risk_pct: float, entry: float, stop: float, costs: float,
-         max_leverage: float, max_margin_frac: float = 0.0) -> tuple[float, float] | None:
+         max_leverage: float, max_margin_frac: float = 0.0, min_leverage: float = 0.0) -> tuple[float, float] | None:
     """(margin, leverage) so that a stop-out costs risk_pct of the wallet, at the lowest leverage the free
     margin allows (capped at max_leverage). None if it cannot be funded.
 
     max_margin_frac > 0 caps one trade's margin at that share of the wallet, so one trade can no longer lock the
     whole wallet (7 Oct 2026: a 1x SOL trade took Rs1,238 of Rs1,735 and every later signal was skipped).
-    Leverage rises to fit the cap; the stop-out risk is unchanged, only less margin is tied up."""
+    Leverage rises to fit the cap; the stop-out risk is unchanged, only less margin is tied up.
+
+    min_leverage > 0 uses the live Delta rule instead of the lowest leverage (owner, 18 Oct 2026: "1.6x makes no
+    sense"): the highest leverage whose liquidation is >= 2x the stop distance away, at least min_leverage. The
+    stop-out loss in rupees is the same at any leverage; only the margin locked (and the liquidation distance) changes."""
     move = abs(entry - stop) / entry + max(costs, 0.0)
     if move <= 0 or wallet <= 0:
         return None
@@ -349,6 +353,9 @@ def size(wallet: float, free: float, risk_pct: float, entry: float, stop: float,
     if usable <= 0:
         return None
     leverage = min(max(1.0, notional / usable), max_leverage)
+    if min_leverage > 0:
+        from execution.delta_book import leverage_for
+        leverage = min(max(leverage, leverage_for(abs(entry - stop) / entry, int(min_leverage))), max_leverage)
     margin = notional / leverage
     if margin > usable:
         margin = usable

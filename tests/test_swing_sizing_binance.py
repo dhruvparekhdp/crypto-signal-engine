@@ -42,7 +42,11 @@ async def test_second_and_third_signals_still_get_real_positions():
     wallet = 3000.0
     margins = sorted(r.margin for r in rows)
     assert margins[-1] <= wallet * 0.15 + 1          # no single trade locks the wallet
-    assert margins[0] >= margins[-1] * 0.5           # the later trades are not crumbs
+    # the later trades are not crumbs: each puts close to the same rupees at risk to its stop. (Margin alone no
+    # longer shows size: since 18 Oct paper picks leverage like live, so margin follows each coin's stop distance.)
+    risk = {r.symbol: r.coin_qty * abs(r.entry_price - r.initial_stop_price) * r.usdt_inr for r in rows}
+    assert risk["solusdt"] >= 0.85 * wallet * 0.03 and risk["dogeusdt"] >= 0.85 * wallet * 0.03
+    assert risk["xrpusdt"] >= 0.85 * wallet * 0.015     # ichimoku runs at half risk until proven vs random
 
 
 @pytest.mark.asyncio

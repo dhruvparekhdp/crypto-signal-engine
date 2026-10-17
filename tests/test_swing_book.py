@@ -137,6 +137,19 @@ class TestSizing(unittest.TestCase):
         self.assertLessEqual(lev, 3.0)
         self.assertLessEqual(margin, 180.0 + 1e-9)
 
+    def test_paper_uses_the_live_leverage_rule_and_keeps_the_same_rupee_risk(self):
+        """18 Oct 2026: a wide-stop SOL trade sat at 1.6x; paper now picks leverage the way live Delta does."""
+        low = sb.size(wallet=5000, free=5000, risk_pct=0.015, entry=100, stop=94, costs=0.002, max_leverage=10,
+                      max_margin_frac=0.15)
+        live = sb.size(wallet=5000, free=5000, risk_pct=0.015, entry=100, stop=94, costs=0.002, max_leverage=10,
+                       max_margin_frac=0.15, min_leverage=5)
+        self.assertLess(low[1], 2.0)
+        self.assertEqual(live[1], 8)                   # 6% stop -> 8x: liquidation ~12% away, twice the stop
+        self.assertAlmostEqual(low[0] * low[1], live[0] * live[1], places=6)    # same position, less margin locked
+        tight = sb.size(5000, 5000, 0.015, 100, 99, 0.002, 10, 0.15, min_leverage=5)
+        wide = sb.size(5000, 5000, 0.015, 100, 92, 0.002, 10, 0.15, min_leverage=5)
+        self.assertEqual((tight[1], wide[1]), (10, 6))
+
     def test_nothing_to_fund(self):
         self.assertIsNone(sb.size(2000, 0, 0.01, 100, 94, 0.002, 3))
 
