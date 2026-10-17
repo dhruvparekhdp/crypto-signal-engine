@@ -27,6 +27,16 @@ from execution.delta_india import DeltaError, DeltaIndia, Product, binance_to_de
 SHADOW_PATH = Path("data/delta_shadow.jsonl")
 MIN_STOP_FRAC = 0.005        # a stop closer than 0.5% is noise, and sizes absurdly large
 MAX_LEVERAGE = 10.0          # sizing never needs more margin than the wallet has at this leverage
+LIQ_BUFFER = 2.0             # liquidation at least 2x as far from entry as the stop (17 Oct 2026 review)
+MAINT_MARGIN = 0.005         # Delta maintenance margin, roughly, for the liquidation distance estimate
+
+
+def leverage_for(stop_frac: float) -> int:
+    """Highest whole leverage whose liquidation distance (~1/L - maintenance) is >= LIQ_BUFFER x the stop distance,
+    capped at MAX_LEVERAGE. A 6% stop -> 8x (liquidation ~12% away); 3% -> 10x; 15% -> 3x."""
+    if stop_frac <= 0:
+        return 1
+    return int(max(1, min(MAX_LEVERAGE, math.floor(1 / (stop_frac * LIQ_BUFFER + MAINT_MARGIN)))))
 STATE_PATH = Path("data/delta_state.json")
 
 
@@ -46,6 +56,7 @@ class MirrorPlan:
     notional_usd: float = 0.0
     risk_inr: float = 0.0
     inr_available: float = 0.0
+    leverage: int = 0
 
 
 def size_contracts(product: Product, entry: float, stop: float, equity_inr: float,
@@ -136,8 +147,10 @@ class DeltaBook:
                               0, entry, stop, target, 0.0, 0.0, inr)
         size, notional, risk = size_contracts(
             product, entry, stop, sizing_equity, self.risk_pct, self.usd_inr)
-        # never ask for more than the wallet can margin (testnet 14 Oct: a 0.3% stop asked for 1,491 contracts)
-        max_notional_usd = (sizing_equity / self.usd_inr) * MAX_LEVERAGE * 0.9 if self.usd_inr else 0.0
+        # never ask for more than the wallet can margin (testnet 14 Oct: a 0.3% stop asked for 1,491 contracts), at
+        # the leverage this stop allows (the order is placed at exactly that leverage)
+        lev = leverage_for(abs(entry - stop) / entry if entry > 0 else 0.0)
+        max_notional_usd = (sizing_equity / self.usd_inr) * lev * 0.9 if self.usd_inr else 0.0
         if size and product.contract_value * entry > 0:
             cap = int(max_notional_usd // (product.contract_value * entry))
             if size > cap:
@@ -155,7 +168,7 @@ class DeltaBook:
             return MirrorPlan(False, "already_open_on_delta", self.mode, binance_symbol, delta_sym,
                               product.id, side, size, entry, stop, target, notional, risk, inr)
         return MirrorPlan(True, "", self.mode, binance_symbol, delta_sym, product.id, side,
-                          size, entry, stop, target, notional, risk, inr)
+                          size, entry, stop, target, notional, risk, inr, lev)
 
     async def _loss_guard(self) -> str:
         """'' when new orders may go out, else the reason they may not. The day's starting wallet (UTC) is stored
@@ -219,7 +232,17 @@ class DeltaBook:
             self._save_state(state)
             return plan
 
-        # LIVE path — real orders
+        # LIVE path — real orders. Leverage first: if it cannot be set, no order (fail closed).
+        if hasattr(self.client, "set_leverage"):
+            try:
+                await self.client.set_leverage(plan.product_id, plan.leverage)
+                record["leverage"] = plan.leverage
+            except DeltaError as e:
+                row.update(placed=False, error=f"leverage_not_set: {str(e)[:160]}")
+                self._append_shadow(row)
+                return MirrorPlan(False, "leverage_not_set", plan.mode, plan.binance_symbol, plan.delta_symbol,
+                                  plan.product_id, plan.side, plan.size, plan.entry, plan.stop, plan.target,
+                                  plan.notional_usd, plan.risk_inr, plan.inr_available, plan.leverage)
         try:
             entry_order = await self.client.place_market(plan.product_id, plan.side, plan.size)
             close_side = "sell" if plan.side == "buy" else "buy"
@@ -238,6 +261,22 @@ class DeltaBook:
                           entry_fill=(entry_order or {}).get("average_fill_price"))
             state.setdefault("positions", {})[plan.delta_symbol] = record
             self._save_state(state)
+            # the exchange's own liquidation price must sit beyond the stop; if not, get out now
+            liq = None
+            if hasattr(self.client, "liquidation_price"):
+                try:
+                    liq = await self.client.liquidation_price(plan.product_id)
+                except DeltaError:
+                    liq = None
+            row["liquidation"] = liq
+            if liq and ((plan.side == "sell" and liq <= plan.stop) or (plan.side == "buy" and liq >= plan.stop)):
+                row["error"] = f"liquidation_inside_stop: liq {liq} vs stop {plan.stop}"
+                self._append_shadow(row)
+                await self.on_paper_close(binance_symbol, "liquidation_inside_stop")
+                return MirrorPlan(False, "liquidation_inside_stop", plan.mode, plan.binance_symbol,
+                                  plan.delta_symbol, plan.product_id, plan.side, plan.size, plan.entry,
+                                  plan.stop, plan.target, plan.notional_usd, plan.risk_inr, plan.inr_available,
+                                  plan.leverage)
         except DeltaError as e:
             row["placed"] = False
             row["error"] = str(e)[:200]
@@ -251,7 +290,7 @@ class DeltaBook:
             plan = MirrorPlan(False, f"order_failed_{e}", plan.mode, plan.binance_symbol,
                               plan.delta_symbol, plan.product_id, plan.side, plan.size,
                               plan.entry, plan.stop, plan.target, plan.notional_usd,
-                              plan.risk_inr, plan.inr_available)
+                              plan.risk_inr, plan.inr_available, plan.leverage)
         self._append_shadow(row)
         return plan
 

@@ -288,6 +288,24 @@ class DeltaIndia:
     async def cancel_order(self, order_id: int, product_id: int) -> dict:
         return await self._request("DELETE", "/v2/orders", body={"id": int(order_id), "product_id": int(product_id)})
 
+    async def set_leverage(self, product_id: int, leverage: int) -> dict:
+        """Order leverage for one product on this account (POST /v2/products/{id}/orders/leverage). Delta keeps it
+        per product per account; a live account's default can be 100x+ (17 Oct 2026 review)."""
+        return await self._request("POST", f"/v2/products/{int(product_id)}/orders/leverage",
+                                   body={"leverage": str(int(leverage))})
+
+    async def liquidation_price(self, product_id: int) -> float | None:
+        """The exchange's liquidation price for our open position on a product, or None if flat / unknown."""
+        got = await self._request("GET", "/v2/positions/margined", params={"product_ids": str(int(product_id))})
+        rows = got if isinstance(got, list) else [got]
+        for r in rows:
+            if isinstance(r, dict) and int(r.get("product_id") or product_id) == int(product_id) and r.get("size"):
+                try:
+                    return float(r.get("liquidation_price"))
+                except (TypeError, ValueError):
+                    return None
+        return None
+
     async def position_size(self, product_id: int) -> int:
         """Signed open contracts on a product (+ long, - short, 0 flat)."""
         got = await self._request("GET", "/v2/positions", params={"product_id": int(product_id)})
