@@ -42,3 +42,9 @@ def test_space_provides_musl_for_the_llama_cpp_wheel():
     assert "_musl_shim()" in SRC
     from scripts.hf_space_deploy import FILES
     assert "packages.txt" in FILES
+
+
+def test_chat_model_is_off_unless_asked_for():
+    # 18 Oct 2026: ~7 min per answer on the free CPU, no engine job uses it; FinBERT and embeddings keep the CPU
+    assert 'os.getenv("LOAD_LLM", "0") == "1"' in SRC
+    assert "if LOAD_LLM:" in SRC and "threading.Thread(target=_load" in SRC.split("if LOAD_LLM:")[1][:200]

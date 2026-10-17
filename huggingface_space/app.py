@@ -77,7 +77,13 @@ def _load():
         _stats["loading"] = False
 
 
-threading.Thread(target=_load, daemon=True).start()
+# 18 Oct 2026: the 3B chat model took ~7 min per answer on the free CPU and no engine job uses it any more; it is off
+# by default so FinBERT and the embedder have the CPU. LOAD_LLM=1 (Space variable) brings it back.
+LOAD_LLM = os.getenv("LOAD_LLM", "0") == "1"
+if LOAD_LLM:
+    threading.Thread(target=_load, daemon=True).start()
+else:
+    _stats.update(loading=False, error="chat model off (LOAD_LLM=0): FinBERT + embeddings only")
 
 # ZeroGPU hardware refuses to start an app with no @spaces.GPU function ("No @spaces.GPU function detected during
 # startup"). Everything here runs on the CPU, so register a no-op GPU function when the `spaces` package exists; on
@@ -197,7 +203,7 @@ class ChatReq(BaseModel):
 
 @api.get("/health")
 def health():
-    return {"model": f"{MODEL_REPO}/{MODEL_FILE}", "ready": _llm is not None, **_stats,
+    return {"model": f"{MODEL_REPO}/{MODEL_FILE}" if LOAD_LLM else "off", "ready": _llm is not None, **_stats,
             "classifier": CLASSIFIER_ID, "classifier_loaded": "clf" in _aux,
             "embedder": EMBEDDER_ID, "embedder_loaded": "emb" in _aux,
             "uptime_s": round(time.time() - _stats["started"])}
