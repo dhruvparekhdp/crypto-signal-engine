@@ -24,6 +24,11 @@ async def _admin(request: web.Request):
     from scheduler.security import check_bearer_auth
     if await _verify_admin_session(request):
         return None
+    if not _SETTINGS.api_auth_token:
+        # no API token is configured, so the only way in is the admin login: say so (18 Oct 2026: a logged-out save
+        # answered 503 "not configured / set API_AUTH_TOKEN" and the owner could not tell they had to log in again)
+        return web.json_response({"error": "admin login needed: log in on Settings (logging in elsewhere ends "
+                                           "this session)"}, status=401)
     return check_bearer_auth(request, _SETTINGS.api_auth_token)
 
 

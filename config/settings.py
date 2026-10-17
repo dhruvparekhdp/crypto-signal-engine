@@ -265,7 +265,9 @@ class Settings(BaseSettings):
     delta_india_live_orders: bool = False     # second gate: even in mode=live, no orders until this is True
     delta_india_risk_pct: float = 0.01        # risk per mirrored trade of INR wallet
     delta_india_max_open: int = 3
-    delta_india_usd_inr: float = 83.0         # Delta quotes USD notionals; INR wallet conversion for sizing
+    # Fallback only, not a setting (owner, 18 Oct 2026: market values come from live data). Every Delta sizing reads
+    # the exchange's own INR-per-USD rate from the wallet (available_balance_inr / available_balance; 85.0 on 18 Oct).
+    delta_india_usd_inr: float = 85.0
     # Testnet (cdn-ind.testnet.deltaex.org, no real money): scripts/delta_testnet_flow.py
     delta_india_testnet_api_key: SecretStr | None = None
     delta_india_testnet_api_secret: SecretStr | None = None
