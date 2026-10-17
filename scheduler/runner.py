@@ -397,13 +397,37 @@ class AppRunner:
             except Exception:
                 log.exception("delta_klines_job_failed")
             if settings.delta_only_mode:
-                return  # hold Binance entirely
+                # Delta is the source (live money is on Delta). Any coin Delta could not serve this round gets its
+                # candles from Binance, so prices never go blank (17 Oct 2026: Delta candles answered 502 for every
+                # coin; after a restart every price read 0.0).
+                await self._binance_fallback_candles()
+                return
         if not self.collector_enabled.get("binance_klines", settings.binance_klines_enabled):
             return
         try:
             await self.klines.fetch()
         except Exception:
             log.exception("klines_job_failed")
+
+    async def _binance_fallback_candles(self) -> None:
+        try:
+            symbols = await self.crypto_store.get_symbols()
+        except Exception:  # noqa: BLE001
+            return
+        missing = [s for s in symbols if s not in self.delta_market.refreshed]
+        if not missing:
+            return
+        filled = []
+        for sym in missing:
+            try:
+                bars = await self.klines.fetch_candles(sym)
+                if bars and len(bars) >= 20:
+                    await self.crypto_store.replace_candles(sym, bars)
+                    filled.append(sym)
+            except Exception as e:  # noqa: BLE001
+                log.debug("binance_fallback_candles_failed", symbol=sym, error=str(e)[:120])
+        log.warning("delta_candles_binance_fallback", missing=len(missing), filled=len(filled),
+                    delta_error=self.delta_market.last_error[:80])
 
     async def _coingecko_job(self) -> None:
         if not self.collector_enabled.get("coingecko", True):

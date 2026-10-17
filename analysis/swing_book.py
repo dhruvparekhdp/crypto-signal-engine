@@ -181,36 +181,50 @@ def _aggregate_delta_rows(rows: list, src_secs: int, dst_secs: int) -> list:
 
 
 async def fetch_bars(client, symbol: str, now_ms: int, tf: str = TF, limit: int = 500) -> Bars | None:
-    """Fetch closed bars. Uses Delta India when delta_only_mode is on, else Binance USD-M."""
+    """Fetch closed bars. Delta India first when delta_only_mode is on (live money is on Delta); if Delta errors or
+    returns nothing, Binance USD-M (owner, 17 Oct 2026: Delta's candle history answered 502 for every coin)."""
     from config.settings import settings
     if getattr(settings, "delta_only_mode", False):
-        from collectors.delta_market import TF_SECONDS, TF_TO_RES
-        from execution.delta_india import INDIA_URL, USER_AGENT, binance_to_delta_symbol
-        # Delta India has no 8h — pull 4h and aggregate (UTC 00/08/16).
-        native_tf = "4h" if tf == "8h" else tf
-        res = TF_TO_RES.get(native_tf, native_tf)
-        secs = TF_SECONDS.get(res, INTERVAL_MS[native_tf] // 1000)
-        fetch_limit = min(limit * (2 if tf == "8h" else 1), 2000)
-        end = now_ms // 1000
-        start = end - secs * fetch_limit
-        base = (getattr(settings, "delta_india_base_url", None) or INDIA_URL).rstrip("/")
-        r = await client.get(
-            f"{base}/v2/history/candles",
-            params={"symbol": binance_to_delta_symbol(symbol), "resolution": res,
-                    "start": start, "end": end},
-            headers={"User-Agent": USER_AGENT, "Accept": "application/json"},
-            timeout=15,
-        )
-        r.raise_for_status()
-        body = r.json()
-        rows = body.get("result") if isinstance(body, dict) else body
-        if tf == "8h":
-            rows = _aggregate_delta_rows(rows or [], src_secs=4 * 3600, dst_secs=8 * 3600)
-        return bars_from_delta(symbol, rows or [], now_ms, tf)
+        try:
+            bars = await _fetch_bars_delta(client, symbol, now_ms, tf, limit)
+            if bars is not None and len(bars.c) > 0:
+                return bars
+            why = "empty"
+        except Exception as e:  # noqa: BLE001 - fall back below
+            why = f"{type(e).__name__}: {str(e)[:80]}"
+        import structlog
+        structlog.get_logger().warning("swing_bars_binance_fallback", symbol=symbol, tf=tf, delta_error=why)
     r = await client.get(FAPI_KLINES, params={"symbol": symbol.upper(), "interval": tf, "limit": limit},
                          timeout=15)
     r.raise_for_status()
     return bars_from_klines(symbol, r.json(), now_ms, tf)
+
+
+async def _fetch_bars_delta(client, symbol: str, now_ms: int, tf: str, limit: int) -> Bars | None:
+    from config.settings import settings
+    from collectors.delta_market import TF_SECONDS, TF_TO_RES
+    from execution.delta_india import INDIA_URL, USER_AGENT, binance_to_delta_symbol
+    # Delta India has no 8h — pull 4h and aggregate (UTC 00/08/16).
+    native_tf = "4h" if tf == "8h" else tf
+    res = TF_TO_RES.get(native_tf, native_tf)
+    secs = TF_SECONDS.get(res, INTERVAL_MS[native_tf] // 1000)
+    fetch_limit = min(limit * (2 if tf == "8h" else 1), 2000)
+    end = now_ms // 1000
+    start = end - secs * fetch_limit
+    base = (getattr(settings, "delta_india_base_url", None) or INDIA_URL).rstrip("/")
+    r = await client.get(
+        f"{base}/v2/history/candles",
+        params={"symbol": binance_to_delta_symbol(symbol), "resolution": res,
+                "start": start, "end": end},
+        headers={"User-Agent": USER_AGENT, "Accept": "application/json"},
+        timeout=15,
+    )
+    r.raise_for_status()
+    body = r.json()
+    rows = body.get("result") if isinstance(body, dict) else body
+    if tf == "8h":
+        rows = _aggregate_delta_rows(rows or [], src_secs=4 * 3600, dst_secs=8 * 3600)
+    return bars_from_delta(symbol, rows or [], now_ms, tf)
 
 
 @dataclass
