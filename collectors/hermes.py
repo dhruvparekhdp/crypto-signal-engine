@@ -181,6 +181,7 @@ class Headline:
     event_type: str = "noise"
     model: str = ""
     duplicate_of: str = ""          # external_id of the first headline with the same story (analysis/headline_dedupe)
+    vec: list | None = None         # its bge-small embedding, when the dedupe step got one (not stored)
 
     def as_payload(self) -> dict:
         return {

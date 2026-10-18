@@ -2809,9 +2809,23 @@ class AppRunner:
             )
 
             scored_items = []
-            # Our Space scores the whole batch in one call (FinBERT + rules); Groq is only the fallback now.
+            # AI plan step 6: our own triage model on the dedupe step's vectors (no extra call); FinBERT + rules on the
+            # Space when any vector is missing, Groq after that
+            from analysis import headline_triage
+            if (settings.headline_triage_enabled and new_headlines and headline_triage.load() is not None
+                    and all(getattr(h, "vec", None) for h in new_headlines)):
+                for headline in new_headlines:
+                    r = headline_triage.classify(headline.vec, headline.headline)
+                    headline.score, headline.confidence = r["score"], r["confidence"]
+                    headline.event_type, headline.symbol = r["event_type"], r["symbol"]
+                    headline.model = "triage-v1 (bge-small + linear)"
+                    scored_items.append(headline.as_payload())
+                log.info("headlines_scored_by_triage", n=len(scored_items),
+                         relevant=sum(1 for x in scored_items if x["event_type"] != "noise"))
+                new_headlines = []
+                await self._llm_check_headlines([x for x in scored_items if not x.get("duplicate_of")])
             from collectors import hf_space
-            if hf_space.configured():
+            if new_headlines and hf_space.configured():
                 try:
                     from analysis.headline_rules import combine
                     probs = await hf_space.classify([h.headline for h in new_headlines])
@@ -2898,6 +2912,8 @@ class AppRunner:
             vectors = await self._embed([h.headline for h in headlines])
         except Exception as e:  # noqa: BLE001
             log.warning("headline_dedupe_embed_failed", error=str(e)[:120], fallback="exact text")
+        for h, v in zip(headlines, vectors or []):
+            h.vec = v                                   # the triage model (step 6) reads the same vectors
         try:
             n = mark_duplicates(headlines, vectors, recent, now)
         except Exception as e:  # noqa: BLE001

@@ -266,6 +266,9 @@ class Settings(BaseSettings):
     headline_dedupe_enabled: bool = True
     headline_dedupe_threshold: float = 0.90
     headline_dedupe_window_hours: float = 12.0
+    # AI plan step 6 (18 Oct 2026): our own triage model scores headlines (relevance, event type, direction) from the
+    # dedupe vectors; FinBERT + rules only when a vector is missing. analysis/headline_triage.py
+    headline_triage_enabled: bool = True
     # Live swing book (execution/live_book.py): copies swing entries to a small Binance USD-M futures account.
     # "off" | "testnet" (testnet.binancefuture.com, fake money) | "live". Keys come from the environment only:
     # futures-enabled, withdrawals disabled, IP-restricted to this server.
