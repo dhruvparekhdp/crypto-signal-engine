@@ -72,8 +72,9 @@ class MirrorPlan:
 
 
 def size_contracts(product: Product, entry: float, stop: float, equity_inr: float,
-                   risk_pct: float, usd_inr: float) -> tuple[int, float, float]:
-    """Return (contracts, notional_usd, risk_inr)."""
+                   risk_pct: float, usd_inr: float, round_up_risk_pct: float = 0.0) -> tuple[int, float, float]:
+    """Return (contracts, notional_usd, risk_inr). When risk_pct buys less than one contract, one contract is taken if
+    it risks at most round_up_risk_pct of the wallet (owner, 18 Oct 2026: fit more coins into a small wallet)."""
     if entry <= 0 or equity_inr <= 0 or usd_inr <= 0:
         return 0, 0.0, 0.0
     stop_frac = abs(entry - stop) / entry
@@ -86,7 +87,10 @@ def size_contracts(product: Product, entry: float, stop: float, equity_inr: floa
     coin_qty = notional_usd / entry
     contracts = int(math.floor(coin_qty / product.contract_value + 1e-12))
     if contracts < 1:
-        return 0, 0.0, 0.0
+        one_risk = product.contract_value * entry * stop_frac * usd_inr
+        if not (round_up_risk_pct > 0 and one_risk <= equity_inr * round_up_risk_pct + 1e-9):
+            return 0, 0.0, 0.0
+        contracts = 1
     notional_usd = contracts * product.contract_value * entry
     risk_inr = notional_usd * stop_frac * usd_inr
     return contracts, notional_usd, risk_inr
@@ -98,7 +102,8 @@ class DeltaBook:
                  max_open: int = 3, usd_inr: float = 83.0,
                  shadow_path: Path = SHADOW_PATH, state_path: Path = STATE_PATH,
                  kill_switch: bool = False, backstop_r: float = 0.5,
-                 daily_loss_pct: float = 0.0, min_wallet_inr: float = 0.0, min_leverage: int = MIN_LEVERAGE):
+                 daily_loss_pct: float = 0.0, min_wallet_inr: float = 0.0, min_leverage: int = MIN_LEVERAGE,
+                 round_up_risk_pct: float = 0.0):
         self.client = client
         self.mode = mode
         self.live_orders = live_orders
@@ -112,6 +117,7 @@ class DeltaBook:
         self.daily_loss_pct = daily_loss_pct      # no new orders once the wallet is this far below today's start
         self.min_wallet_inr = min_wallet_inr      # no new orders at all once the wallet is below this
         self.min_leverage = int(min_leverage)
+        self.round_up_risk_pct = float(round_up_risk_pct)   # one contract allowed up to this share of the wallet
         self.retry_delay_s = 1.0
         self.rate_seen = False                    # True once usd_inr came from the exchange's own wallet rows
 
@@ -164,7 +170,7 @@ class DeltaBook:
             return MirrorPlan(False, "stop_too_close", self.mode, binance_symbol, delta_sym, product.id, side,
                               0, entry, stop, target, 0.0, 0.0, inr)
         size, notional, risk = size_contracts(
-            product, entry, stop, sizing_equity, self.risk_pct, self.usd_inr)
+            product, entry, stop, sizing_equity, self.risk_pct, self.usd_inr, self.round_up_risk_pct)
         # never ask for more than the wallet can margin (testnet 14 Oct: a 0.3% stop asked for 1,491 contracts), at
         # the leverage this stop allows (the order is placed at exactly that leverage)
         stop_frac = abs(entry - stop) / entry if entry > 0 else 0.0

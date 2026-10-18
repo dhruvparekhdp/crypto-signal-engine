@@ -318,8 +318,8 @@ FIELDS: tuple[Field, ...] = (
           "Comma list traded by the swing book beyond the original 12, e.g. XAUTUSDT (gold), TIAUSDT. Live needs "
           "the coin in 'Coins allowed on live' too.", kind="str"),
     Field("paper_mirrors_live", "signals", "Paper uses the live rules",
-          "ON = paper swing trades use the live Delta book's risk %, max open (over live coins; gold/TIA never take a "
-          "live slot), daily loss limit, leverage rule, whole Delta contracts and Delta's rupee rate - and none of the "
+          "ON = paper swing trades use the live Delta book's risk %, max open (over live coins; a paper-only coin never "
+          "takes a live slot), daily loss limit, leverage rule, whole Delta contracts and Delta's rupee rate - and none of the "
           "extra paper blocks (losing-streak pause, side-risk cap, strategy pause, floor). Live only copies trades paper "
           "opens, so a paper-only block also stopped live.", kind="bool"),
     Field("delta_testnet_mirror", "delta", "Also copy trades to the demo account",
@@ -334,6 +334,10 @@ FIELDS: tuple[Field, ...] = (
           "Leverage is set on Delta before each trade (highest that keeps liquidation 2x beyond the stop, max 10x); "
           "never below this. The paper book uses the same rule. Profit/loss per trade comes from the risk %, not "
           "leverage.", kind="int", lo=1, hi=10),
+    Field("delta_india_round_up_risk_pct", "delta", "Round up to 1 contract (max risk)",
+          "When the risk % buys less than one Delta contract, take one contract if it risks at most this share of the "
+          "wallet. 0.05 = up to Rs25 on Rs500. 0 = never round up. Paper uses the same rule.", kind="float", lo=0.0,
+          hi=0.10),
     Field("delta_india_min_wallet_inr", "delta", "Delta wallet floor (Rs)",
           "No new Delta orders at all once the wallet is below this. 0 = off.", kind="float", lo=0.0, hi=1e7),
     Field("delta_india_live_orders", "delta", "Allow live Delta orders (second gate)",
@@ -438,7 +442,8 @@ def _is_set(settings, key: str) -> bool:
 MAIN_SECTIONS: dict[str, tuple[str, ...]] = {
     "Live ₹ · Delta India": ("delta_india_kill_switch", "delta_india_mode", "delta_india_live_orders",
                              "delta_india_risk_pct", "delta_india_max_open", "delta_india_daily_loss_pct",
-                             "delta_india_min_wallet_inr", "delta_india_min_leverage", "delta_live_coins",
+                             "delta_india_min_wallet_inr", "delta_india_min_leverage", "delta_india_round_up_risk_pct",
+                             "delta_live_coins",
                              "delta_testnet_mirror"),
     "Paper book": ("paper_mirrors_live", "paper_open_families", "swing_extra_symbols"),
     "News & AI": ("event_blackout_enabled", "news_sentiment_enabled", "event_monitor_enabled",

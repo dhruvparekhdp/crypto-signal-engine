@@ -1434,7 +1434,7 @@ class AppRunner:
                 await self._mark_skipped(log_id, f"spec_{reg_row.status}")
                 continue
             if mirror:
-                # the live book's slot limit, counted over live coins; a paper-only coin (gold, TIA) never takes one
+                # the live book's slot limit, counted over live coins; a coin not on the live list never takes one
                 if (sig.symbol.lower() in live_coins and settings.delta_india_max_open
                         and n_live_slots >= settings.delta_india_max_open):
                     await self._mark_skipped(log_id, "book_full_like_live")
@@ -1499,7 +1499,8 @@ class AppRunner:
                     await self._mark_skipped(log_id, "stop_too_wide_for_leverage")
                     continue
                 usdt_inr = self._delta_usd_inr()
-            sized = sb.size(equity, cstate.wallet, risk, price, stop, stop_out_costs(sig.symbol, cfg),
+            # live sizes on the stop distance alone (fees come on top), so paper does too when it copies live
+            sized = sb.size(equity, cstate.wallet, risk, price, stop, 0.0 if mirror else stop_out_costs(sig.symbol, cfg),
                             settings.swing_max_leverage, 0.0 if mirror else settings.swing_max_margin_frac,
                             min_leverage=settings.delta_india_min_leverage)     # same leverage rule as live
             if sized is None:
@@ -1510,8 +1511,25 @@ class AppRunner:
             rules = bfilters.rules_for(sig.symbol) if (settings.swing_binance_rules and not mirror) else None
             lot_step = rules.step if rules is not None else spec.lot_step
             if mirror:
+                import math
+
                 from analysis.instruments import delta_contract_for
                 lot_step = delta_contract_for(sig.symbol) or spec.lot_step     # whole Delta contracts, like live
+                if lot_step > 0:
+                    one_inr = lot_step * price * usdt_inr                       # one contract, in rupees
+                    # live rounds DOWN to whole contracts (the paper position rounds to nearest, which turned 0.65 of a
+                    # contract into 1 and risked 1.5x the intended amount - 18 Oct 2026 review)
+                    n = math.floor(margin * leverage / one_inr + 1e-9)
+                    if (n < 1 and settings.delta_india_round_up_risk_pct > 0
+                            and one_inr * abs(price - stop) / price <= equity * settings.delta_india_round_up_risk_pct):
+                        n = 1                                                   # the live round-up to one contract
+                    if n < 1:
+                        await self._mark_skipped(log_id, "below_one_contract")
+                        continue
+                    margin = n * one_inr / leverage
+                    if margin > cstate.wallet * 0.9:
+                        await self._mark_skipped(log_id, "no_free_margin")
+                        continue
             if rules is not None:
                 qty = bfilters.round_qty(sig.symbol, margin * leverage / (pcfg.usdt_inr * price))   # margin is INR
                 why = bfilters.check_order(sig.symbol, qty, price)
@@ -1636,6 +1654,7 @@ class AppRunner:
                                  daily_loss_pct=float(settings.delta_india_daily_loss_pct),
                                  min_wallet_inr=0.0 if testnet else float(settings.delta_india_min_wallet_inr),
                                  min_leverage=int(settings.delta_india_min_leverage),
+                                 round_up_risk_pct=float(settings.delta_india_round_up_risk_pct),
                                  shadow_path=Path("data/delta_testnet.jsonl") if testnet else SHADOW_PATH,
                                  state_path=Path("data/delta_testnet_state.json") if testnet else STATE_PATH)
                 out = await getattr(book, method)(*args)

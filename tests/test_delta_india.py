@@ -42,5 +42,23 @@ class SizeTests(unittest.TestCase):
         self.assertEqual(contracts, 0)
 
 
+class RoundUpTests(unittest.TestCase):
+    """18 Oct 2026, owner: fit more coins into Rs500 - one contract allowed when it risks at most 5% of the wallet."""
+    gold = Product(1, "XAUTUSD", 0.001, 0.01, 1.0, "XAUT")
+    avax = Product(2, "AVAXUSD", 1.0, 0.0001, 1.0, "AVAX")
+
+    def test_one_contract_when_it_fits_under_the_cap(self):
+        # gold 4157, 5% stop: 3% of Rs500 (Rs15) buys 0.85 of a contract; one contract risks Rs17.7 (3.5%) <= 5%
+        self.assertEqual(size_contracts(self.gold, 4157, 4157 * 1.05, 500, 0.03, 85.0)[0], 0)
+        n, _, risk = size_contracts(self.gold, 4157, 4157 * 1.05, 500, 0.03, 85.0, round_up_risk_pct=0.05)
+        self.assertEqual(n, 1)
+        self.assertAlmostEqual(risk, 4157 * 0.001 * 0.05 * 85, places=6)
+        self.assertLessEqual(risk, 25.0)
+
+    def test_never_above_the_cap(self):
+        # AVAX 9.85, 7% stop: one contract risks Rs58.6 (11.7% of Rs500) - still refused
+        self.assertEqual(size_contracts(self.avax, 9.85, 9.85 * 1.07, 500, 0.03, 85.0, round_up_risk_pct=0.05)[0], 0)
+
+
 if __name__ == "__main__":
     unittest.main()

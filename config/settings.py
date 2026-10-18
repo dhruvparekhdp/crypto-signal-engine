@@ -249,8 +249,8 @@ class Settings(BaseSettings):
     swing_extra_symbols: str = "XAUTUSDT,TIAUSDT"
     # Owner, 18 Oct 2026: "make paper cycle setup as same as delta live from leverage to all the options... remove other
     # blocking setting keep basic daily loss and one direction... no floor". On: paper swing trades use the live Delta
-    # book's risk (delta_india_risk_pct, fixed), max open (delta_india_max_open, counted over live coins; gold/TIA are
-    # paper-only and do not take a live slot), daily loss limit (delta_india_daily_loss_pct), leverage rule, stop checks,
+    # book's risk (delta_india_risk_pct, fixed), max open (delta_india_max_open, counted over live coins; a coin not on
+    # the live list is paper-only and does not take a live slot), daily loss limit (delta_india_daily_loss_pct), leverage rule, stop checks,
     # whole Delta contracts and Delta's USD-INR rate. Off: no losing-streak pause, side-risk cap, strategy-registry
     # pause, adaptive or half risk, margin-slot cap or floor. Signal rules stay: BTC-volatility filter, release-window
     # skip, excluded coins, one trade per coin.
@@ -298,7 +298,11 @@ class Settings(BaseSettings):
     delta_ws_enabled: bool = True
     # Coins allowed on the REAL-MONEY book. Any other coin is paper + demo only until it is added here (owner, 18 Oct
     # 2026: new coins prove themselves in paper and demo before live).
-    delta_live_coins: str = "BTCUSDT,ETHUSDT,SOLUSDT,XRPUSDT,BNBUSDT,ADAUSDT,DOGEUSDT,AVAXUSDT,LINKUSDT,SUIUSDT"
+    # 18 Oct 2026, owner: "try to add more coins" - TIA (+0.51R, positive every year but 29 trades) and gold (XAUT, small
+    # stops) fit a Rs500 wallet; the rest of the Rs500-sized Delta list did not hold up (FIL -0.23R since 2025, BCH,
+    # ZRO, ALT, EIGEN too few or flat)
+    delta_live_coins: str = ("BTCUSDT,ETHUSDT,SOLUSDT,XRPUSDT,BNBUSDT,ADAUSDT,DOGEUSDT,AVAXUSDT,LINKUSDT,SUIUSDT,"
+                             "TIAUSDT,XAUTUSDT")
     # Kill switch: ON = no new Delta orders (open ones are still protected and can be closed by the engine)
     delta_india_kill_switch: bool = False
     # Server-side backstop on Delta: the exchange stop trails the engine's profit lock by this many R, so an engine
@@ -311,6 +315,9 @@ class Settings(BaseSettings):
     # Leverage set on Delta before every live entry: the highest that keeps liquidation >= 2x the stop distance away,
     # never below this (owner, 17 Oct 2026) and never above 10x. Swing stops <= 8% -> 6-10x in practice.
     delta_india_min_leverage: int = 5
+    # 18 Oct 2026, owner: "i know amount 3% risk, but try to fit some more coins". When 3% buys less than one contract,
+    # take ONE contract if that risks at most this share of the wallet (0 = never round up). Same rule on paper.
+    delta_india_round_up_risk_pct: float = 0.05
     # 14 Oct 2026 owner: strong-confidence intraday trades in paper too, with their own limits so they cannot crowd
     # out the swing book: confidence >= intraday_min_confidence, at most intraday_max_open open, margin <= 10%
     paper_open_families: str = "swing"          # production: "swing,intraday" on /settings (owner 14 Oct)

@@ -15,13 +15,14 @@ from analysis.crypto_state import CryptoState
 from config.settings import settings
 from storage.models import Base
 
-PRICES = {"XRPUSDT": 0.6, "DOGEUSDT": 0.2, "SOLUSDT": 150.0, "BTCUSDT": 60000.0, "XAUTUSDT": 4000.0}
+PRICES = {"XRPUSDT": 0.6, "DOGEUSDT": 0.2, "SOLUSDT": 150.0, "BTCUSDT": 60000.0, "XAUTUSDT": 4000.0, "LINKUSDT": 35.0}
 
 
 @pytest.fixture(autouse=True)
 def _live_rules(monkeypatch):
     for k, v in {"paper_mirrors_live": True, "delta_india_risk_pct": 0.03, "delta_india_max_open": 3,
                  "delta_india_daily_loss_pct": 0.10, "delta_india_min_leverage": 5, "delta_india_usd_inr": 85.0,
+                 "delta_india_round_up_risk_pct": 0.05,
                  "delta_live_coins": "BTCUSDT,ETHUSDT,SOLUSDT,XRPUSDT,BNBUSDT,ADAUSDT,DOGEUSDT,AVAXUSDT,LINKUSDT,SUIUSDT",
                  "swing_max_same_side": 0}.items():
         monkeypatch.setattr(settings, k, v)
@@ -199,3 +200,31 @@ async def test_old_paper_trades_never_block_live(tmp_path, monkeypatch):
     assert AppRunner._live_slots_used(legacy, coins) == 1                # live's own book: 1 of 3 used
     monkeypatch.setattr(settings, "delta_india_live_orders", False)
     assert AppRunner._live_slots_used(legacy, coins) == 5                # no real money: paper counts its own
+
+
+@pytest.mark.asyncio
+async def test_paper_rounds_up_to_one_contract_like_live():
+    """LINK 35, 4.5% stop, Rs3,000: 3% buys 0.65 of a contract; one contract risks ~Rs134 (4.5%) <= 5% -> one."""
+    rows, skips, _ = await run([("LINKUSDT", "donchian", +1)])
+    assert [r.symbol for r in rows] == ["linkusdt"] and rows[0].coin_qty == 1.0
+    risk = rows[0].coin_qty * abs(rows[0].entry_price - rows[0].initial_stop_price) * rows[0].usdt_inr
+    assert 90 < risk <= 150
+    rows, skips, _ = await run([("LINKUSDT", "donchian", +1)], delta_india_round_up_risk_pct=0.0)
+    assert rows == [] and skips["linkusdt"] == "below_one_contract"
+
+
+def test_tia_and_gold_are_live_coins_now():
+    from config.settings import Settings
+    coins = Settings.model_fields["delta_live_coins"].default
+    assert "TIAUSDT" in coins and "XAUTUSDT" in coins
+
+
+@pytest.mark.asyncio
+async def test_paper_rounds_down_to_whole_contracts_like_live():
+    """XRP 0.6, 4.5% stop: 3% of Rs3,000 buys 37.7 contracts; live sends 37, so paper holds 37 (not 38)."""
+    rows, _, _ = await run([("XRPUSDT", "donchian", +1)])
+    stop_frac = abs(rows[0].entry_price - rows[0].initial_stop_price) / rows[0].entry_price
+    from analysis.paper_cycle import stop_out_costs
+    raw = 3000 * 0.03 / stop_frac / (rows[0].usdt_inr * rows[0].entry_price)      # live: stop distance only
+    assert rows[0].coin_qty == int(raw) and raw - int(raw) > 0.05                    # rounded DOWN, not to nearest
+    _ = stop_out_costs
