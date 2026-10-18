@@ -125,6 +125,7 @@
   Store.def("signals", "/api/portal/signals?days=14&limit=40", 30000);
   Store.def("meta", "/api/portal/meta", 30000);
   Store.def("budget", "/api/llm/budget", 60000);
+  Store.def("ai_quality", "/api/ai/quality?days=7", 60000);
   Store.def("status", "/api/status", 30000);
   Store.def("paper", "/api/paper", 20000);
   Store.def("delta_demo", "/api/delta/demo", 30000);

@@ -112,6 +112,8 @@ def as_news_items(events: list[dict], model: str) -> list[dict]:
             # dated in the future: a scheduled release or an invented result (15 Oct 2026: PPI "0.6% vs 0.4%"
             # four hours before the release) - never news; the event calendar handles scheduled releases
             log.info("briefing_future_event_dropped", headline=e["headline"][:80], when=e["when"])
+            from collectors import ai_ledger
+            ai_ledger.note("briefing", "rejected_future", model=model, detail=e["headline"][:80])
             continue
         # Normalized headline hash for robust deduplication across model variations
         norm = re.sub(r'[^a-z0-9]', '', e["headline"].lower())

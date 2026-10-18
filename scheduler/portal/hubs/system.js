@@ -1,4 +1,4 @@
-/* System hub: Health · Data · Diagnostics (tools: Settings, Keys, API list). */
+/* System hub: Go-live · Health · AI · Data · Diagnostics (tools: Settings, Keys, API list). */
 (function () {
   "use strict";
   var U = UI.U, C = UI.C, F = UI.F, e = U.esc;
@@ -123,6 +123,62 @@
     }
   });
   UI.view("system/golive", [[{ w: "golive-verdict", size: "grow" }, { w: "budget", size: "side" }], ["golive-gates"], [{ w: "golive-checks", size: "grow" }, { w: "events", size: "side" }], ["golive-journal"]]);
+  // ------------------------------------------------------------- AI quality (owner, 18 Oct 2026: AI plan step 4)
+  var AI_FAIL = { budget_skip: "quota skip", circuit_open: "paused", not_json: "not JSON", error: "error" };
+  function aiMs(v) { return v == null ? "—" : v >= 1000 ? (v / 1000).toFixed(1) + " s" : v + " ms"; }
+  UI.widget("ai-jobs", {
+    title: "AI JOBS · LAST 7 DAYS", uses: ["ai_quality"],
+    render: function (el, D) {
+      var q = D.ai_quality; if (!q) { el.innerHTML = C.state(D, "ai_quality"); return; }
+      var jobs = q.jobs || [];
+      el.innerHTML = '<p class="small dim">Every AI job: how often it was asked, how often a model answered, which model, how fast, the failed tries on the way, and answers thrown away by our checks (e.g. an event dated in the future). AI only informs — it never opens, sizes or closes a trade.</p>' +
+        (jobs.length ? C.table([
+          { label: "JOB", w: "minmax(0,1.1fr)", cell: function (j) { return "<b>" + e(j.name) + '</b><div class="tiny dim">' + e(j.role) + "</div>"; } },
+          { label: "ASKED", w: "72px", cell: function (j) { return e(j.asked) + '<div class="tiny dim">' + e(j.asked_today) + " today</div>"; }, sort: function (j) { return j.asked; } },
+          { label: "ANSWERED", w: "92px", cell: function (j) {
+            var r = j.answer_rate;
+            return '<span class="' + (r == null ? "" : r >= 0.9 ? "up" : r >= 0.6 ? "" : "dn") + '">' + (r == null ? "—" : Math.round(r * 100) + "%") + "</span>" +
+              '<div class="tiny dim">' + e(j.answered) + " ok" + (j.fallbacks ? " · " + e(j.fallbacks) + " by backup" : "") + "</div>"; }, sort: function (j) { return j.answer_rate || 0; } },
+          { label: "ANSWERED BY", w: "minmax(0,1.3fr)", cell: function (j) {
+            return (j.served_by || []).map(function (x) { return '<div class="mono tiny">' + e(x[0]) + " ×" + e(x[1]) + "</div>"; }).join("") || '<span class="dim">—</span>'; } },
+          { label: "SPEED", w: "92px", cell: function (j) { return e(aiMs(j.avg_ms)) + '<div class="tiny dim">90%: ' + e(aiMs(j.p90_ms)) + "</div>"; }, sort: function (j) { return j.avg_ms || 0; } },
+          { label: "FAILED TRIES", w: "minmax(0,1fr)", cell: function (j) {
+            var f = j.failures || {}, ks = Object.keys(f);
+            return ks.length ? ks.map(function (k) { return '<span class="tiny">' + e(AI_FAIL[k] || k) + " " + e(f[k]) + "</span>"; }).join(" · ") : '<span class="dim">none</span>'; } },
+          { label: "THROWN AWAY", w: "96px", cell: function (j) { return j.rejected ? '<span class="dn">' + e(j.rejected) + "</span>" : '<span class="dim">0</span>'; } }
+        ], jobs, { minWidth: 900 }) : C.empty("No AI calls recorded yet — the ledger starts with this release."));
+    }
+  });
+  UI.widget("ai-providers", {
+    title: "BY MODEL · 7 DAYS", uses: ["ai_quality"],
+    render: function (el, D) {
+      var q = D.ai_quality; if (!q) { el.innerHTML = C.state(D, "ai_quality"); return; }
+      var rows = q.providers || [];
+      el.innerHTML = rows.length ? C.table([
+        { label: "MODEL", w: "minmax(0,1fr)", cell: function (r) { return '<span class="mono tiny">' + e(r.model) + "</span>"; } },
+        { label: "OK", w: "52px", cell: function (r) { return '<span class="up">' + e(r.ok || 0) + "</span>"; } },
+        { label: "FAILED", w: "minmax(0,1fr)", cell: function (r) {
+          var parts = Object.keys(AI_FAIL).filter(function (k) { return r[k]; }).map(function (k) { return AI_FAIL[k] + " " + r[k]; });
+          return parts.length ? '<span class="tiny">' + e(parts.join(" · ")) + "</span>" : '<span class="dim">—</span>'; } }
+      ], rows, { minWidth: 340 }) : C.empty("Nothing yet.");
+    }
+  });
+  UI.widget("ai-problems", {
+    title: "LATEST AI PROBLEMS", uses: ["ai_quality"],
+    render: function (el, D) {
+      var q = D.ai_quality; if (!q) { el.innerHTML = C.state(D, "ai_quality"); return; }
+      var rows = q.problems || [];
+      var label = { no_answer: "no model answered", rejected_future: "answer thrown away (dated in the future)" };
+      el.innerHTML = rows.length ? C.table([
+        { label: "WHEN", w: "100px", cell: function (r) { return '<span class="dim">' + e(U.ago(r.ts)) + "</span>"; } },
+        { label: "JOB", w: "130px", cell: function (r) { return e(r.role); } },
+        { label: "WHAT", w: "minmax(0,1fr)", cell: function (r) {
+          return e(label[r.outcome] || AI_FAIL[r.outcome] || r.outcome) + (r.who ? ' <span class="mono tiny dim">' + e(r.who) + "</span>" : "") +
+            (r.detail ? '<div class="tiny dim">' + e(String(r.detail).slice(0, 140)) + "</div>" : ""); } }
+      ], rows, { minWidth: 520 }) : C.flag("ok", "No AI problems in the last 7 days", "Every job that was asked got an answer.", "");
+    }
+  });
+  UI.view("system/ai", [[{ w: "ai-jobs", size: "grow" }, { w: "budget", size: "side" }], [{ w: "ai-problems", size: "grow" }, { w: "ai-providers", size: "side" }]]);
   UI.view("system/health", [[{ w: "engine", size: "grow" }, { w: "budget", size: "side" }], [{ w: "scan", size: "grow" }, { w: "events", size: "side" }]]);
 
   // ------------------------------------------------------------- data (was /data)

@@ -37,6 +37,7 @@
     { id: "system", label: "System", tabs: [
       { id: "golive", label: "Go-live", native: true },
       { id: "health", label: "Health", native: true },
+      { id: "ai", label: "AI", native: true },
       { id: "data", label: "Data", native: true, aliases: ["/data"] },
       { id: "diagnostics", label: "Diagnostics", native: true },
       { id: "settings", label: "Settings", url: "/settings", aliases: ["/settings/classic"] },

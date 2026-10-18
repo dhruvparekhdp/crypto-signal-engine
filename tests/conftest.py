@@ -41,6 +41,16 @@ def _no_llm_call_log(monkeypatch):
 
 
 @_pytest.fixture(autouse=True)
+def _ai_ledger_in_tmp(tmp_path, monkeypatch):
+    """The AI quality ledger writes data/ai_ledger/; tests write to their own folder."""
+    try:
+        from collectors import ai_ledger
+        monkeypatch.setattr(ai_ledger, "ROOT", tmp_path / "ai_ledger")
+    except ImportError:
+        pass
+
+
+@_pytest.fixture(autouse=True)
 def _no_live_perp_prices(monkeypatch):
     """Swing pricing fetches Binance futures prices live; tests must not touch the network (one test opts in)."""
     try:

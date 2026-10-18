@@ -7778,6 +7778,8 @@ async def make_app(runner) -> web.Application:
     _register_golive(app, runner)
     from scheduler.live_api import register as _register_live
     _register_live(app, runner)
+    from scheduler.ai_quality_api import register as _register_ai_quality
+    _register_ai_quality(app, runner)
     from scheduler.api_docs import register as _register_api_docs
     _register_api_docs(app)
     app.router.add_get("/api/settings", _bind(_api_collector_states))

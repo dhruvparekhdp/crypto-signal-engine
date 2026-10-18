@@ -598,6 +598,7 @@ async def ask_json(role: str, system: str, user: str, *, max_tokens: int = 512,
     is indistinguishable downstream from an outage, so it should not end the
     search.
     """
+    from collectors import ai_ledger
     started = time.perf_counter()
     attempts: list[str] = []
     failures: list[str] = []
@@ -607,6 +608,7 @@ async def ask_json(role: str, system: str, user: str, *, max_tokens: int = 512,
         attempts.append(f"{provider_name}/{model}")
         if is_circuit_open(provider_name, model):
             failures.append(f"{provider_name}/{model}: circuit breaker open (paused)")
+            ai_ledger.note(role, "circuit_open", provider_name, model)
             continue
 
         if provider_name == "hf" and model.removesuffix("+search") in ("analyst", "default") \
@@ -621,6 +623,7 @@ async def ask_json(role: str, system: str, user: str, *, max_tokens: int = 512,
         if not ok:
             log.info("llm_budget_skip", role=role, provider=provider_name, model=model, reason=why, ok_in_s=round(wait))
             failures.append(f"{provider_name}/{model}: skipped, {why}; ok again in {wait / 60:.0f} min")
+            ai_ledger.note(role, "budget_skip", provider_name, model, detail=why)
             continue
 
         if len(attempts) > 1:
@@ -643,10 +646,13 @@ async def ask_json(role: str, system: str, user: str, *, max_tokens: int = 512,
                             provider=provider_name, model=model, head=text[:120])
                 failures.append(f"{provider_name}/{model}: reply was not JSON "
                                 f"({text.strip()[:80]!r})")
+                ai_ledger.note(role, "not_json", provider_name, model, detail=text.strip()[:80])
                 continue
 
             elapsed = int((time.perf_counter() - started) * 1000)
             _log_call(role, system, user, text, provider_name, model, elapsed)
+            ai_ledger.note(role, "ok", provider_name, model, elapsed,
+                           detail=f"fallback after {len(attempts) - 1}" if len(attempts) > 1 else "")
             if len(attempts) > 1:
                 log.info("llm_served_by_fallback", role=role,
                          served_by=f"{provider_name}/{model}", after=attempts[:-1])
@@ -664,7 +670,10 @@ async def ask_json(role: str, system: str, user: str, *, max_tokens: int = 512,
             log.warning("llm_provider_failed", role=role, provider=provider_name,
                         model=model, error=str(exc)[:200])
             failures.append(f"{provider_name}/{model}: {str(exc)[:160] or type(exc).__name__}")
+            ai_ledger.note(role, "error", provider_name, model, detail=str(exc)[:160] or type(exc).__name__)
 
     log.warning("llm_no_provider_answered", role=role, attempts=attempts)
+    ai_ledger.note(role, "no_answer", ms=int((time.perf_counter() - started) * 1000),
+                   detail=f"{len(attempts)} tried")
     return Reply(latency_ms=int((time.perf_counter() - started) * 1000),
                  attempts=attempts, failures=failures)

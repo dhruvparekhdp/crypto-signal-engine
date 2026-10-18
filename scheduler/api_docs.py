@@ -93,6 +93,7 @@ ENDPOINTS: tuple[tuple[str, str, str, str, dict], ...] = (
     ("Market", "GET", "/api/crypto/forecasts", "30m / 1h / 4h / 1d forecasts.", {}),
     ("Market", "GET", "/api/predict", "Band and lean per coin, three horizons.", {}),
     ("Market", "GET", "/api/crypto/watchlist", "Coins being followed.", {}),
+    ("System", "GET", "/api/ai/quality", "AI jobs: asked, answered, by whom, speed, failures, rejected answers, quota.", {"days": "7"}),
     ("Market", "GET", "/api/symbols/search", "Search Delta India perpetuals (Binance only if Delta is down).", {"q": "gold"}),
     ("Market", "GET", "/api/binance/symbols", "Old path of the pair search (same answer).", {"q": "sol"}),
     ("Market", "GET", "/api/commodities", "Gold, silver, oil.", {}),
