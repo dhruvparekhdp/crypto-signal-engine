@@ -228,3 +228,15 @@ async def test_paper_rounds_down_to_whole_contracts_like_live():
     raw = 3000 * 0.03 / stop_frac / (rows[0].usdt_inr * rows[0].entry_price)      # live: stop distance only
     assert rows[0].coin_qty == int(raw) and raw - int(raw) > 0.05                    # rounded DOWN, not to nearest
     _ = stop_out_costs
+
+
+def test_the_rules_box_shows_the_rules_paper_actually_uses(monkeypatch):
+    """18 Oct 2026: the box still said 'adaptive risk, no max open' after paper switched to the live rules."""
+    from scheduler.health import _swing_rules
+    r = _swing_rules()
+    assert r["mirrors_live"] and r["risk_per_trade"] == 0.03 and r["adaptive_risk"] is False
+    assert (r["max_open"], r["min_leverage"], r["daily_loss_limit"], r["round_up_risk_pct"]) == (3, 5, 0.10, 0.05)
+    assert "XRPUSDT" in r["live_coins"]
+    monkeypatch.setattr(settings, "paper_mirrors_live", False)
+    r = _swing_rules()
+    assert r["mirrors_live"] is False and r["risk_per_trade"] == settings.swing_risk_pct and "daily_loss_limit" not in r

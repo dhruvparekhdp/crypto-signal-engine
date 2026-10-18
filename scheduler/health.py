@@ -1229,13 +1229,7 @@ async def _api_swing(runner, request: web.Request) -> web.Response:
         b["sum_r"] += r
     return _json_response({
         "enabled": _SETTINGS.swing_enabled,
-        "rules": {"strategies": _SETTINGS.swing_strategies, "timeframes": "4h and 8h", "stop": "3 x ATR(14) of the signal bars",
-                  "target": "3R", "time_limit_minutes": _SETTINGS.swing_hold_minutes,
-                  "risk_per_trade": _SETTINGS.swing_risk_pct, "adaptive_risk": _SETTINGS.swing_adaptive_risk,
-                  "max_open": _SETTINGS.swing_max_open, "max_leverage": _SETTINGS.swing_max_leverage,
-                  "max_same_direction": _SETTINGS.swing_max_same_side, "excluded_coins": _SETTINGS.swing_exclude_symbols,
-                  "signal_order": "strongest strategy and coin first (5-year backtest R per trade)",
-                  "families_that_open_trades": _SETTINGS.paper_open_families},
+        "rules": _swing_rules(),
         "expected_from_backtest": {"r_per_trade": "+0.14 to +0.28 net", "win_rate": "42-45%",
                                    "losing_streaks": "8-12 trades happen", "trades_per_day_all_coins": 2.2,
                                    "judge_after_trades": 30},
@@ -1570,6 +1564,28 @@ async def _api_crypto_forecasts(runner, request: web.Request) -> web.Response:
                 for h, f in fc.items()
             }
     return web.Response(text=json.dumps(forecasts), content_type="application/json")
+
+
+def _swing_rules() -> dict:
+    """The rules paper swing trades actually follow. With paper_mirrors_live on (the default since 18 Oct 2026) those
+    are the live Delta book's, not the paper-only settings the box used to show (adaptive risk, no max open)."""
+    s = _SETTINGS
+    base = {"strategies": s.swing_strategies, "timeframes": "4h and 8h", "stop": "3 x ATR(14) of the signal bars",
+            "target": "3R", "time_limit_minutes": s.swing_hold_minutes, "excluded_coins": s.swing_exclude_symbols,
+            "signal_order": "strongest strategy and coin first (5-year backtest R per trade)",
+            "families_that_open_trades": s.paper_open_families, "max_same_direction": s.swing_max_same_side}
+    if getattr(s, "paper_mirrors_live", False):
+        live = [c.strip().upper() for c in (s.delta_live_coins or "").split(",") if c.strip()]
+        extra = [c.strip().upper() for c in (s.swing_extra_symbols or "").split(",") if c.strip()]
+        return {**base, "mirrors_live": True, "risk_per_trade": s.delta_india_risk_pct, "adaptive_risk": False,
+                "max_open": s.delta_india_max_open, "max_open_counts": "live coins",
+                "min_leverage": s.delta_india_min_leverage, "max_leverage": 10,
+                "leverage_rule": "highest leverage with liquidation at least 2x the stop distance away",
+                "daily_loss_limit": s.delta_india_daily_loss_pct, "round_up_risk_pct": s.delta_india_round_up_risk_pct,
+                "lots": "whole Delta contracts, rounded down", "live_coins": ",".join(live),
+                "paper_only_coins": ",".join(c for c in extra if c not in live)}
+    return {**base, "mirrors_live": False, "risk_per_trade": s.swing_risk_pct, "adaptive_risk": s.swing_adaptive_risk,
+            "max_open": s.swing_max_open, "max_leverage": s.swing_max_leverage}
 
 
 async def _delta_lists(symbol: str) -> bool | None:

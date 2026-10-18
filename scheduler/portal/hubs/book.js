@@ -91,12 +91,22 @@
     title: "RULES IN FORCE", uses: ["swing"],
     render: function (el, D) {
       var r = D.swing && D.swing.rules; if (!r) { el.innerHTML = C.state(D, "swing"); return; }
-      el.innerHTML = C.tiles([
+      var tiles = [
         ["TIMEFRAMES", r.timeframes || "—"], ["STOP", r.stop || "—"], ["TARGET", r.target || "—"],
         ["TIME LIMIT", r.time_limit_minutes ? Math.round(r.time_limit_minutes / 1440) + " days" : "—"],
-        ["RISK / TRADE", F.riskPct(D) + "%"], ["MAX LEVERAGE", (r.max_leverage || "—") + "x"],
-        ["MAX OPEN", r.max_open ? r.max_open : "no limit"], ["EXCLUDED", String(r.excluded_coins || "—").toUpperCase()]
-      ]);
+        ["RISK / TRADE", F.riskPct(D) + "%" + (r.mirrors_live ? " fixed" : r.adaptive_risk ? " (adaptive)" : "")]
+      ];
+      if (r.mirrors_live) {
+        tiles.push(["LEVERAGE", (r.min_leverage || 5) + "–" + (r.max_leverage || 10) + "x", "liquidation ≥ 2× the stop away"],
+          ["MAX OPEN", (r.max_open || "no limit") + " (live coins)"],
+          ["DAILY LOSS LIMIT", r.daily_loss_limit ? Math.round(r.daily_loss_limit * 100) + "%" : "off"],
+          ["ROUND UP TO 1 CONTRACT", r.round_up_risk_pct ? "if risk ≤ " + Math.round(r.round_up_risk_pct * 100) + "%" : "off"],
+          ["PAPER-ONLY COINS", r.paper_only_coins ? String(r.paper_only_coins) : "none"]);
+      } else {
+        tiles.push(["MAX LEVERAGE", (r.max_leverage || "—") + "x"], ["MAX OPEN", r.max_open ? r.max_open : "no limit"]);
+      }
+      tiles.push(["EXCLUDED", String(r.excluded_coins || "—").toUpperCase()]);
+      el.innerHTML = (r.mirrors_live ? '<p class="small dim">Paper uses the same rules as the live ₹ book (Settings → Paper uses the live rules).</p>' : "") + C.tiles(tiles);
     }
   });
   UI.view("book/swing", [["swing-positions"], [{ w: "swing-closed", size: "grow" }, { stack: ["swing-takeskip", "swing-rules"], size: "side" }]]);
