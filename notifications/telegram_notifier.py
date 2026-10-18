@@ -1,6 +1,9 @@
 import structlog
 from telegram import Bot
-from telegram.error import Forbidden, InvalidToken, TelegramError
+import asyncio
+import time
+
+from telegram.error import BadRequest, Forbidden, InvalidToken, NetworkError, RetryAfter, TelegramError, TimedOut
 
 from config.settings import settings
 
@@ -38,14 +41,29 @@ class TelegramNotifier:
         """Send a message. Pass parse_mode=ParseMode.HTML for messages built with <b>/<i> tags —
         without it Telegram shows the tags literally instead of rendering them."""
         if self._bot is None or not settings.telegram_chat_id:
+            now = time.time()
+            if now - getattr(self, "_dropped_logged", 0.0) > 3600:      # say so (hourly), never silently
+                self._dropped_logged = now
+                log.warning("telegram_message_dropped_not_configured", has_token=self._bot is not None,
+                            has_chat_id=bool(settings.telegram_chat_id))
             return False
         try:
-            await self._bot.send_message(
-                chat_id=settings.telegram_chat_id,
-                text=text,
-                parse_mode=parse_mode,
-            )
-            return True
+            # a timeout or network blip retries twice (18 Oct 2026: two alerts lost to 'Timed out' at 01:16 UTC); a
+            # live-order alert sent twice beats one never sent
+            for attempt in range(3):
+                try:
+                    await self._bot.send_message(chat_id=settings.telegram_chat_id, text=text, parse_mode=parse_mode)
+                    return True
+                except RetryAfter as e:
+                    if attempt == 2:
+                        raise
+                    await asyncio.sleep(min(30.0, float(getattr(e, "retry_after", 5) or 5)))
+                except BadRequest:
+                    raise                                   # a malformed message will not get better on a retry
+                except (TimedOut, NetworkError):
+                    if attempt == 2:
+                        raise
+                    await asyncio.sleep(2.0 if attempt == 0 else 5.0)
         except InvalidToken as e:
             log.error("telegram_invalid_token",
                       hint="Bot token is wrong — regenerate via @BotFather",

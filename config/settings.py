@@ -255,6 +255,7 @@ class Settings(BaseSettings):
     # pause, adaptive or half risk, margin-slot cap or floor. Signal rules stay: BTC-volatility filter, release-window
     # skip, excluded coins, one trade per coin.
     paper_mirrors_live: bool = True
+    shadow_signal_alerts: bool = False          # Telegram signals of families that do not trade (intraday): off
     # AI plan step 5 (18 Oct 2026): a headline within this meaning-similarity of one from the last 12 h is stored as
     # its duplicate and skipped by every reader of the news (AI triggers, prompts, sentiment). Exact text if the HF
     # Space cannot embed. Threshold from 7 days of real headlines (bge-small, cosine).

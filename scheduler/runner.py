@@ -238,6 +238,15 @@ def _tf_minutes(tf: str) -> float:
         pass
     return 0.0
 
+def _signal_alert_due(sig) -> bool:
+    """Telegram a signal only when it can become a trade. Shadow families (intraday since the owner switched it off,
+    14-15 Oct 2026) stay logged and on the portal, but alerting them read as 'many signals, none traded' (18 Oct: 167
+    intraday alerts vs 5 swing signals since live started). shadow_signal_alerts=True brings them back."""
+    if not settings.crypto_alert_telegram:
+        return False
+    return _family_may_trade(sig) or bool(getattr(settings, "shadow_signal_alerts", False))
+
+
 def _family_may_trade(sig) -> bool:
     """Only the families named in settings.paper_open_families open paper trades; the rest are shadow
     signals, logged for comparison. 'swing' covers swing_* signals, 'intraday' everything else."""
@@ -1942,7 +1951,7 @@ class AppRunner:
 
         if verdict_p != "REJECT":
             msg = format_crypto_signal(sig)
-            if settings.crypto_alert_telegram:
+            if _signal_alert_due(sig):
                 await self.notifier.send_text(msg, parse_mode=ParseMode.HTML)
 
         pair = TrackedPair()
@@ -2579,7 +2588,7 @@ class AppRunner:
                             continue
 
                     msg = format_crypto_signal(sig)
-                    if settings.crypto_alert_telegram:
+                    if _signal_alert_due(sig):
                         await self.notifier.send_text(msg, parse_mode=ParseMode.HTML)
 
                     # Set before queuing: _paper_trading_job writes its
