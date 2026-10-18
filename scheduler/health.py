@@ -1221,6 +1221,7 @@ async def _api_swing(runner, request: web.Request) -> web.Response:
             marks = {}
 
     rs = [r_of(t) for t in trades]
+    notes = await _swing_notes(getattr(cycle, "id", None))
     by_strategy = {}
     for t, r in zip(trades, rs):
         b = by_strategy.setdefault(t.signal_type.replace("swing_", ""), {"n": 0, "wins": 0, "sum_r": 0.0})
@@ -1239,14 +1240,16 @@ async def _api_swing(runner, request: web.Request) -> web.Response:
                   "target": r.target_price, "leverage": r.leverage, "margin": r.margin,
                   "opened_at": r.opened_at.isoformat() if r.opened_at else None,
                   "expires_at": r.expires_at.isoformat() if r.expires_at else None,
-                  "lock": _lock_status(r, marks.get(r.symbol.upper()) or 0.0)} for r in rows],
+                  "lock": _lock_status(r, marks.get(r.symbol.upper()) or 0.0),
+                  "note": notes.get(_note_key(r.symbol, r.opened_at), {}).get("open")} for r in rows],
         "closed": {"n": len(trades), "wins": sum(1 for r in rs if r > 0),
                    "win_rate": (sum(1 for r in rs if r > 0) / len(rs)) if rs else None,
                    "avg_r": (sum(rs) / len(rs)) if rs else None, "total_r": sum(rs),
                    "net_pnl": sum(t.net_pnl for t in trades), "by_strategy": by_strategy,
                    "last": [{"symbol": t.symbol, "strategy": t.signal_type, "side": t.side, "r": round(r, 2),
                              "exit_reason": t.exit_reason, "net_pnl": round(t.net_pnl, 2),
-                             "closed_at": t.closed_at.isoformat() if t.closed_at else None}
+                             "closed_at": t.closed_at.isoformat() if t.closed_at else None,
+                             "note": notes.get(_note_key(t.symbol, getattr(t, "opened_at", None)), {}).get("close")}
                             for t, r in list(zip(trades, rs))[-15:]]},
         "wallet": cycle.wallet if cycle is not None else None,
         "regime_filter": await _swing_regime_section(runner, trades, rs),
@@ -1265,6 +1268,35 @@ def _lock_status(r, mark: float) -> dict:
                          getattr(r, "peak_price", 0.0) or 0.0, mark, r.coin_qty, r.usdt_inr,
                          _SETTINGS.swing_lock_ladder, _SETTINGS.swing_lock_buffer_r,
                          _SETTINGS.swing_lock_confirm_min, _SETTINGS.swing_lock_mode)
+
+
+def _note_key(symbol: str, opened_at) -> tuple:
+    if opened_at is None:
+        return (symbol.lower(), None)
+    return (symbol.lower(), (opened_at.replace(tzinfo=None) if opened_at.tzinfo else opened_at).isoformat(timespec="seconds"))
+
+
+async def _swing_notes(cycle_id) -> dict:
+    """AI trade notes (plan step 7) of this cycle: {(symbol, opened_at): {"open": text, "close": text}}."""
+    if cycle_id is None:
+        return {}
+    try:
+        from sqlalchemy import select
+
+        from storage.database import AsyncSessionFactory
+        from storage.models import TradeEvent
+        async with AsyncSessionFactory() as session:
+            rows = (await session.execute(select(TradeEvent.symbol, TradeEvent.opened_at, TradeEvent.field,
+                                                 TradeEvent.note).where(TradeEvent.cycle_id == cycle_id,
+                                                                        TradeEvent.kind == "note"))).all()
+    except Exception:  # noqa: BLE001 - notes are extra; the book shows without them
+        return {}
+    import re as _re
+    out: dict = {}
+    for sym, opened, field, note in rows:
+        m = _re.match(r"^(.*) \(([^()]+/[^()]+)\)$", note or "", _re.S)      # "text (provider/model)"
+        out.setdefault(_note_key(sym, opened), {})[field or "open"] = m.group(1) if m else note
+    return out
 
 
 async def _swing_shortfall_section(cycle_id) -> dict:

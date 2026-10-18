@@ -18,6 +18,7 @@ JOB_NAMES = {
     "attribution": "Why it moved",
     "news_scoring": "News scoring", "pre_trade": "Pre-trade review", "post_trade": "Post-trade review",
     "position_review": "Open-position review", "research": "Research report", "event_precedent": "Event precedents",
+    "trade_note": "Trade notes",
 }
 
 

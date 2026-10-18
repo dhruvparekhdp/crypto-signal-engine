@@ -17,6 +17,7 @@
           '<div class="pos-r' + (o.R < 0 ? " dn" : "") + '">' + U.rr(o.R) + "</div>" + C.rbar(o.R) +
           '<div class="pos-scale"><span>STOP ' + e(U.px(p.stop)) + "</span><span>0</span><span>TARGET " + e(U.px(p.target)) + "</span></div>" +
           lockBlock(p, o) +
+          (p.note ? '<div class="small dim" style="margin:6px 0">🗒 ' + e(p.note) + "</div>" : "") +
           '<div class="pos-foot"><span>in ' + e(U.px(p.entry)) + "</span><span>now " + e(U.px(o.mark)) + "</span><b>" +
           (left == null ? "—" : left >= 1 ? left.toFixed(1) + "d left" : left > 0 ? (left * 24).toFixed(1) + "h left" : "expiring") +
           "</b></div></div>";
@@ -66,12 +67,20 @@
       el.innerHTML = C.table([
         { label: "COIN", w: "80px", cell: function (t) { return "<b>" + e(U.base(t.symbol)) + "</b>"; }, sort: function (t) { return t.symbol; } },
         { label: "SIDE", w: "80px", cell: function (t) { return C.side(t.side); } },
-        { label: "STRATEGY", w: "minmax(0,1.4fr)", cell: function (t) { return e(U.name(t.strategy)); } },
+        { label: "STRATEGY", w: "minmax(0,1.4fr)", cell: function (t) { return e(U.name(t.strategy)) + (t.note ? ' <span class="tiny dim">🗒</span>' : ""); } },
         { label: "R", w: "90px", cell: function (t) { return C.signed(t.r, U.rr); }, sort: function (t) { return t.r; } },
         { label: "NET", w: "100px", cell: function (t) { return C.signed(t.net_pnl, function (x) { return U.inr(x, true); }); }, sort: function (t) { return t.net_pnl; } },
         { label: "EXIT", w: "minmax(0,1fr)", cell: function (t) { return e(t.exit_reason || ""); } },
         { label: "CLOSED", w: "100px", cell: function (t) { return '<span class="dim">' + e(U.ago(t.closed_at)) + "</span>"; }, sort: function (t) { return t.closed_at || ""; } }
-      ], (cl.last || []).slice().reverse(), { state: ctx.s.t, empty: "No closed swing trades yet." });
+      ], (cl.last || []).slice().reverse(), { state: ctx.s.t, empty: "No closed swing trades yet." }) +
+        (function () {                                          // AI trade notes (plan step 7), full width
+          var withNotes = (cl.last || []).filter(function (t) { return t.note; }).slice(-5).reverse();
+          return withNotes.length ? '<div class="small" style="margin-top:10px"><b class="tiny dim">TRADE NOTES</b>' +
+            withNotes.map(function (t) {
+              return '<div style="margin-top:6px"><b>' + e(U.base(t.symbol)) + '</b> <span class="dim tiny">' + e(U.ago(t.closed_at)) +
+                "</span> — " + e(t.note) + "</div>";
+            }).join("") + "</div>" : "";
+        })();
     }
   });
   UI.widget("swing-takeskip", {

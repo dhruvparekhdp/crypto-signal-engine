@@ -19,6 +19,7 @@ Candles are never persisted — they live in memory, capped per symbol, and are
 refetched on boot. Only fired signals, snapshots and paper trades reach the DB.
 """
 import asyncio
+import html
 import json
 import math
 import time
@@ -808,7 +809,10 @@ class AppRunner:
                     # Post-mortem runs detached: the trade is already closed and
                     # recorded, so a slow or failing reviewer must not hold up
                     # the rest of the tick or the positions still to resolve.
-                    if (settings.groq_postmortem_enabled
+                    swing_note = settings.trade_notes_enabled and getattr(pos, "trade_mode", "") == "swing"
+                    if swing_note:                    # AI plan step 7 replaces the Groq post-mortem for swing trades
+                        asyncio.create_task(self._close_trade_note(pos, row, trade, cycle.id, pcfg.alert_telegram))
+                    elif (settings.groq_postmortem_enabled
                             and self.groq_sentinel.postmortem_available):
                         asyncio.create_task(self._review_closed_trade(trade, row))
                     log.info("paper_trade_closed", symbol=pos.symbol,
@@ -1599,11 +1603,17 @@ class AppRunner:
                        if getattr(sig, "rating", None) else ""),
                     parse_mode=ParseMode.HTML)
             # Delta India mirror (shadow by default — no real order unless both live gates are on)
+            live_ok = False
             try:
-                await self._mirror_delta_india(pos.symbol, pos.side.value, price, stop, target,
-                                              sig.signal_type, usdt_inr=pcfg.usdt_inr)
+                live_ok = await self._mirror_delta_india(pos.symbol, pos.side.value, price, stop, target,
+                                                         sig.signal_type, usdt_inr=pcfg.usdt_inr)
             except Exception as e:  # noqa: BLE001
                 log.warning("delta_india_mirror_failed", symbol=pos.symbol, error=str(e)[:160])
+            if settings.trade_notes_enabled:           # AI plan step 7: written after the order, in its own task
+                from analysis.trade_notes import open_facts
+                facts = open_facts(pos, sig.signal_type, sig.timeframe, risk, verdict, getattr(sig, "rating", None),
+                                   live=live_ok)
+                asyncio.create_task(self._post_trade_note(pos, cycle.id, facts, pcfg.alert_telegram))
             n_live_slots = self._live_slots_used(cstate.positions, live_coins)     # after live took it (or not)
 
     @staticmethod
@@ -1700,8 +1710,10 @@ class AppRunner:
         self._delta_read_fails = seen
 
     async def _mirror_delta_india(self, symbol: str, side_word: str, entry: float, stop: float,
-                                  target: float, signal_type: str, usdt_inr: float = 83.0) -> None:
-        """Copy a paper swing open to every active Delta book (live first, then the demo)."""
+                                  target: float, signal_type: str, usdt_inr: float = 83.0) -> bool:
+        """Copy a paper swing open to every active Delta book (live first, then the demo). True when the live book
+        took it."""
+        live_ok = False
         for book in self._delta_targets():
             plan = await self._delta_call_one(book, "on_paper_open", symbol, side_word, entry, stop, target,
                                               signal_type, usdt_inr=usdt_inr)
@@ -1711,12 +1723,14 @@ class AppRunner:
                      delta=plan.delta_symbol, size=plan.size, risk_inr=round(plan.risk_inr, 2),
                      leverage=getattr(plan, "leverage", 0), live_orders=bool(settings.delta_india_live_orders))
             if book == "live":
+                live_ok = bool(plan.ok)
                 try:                                     # an alert failure must never touch the order
                     text = live_order_alert(plan, settings.delta_india_risk_pct)
                     if text:
                         await self.notifier.send_text(text, parse_mode=ParseMode.HTML)
                 except Exception as e:  # noqa: BLE001
                     log.warning("live_order_alert_failed", error=str(e)[:120])
+        return live_ok
 
     async def _log_signal(self, sig, suppressed_by: str = "", **extra) -> int:
         """
@@ -2204,6 +2218,46 @@ class AppRunner:
                  summary=review.summary)
         return close_position(pos, state.current_price, ExitReason.CONVICTION_LOST,
                               now, fees_for(pos.symbol), wallet)
+
+    async def _post_trade_note(self, pos, cycle_id: int, facts: dict, telegram: bool) -> str:
+        """Write one trade note (AI plan step 7) onto the trade card and to Telegram. Never raises; no note on failure."""
+        from analysis.trade_notes import write_note
+        try:
+            note, served_by = await write_note(facts)
+            if not note:
+                log.info("trade_note_unavailable", symbol=pos.symbol, kind=facts.get("kind"))
+                return ""
+            async with AsyncSessionFactory() as session:
+                await Repository(session).add_trade_events([_event(
+                    pos, cycle_id, datetime.now(UTC), "note", field=facts.get("kind", ""), note=f"{note} ({served_by})")])
+            if telegram:
+                head = "🗒 <b>Trade note</b>" + (" · closed" if facts.get("kind") == "close" else "")
+                await self.notifier.send_text(f"{head} · {pos.symbol.upper()}\n{html.escape(note)}",
+                                              parse_mode=ParseMode.HTML)
+            return note
+        except Exception as e:  # noqa: BLE001
+            log.warning("trade_note_failed", symbol=getattr(pos, "symbol", "?"), error=str(e)[:120])
+            return ""
+
+    async def _close_trade_note(self, pos, row, trade, cycle_id: int, telegram: bool) -> str:
+        """The closing note: how it ended, and the news that came while the trade was open."""
+        import math
+
+        from analysis.trade_notes import close_facts
+        now = datetime.now(UTC)
+        heads = []
+        try:
+            opened = row.opened_at.replace(tzinfo=None) if row.opened_at.tzinfo else row.opened_at
+            hours = math.ceil((now.replace(tzinfo=None) - opened).total_seconds() / 3600) + 1
+            async with AsyncSessionFactory() as session:
+                rows = await Repository(session).news_sentiment_since(min(hours, 24 * 8), limit=500)
+            coin = row.symbol.lower()
+            heads = [(r.published_at, (r.source or "").split(":")[0], r.headline) for r in rows
+                     if r.published_at >= opened and r.event_type != "noise" and r.symbol in (coin, "all")
+                     and not (r.source or "").startswith("web_briefing")]
+        except Exception as e:  # noqa: BLE001 - a note without news is still a note
+            log.info("trade_note_news_unavailable", symbol=row.symbol, error=str(e)[:100])
+        return await self._post_trade_note(pos, cycle_id, close_facts(row, trade, heads, now), telegram)
 
     async def _review_closed_trade(self, trade, row) -> None:
         """

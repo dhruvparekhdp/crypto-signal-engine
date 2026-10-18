@@ -150,6 +150,10 @@ class Settings(BaseSettings):
     # After a briefing that found nothing, wait this long before the next one unless an event is near.
     market_briefing_quiet_minutes: int = 120
     # Hourly: why each watchlist coin moved, and how our signals fared.
+    # AI plan step 7 (18 Oct 2026): a short note when a swing trade opens and closes, from facts only
+    trade_notes_enabled: bool = True
+    llm_chain_trade_note: str = ("gemini:gemini-3.5-flash-lite, gemini:gemini-3.1-flash-lite, groq:openai/gpt-oss-20b, "
+                                 "openrouter:nvidia/nemotron-3-ultra-550b-a55b:free")
     llm_chain_attribution: str = (
         "gemini:gemini-3.5-flash-lite+search, gemini:gemini-3.1-flash-lite+search, "
         "groq:openai/gpt-oss-20b+search, openrouter:nvidia/nemotron-3-ultra-550b-a55b:free+search")

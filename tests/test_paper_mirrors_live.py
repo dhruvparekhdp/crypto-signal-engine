@@ -28,7 +28,7 @@ def _live_rules(monkeypatch):
         monkeypatch.setattr(settings, k, v)
 
 
-async def run(signals, seed=None, **patches):
+async def run(signals, seed=None, mirror=None, **patches):
     engine = create_async_engine("sqlite+aiosqlite:///:memory:")
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
@@ -38,7 +38,7 @@ async def run(signals, seed=None, **patches):
     from scheduler.runner import AppRunner
     runner = AppRunner()
     runner.notifier = AsyncMock()
-    runner._mirror_delta_india = AsyncMock()                  # no Delta calls from a test
+    runner._mirror_delta_india = mirror or AsyncMock(return_value=False)     # no Delta calls from a test
     with patch("scheduler.runner.settings.paper_trading_enabled", True), \
          patch("scheduler.runner.settings.session_filter_enabled", False), \
          patch("scheduler.runner.AsyncSessionFactory", sm):
