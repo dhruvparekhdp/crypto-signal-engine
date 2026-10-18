@@ -53,6 +53,7 @@ class ExitReason(str, Enum):
     CONVICTION_LOST = "conviction_lost"  # confidence decayed below the floor
     MARKET_SHOCK = "market_shock"        # violent move against an open position
     STAGNANT_TIMEOUT = "stagnant_timeout"  # flat/negative after 60 minutes
+    MANUAL = "manual"                    # closed on the owner's request (data/paper_close_requests.json)
 
 
 @dataclass(frozen=True)

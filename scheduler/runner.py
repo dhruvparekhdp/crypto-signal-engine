@@ -656,13 +656,17 @@ class AppRunner:
                             )
                         )
                     )
-                    if is_pos_expired:
+                    # the owner asked for this trade to be closed (needs a real price: never closed at a guess)
+                    manual = (not is_pos_expired and bool(current_price) and current_price > 0
+                              and self._manual_close_request(row) is not None)
+                    if is_pos_expired or manual:
                         mark_price = current_price if (current_price and current_price > 0) else row.entry_price
-                        trade = resolve_at_price(pos, mark_price, now, cfg, wallet,
-                                                 lock=self._profit_lock())
+                        from analysis.paper_cycle import fees_for
+                        from analysis.paper_trading import ExitReason, close_position
+                        trade = (close_position(pos, mark_price, ExitReason.MANUAL, now, fees_for(pos.symbol), wallet)
+                                 if manual else resolve_at_price(pos, mark_price, now, cfg, wallet,
+                                                                 lock=self._profit_lock()))
                         if trade is None:
-                            from analysis.paper_cycle import fees_for
-                            from analysis.paper_trading import ExitReason, close_position
                             trade = close_position(pos, mark_price, ExitReason.EXPIRY, now, fees_for(pos.symbol), wallet)
                         wallet = trade.wallet_after
                         await repo.close_position_atomic(cycle.id, row.id, trade, wallet)
@@ -674,9 +678,13 @@ class AppRunner:
                                   f"({trade.return_on_margin * 100:+.1f}% on margin) · "
                                   f"fees ₹{trade.fees_paid:.2f}"))]
                         await repo.add_trade_events(events)
-                        log.info("paper_trade_expired_closed", symbol=pos.symbol,
-                                 reason=trade.reason.value, net=round(trade.net_pnl, 2),
+                        if manual:
+                            self._manual_close_done(row, trade)
+                        log.info("paper_trade_manual_closed" if manual else "paper_trade_expired_closed",
+                                 symbol=pos.symbol, reason=trade.reason.value, net=round(trade.net_pnl, 2),
                                  wallet=round(wallet, 2))
+                        if settings.trade_notes_enabled and getattr(pos, "trade_mode", "") == "swing":
+                            asyncio.create_task(self._close_trade_note(pos, row, trade, cycle.id, pcfg.alert_telegram))
                         if pcfg.alert_telegram:
                             await self.notifier.send_text(
                                 format_paper_trade(trade, wallet), parse_mode=ParseMode.HTML)
@@ -1219,6 +1227,36 @@ class AppRunner:
             except (OSError, ValueError):
                 pass
         return sum(1 for p in positions if getattr(p, "trade_mode", "") == "swing" and p.symbol.lower() in live_coins)
+
+    _CLOSE_REQUESTS = "data/paper_close_requests.json"
+
+    def _manual_close_request(self, row) -> dict | None:
+        """The owner's request to close this open paper trade, if any: data/paper_close_requests.json holds
+        [{"symbol": "xrpusdt", "opened_at": "2026-10-15T04:03", "why": "..."}]; opened_at (a prefix) picks one trade
+        when the coin has more than one. A missing or unreadable file means no requests."""
+        try:
+            reqs = json.loads(Path(self._CLOSE_REQUESTS).read_text())
+        except (OSError, ValueError):
+            return None
+        opened = (row.opened_at.replace(tzinfo=None) if row.opened_at.tzinfo else row.opened_at).isoformat()
+        for r in reqs if isinstance(reqs, list) else []:
+            if (isinstance(r, dict) and str(r.get("symbol", "")).lower() == row.symbol.lower()
+                    and opened.startswith(str(r.get("opened_at") or ""))):
+                return r
+        return None
+
+    def _manual_close_done(self, row, trade) -> None:
+        """Take the request off the list and keep a record of it (data/paper_close_requests_done.jsonl)."""
+        req = self._manual_close_request(row)
+        try:
+            reqs = json.loads(Path(self._CLOSE_REQUESTS).read_text())
+            reqs = [r for r in reqs if r != req]
+            Path(self._CLOSE_REQUESTS).write_text(json.dumps(reqs, indent=1))
+            with open("data/paper_close_requests_done.jsonl", "a") as f:
+                f.write(json.dumps({**(req or {}), "closed_at": datetime.now(UTC).isoformat(timespec="seconds"),
+                                    "exit_price": trade.exit_price, "net_pnl": round(trade.net_pnl, 2)}) + "\n")
+        except (OSError, ValueError, TypeError) as e:
+            log.warning("paper_close_request_not_cleared", symbol=row.symbol, error=str(e)[:120])
 
     def _delta_usd_inr(self) -> float:
         """Delta India's own INR-per-USD rate, as last read from a Delta wallet (live or demo); the saved fallback
