@@ -2687,6 +2687,8 @@ class AppRunner:
 
             if not new_headlines:
                 return
+            if settings.headline_dedupe_enabled:                # AI plan step 5: same story from many feeds
+                await self._mark_headline_duplicates(new_headlines)
 
             SYSTEM_PROMPT = (
                 "Score a news headline for a crypto trading desk. One headline, one JSON "
@@ -2720,11 +2722,15 @@ class AppRunner:
                         scored_items.append(headline.as_payload())
                     new_headlines = []
                     log.info("headlines_scored_by_space", n=len(scored_items))
-                    await self._llm_check_headlines(scored_items)
+                    await self._llm_check_headlines([x for x in scored_items if not x.get("duplicate_of")])
                 except Exception as exc:
                     log.warning("hf_space_classify_failed", error=str(exc)[:160], fallback="llm")
                     scored_items = []
             for headline in new_headlines:
+                if headline.duplicate_of:                       # a repeat: stored for the count, never an LLM call
+                    headline.model = "duplicate"
+                    scored_items.append(headline.as_payload())
+                    continue
                 try:
                     reply = await ask_json("news_scoring", SYSTEM_PROMPT,
                                            f"{headline.source}: {headline.headline}",
@@ -2751,6 +2757,53 @@ class AppRunner:
 
         except Exception:
             log.exception("hermes_rss_job_failed")
+
+    async def _embed(self, texts: list[str]) -> list | None:
+        """Our HF Space's sentence vectors, 64 at a time; None when the Space is not set up or did not answer for all."""
+        from collectors import hf_space
+        if not texts or not hf_space.configured():
+            return None
+        out: list = []
+        for i in range(0, len(texts), 64):
+            out += await hf_space.embed(texts[i:i + 64])
+        return out if len(out) == len(texts) else None
+
+    async def _mark_headline_duplicates(self, headlines) -> int:
+        """Set duplicate_of on repeats of a story from the last window (AI plan step 5). Meaning comes from the HF Space's
+        embeddings; when it cannot embed, exact text. After a restart the window's originals are embedded once from
+        the database. Never raises: dedupe failing must never stop a headline."""
+        import math
+
+        from analysis.headline_dedupe import RecentHeadlines, mark_duplicates, unit
+        now = datetime.now(UTC).replace(tzinfo=None)
+        recent = getattr(self, "_recent_heads", None)
+        if recent is None or recent.threshold != settings.headline_dedupe_threshold:
+            recent = self._recent_heads = RecentHeadlines(settings.headline_dedupe_threshold,
+                                                          settings.headline_dedupe_window_hours)
+        vectors = None
+        try:
+            if not recent.warmed:
+                recent.warmed = True
+                async with AsyncSessionFactory() as session:
+                    rows = await Repository(session).news_sentiment_since(int(math.ceil(recent.window_hours)), limit=400)
+                rows = [r for r in rows if r.headline and not (r.source or "").startswith("web_briefing")][::-1]
+                try:
+                    past = await self._embed([r.headline for r in rows])
+                except Exception as e:  # noqa: BLE001 - exact-text matching still works for these
+                    log.warning("headline_dedupe_warmup_embed_failed", error=str(e)[:120])
+                    past = None
+                for r, v in zip(rows, past or [None] * len(rows)):
+                    recent.add(r.external_id, r.headline, unit(v) if v else None, r.published_at)
+            vectors = await self._embed([h.headline for h in headlines])
+        except Exception as e:  # noqa: BLE001
+            log.warning("headline_dedupe_embed_failed", error=str(e)[:120], fallback="exact text")
+        try:
+            n = mark_duplicates(headlines, vectors, recent, now)
+        except Exception as e:  # noqa: BLE001
+            log.warning("headline_dedupe_failed", error=str(e)[:120])
+            return 0
+        log.info("headlines_deduped", new=len(headlines), duplicates=n, by="meaning" if vectors else "exact text")
+        return n
 
     _CATEGORY_TO_EVENT_TYPE = {
         "central_bank": "rate_decision", "inflation": "inflation_data", "jobs": "jobs_data",

@@ -5,7 +5,7 @@ import hmac
 import secrets
 from datetime import UTC, datetime, timedelta
 
-from sqlalchemy import delete, func, select
+from sqlalchemy import delete, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from storage.models import (
@@ -734,6 +734,7 @@ class Repository:
                 event_type=str(item.get("event_type") or "other")[:40],
                 model=str(item.get("model") or "")[:80],
                 published_at=_parse_dt(item.get("published_at")) or _now_utc(),
+                duplicate_of=str(item.get("duplicate_of") or "")[:64],
             ))
             accepted += 1
         if accepted:
@@ -1083,13 +1084,15 @@ class Repository:
             select(MarketBriefing).order_by(MarketBriefing.created_at.desc()).limit(1))
         return res.scalar_one_or_none()
 
-    async def news_sentiment_since(self, hours: int = 12, limit: int = 2000) -> list[NewsSentiment]:
-        """Every scored headline in the window, all symbols, newest first."""
+    async def news_sentiment_since(self, hours: int = 12, limit: int = 2000,
+                                   include_duplicates: bool = False) -> list[NewsSentiment]:
+        """Every scored headline in the window, all symbols, newest first. Repeats of a story already in the window
+        (duplicate_of set, AI plan step 5) are left out unless asked for: one event from ten feeds is one headline."""
         cutoff = _now_utc() - timedelta(hours=hours)
-        res = await self.session.execute(
-            select(NewsSentiment)
-            .where(NewsSentiment.published_at >= cutoff)
-            .order_by(NewsSentiment.published_at.desc()).limit(limit))
+        q = select(NewsSentiment).where(NewsSentiment.published_at >= cutoff)
+        if not include_duplicates:
+            q = q.where(or_(NewsSentiment.duplicate_of == "", NewsSentiment.duplicate_of.is_(None)))
+        res = await self.session.execute(q.order_by(NewsSentiment.published_at.desc()).limit(limit))
         return list(res.scalars().all())
 
     async def recent_news_sentiment(self, symbol: str, hours: int = 6) -> list[NewsSentiment]:
@@ -1098,6 +1101,7 @@ class Repository:
             select(NewsSentiment)
             .where(NewsSentiment.published_at >= cutoff)
             .where(NewsSentiment.symbol.in_([symbol.lower(), "all"]))
+            .where(or_(NewsSentiment.duplicate_of == "", NewsSentiment.duplicate_of.is_(None)))
             .order_by(NewsSentiment.published_at.desc()).limit(200))
         return list(res.scalars().all())
 

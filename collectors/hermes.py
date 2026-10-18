@@ -180,6 +180,7 @@ class Headline:
     confidence: float = 0.0
     event_type: str = "noise"
     model: str = ""
+    duplicate_of: str = ""          # external_id of the first headline with the same story (analysis/headline_dedupe)
 
     def as_payload(self) -> dict:
         return {
@@ -192,6 +193,7 @@ class Headline:
             "confidence": self.confidence,
             "event_type": self.event_type,
             "model": self.model,
+            "duplicate_of": self.duplicate_of,
             "published_at": self.published_at.isoformat() if self.published_at else None,
         }
 

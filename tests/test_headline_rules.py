@@ -89,6 +89,7 @@ async def _run_job(space_result, monkeypatch):
     monkeypatch.setattr(hermes, "fetch_feeds", AsyncMock(return_value=SimpleNamespace(headlines=heads)))
     monkeypatch.setattr(hf_space, "configured", lambda: True)
     monkeypatch.setattr(hf_space, "classify", space_result)
+    monkeypatch.setattr(hf_space, "embed", AsyncMock(side_effect=RuntimeError("no Space in tests")))   # dedupe: text
     llm = AsyncMock(return_value=SimpleNamespace(data={"score": 0.1, "confidence": 0.5, "event_type": "noise",
                                                         "symbol": "all"}, served_by="groq/x", __bool__=lambda s: True))
     r = AppRunner()

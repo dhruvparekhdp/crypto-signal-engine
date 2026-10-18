@@ -810,6 +810,8 @@ class NewsSentiment(Base):
     # stand aside, which has no direction at all.
     event_type: Mapped[str] = mapped_column(String, default="other", index=True)
     model: Mapped[str] = mapped_column(String, default="")       # what scored it
+    # external_id of the first headline with the same story (AI plan step 5, 18 Oct 2026); "" = an original
+    duplicate_of: Mapped[str] = mapped_column(String, default="")
 
     published_at: Mapped[datetime] = mapped_column(DateTime, index=True)
     received_at: Mapped[datetime] = mapped_column(DateTime, default=_now_utc)

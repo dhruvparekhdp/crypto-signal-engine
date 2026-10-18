@@ -255,6 +255,12 @@ class Settings(BaseSettings):
     # pause, adaptive or half risk, margin-slot cap or floor. Signal rules stay: BTC-volatility filter, release-window
     # skip, excluded coins, one trade per coin.
     paper_mirrors_live: bool = True
+    # AI plan step 5 (18 Oct 2026): a headline within this meaning-similarity of one from the last 12 h is stored as
+    # its duplicate and skipped by every reader of the news (AI triggers, prompts, sentiment). Exact text if the HF
+    # Space cannot embed. Threshold from 7 days of real headlines (bge-small, cosine).
+    headline_dedupe_enabled: bool = True
+    headline_dedupe_threshold: float = 0.90
+    headline_dedupe_window_hours: float = 12.0
     # Live swing book (execution/live_book.py): copies swing entries to a small Binance USD-M futures account.
     # "off" | "testnet" (testnet.binancefuture.com, fake money) | "live". Keys come from the environment only:
     # futures-enabled, withdrawals disabled, IP-restricted to this server.
