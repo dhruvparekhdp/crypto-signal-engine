@@ -75,6 +75,16 @@ EXITS = {
                            ("smart_decay3d", {"decay_after_min": 4320, "decay_frac": 0.5}),
                            ("smart_flip_decay", {"flip_ema": 20, "flip_gap_r": 0.75, "decay_after_min": 4320,
                                                  "decay_frac": 0.5}))},
+    # 18 Oct 2026 scalping research (owner): 5m signals, stop 2 x ATR(5m) (0.3%..2%), 1R or 1.5R target, 4 h limit;
+    # a market entry at the next open, or a limit at the signal close resting 15 minutes (maker fill)
+    **{f"scalp_{tag}_{ent}": ExitModel(stop_atr=2.0, rr=rr, max_hold_min=240, min_stop_pct=0.003, max_stop_pct=0.02,
+                                        entry_limit_bps=(0.0 if ent == "lim" else None), entry_window_min=15)
+       for tag, rr in (("1r", 1.0), ("15r", 1.5)) for ent in ("mkt", "lim")},
+    # 18 Oct 2026 day-scalp iteration: 5m scalps were fee-bound (stops ~0.43% -> fees 0.15R). On 15m/1h signals: stop
+    # 2 x ATR (0.5%..3%), 1R or 1.5R, 12 h limit, market or 30-minute limit entry - the 1.5-3% intraday swings
+    **{f"day_{tag}_{ent}": ExitModel(stop_atr=2.0, rr=rr, max_hold_min=720, min_stop_pct=0.005, max_stop_pct=0.03,
+                                      entry_limit_bps=(0.0 if ent == "lim" else None), entry_window_min=30)
+       for tag, rr in (("1r", 1.0), ("15r", 1.5)) for ent in ("mkt", "lim")},
     # 15 Oct 2026 intraday research (owner: 1h minimum): two exit styles for 1h/2h signals
     "intra_a": ExitModel(stop_atr=2.0, rr=2.0, max_hold_min=1440),
     "intra_b": ExitModel(stop_atr=1.5, rr=3.0, max_hold_min=2880),
@@ -111,7 +121,8 @@ def main():
     ap.add_argument("--since", default=None)
     ap.add_argument("--until", default=None)
     ap.add_argument("--exits", default="std", help=",".join(EXITS))
-    ap.add_argument("--cost", default="india_gst", choices=["india_gst", "binance_vip0", "optimistic", "stress"])
+    from analysis.lab.costs import PRESETS as _COSTS
+    ap.add_argument("--cost", default="india_gst", choices=sorted(_COSTS))
     ap.add_argument("--exec", default="1m", dest="exec_tf")
     ap.add_argument("--tf", default=None, help="override every strategy's signal timeframe")
     ap.add_argument("--grid", action="store_true", help="sweep each strategy's parameter grid")

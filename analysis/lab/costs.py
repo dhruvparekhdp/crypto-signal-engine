@@ -40,4 +40,8 @@ PRESETS = {
     "binance_vip0": CostModel(gst=0.0),
     "optimistic": CostModel(gst=0.0, slip_bps=0.5, stop_slip_bps=0.5, tp_maker=True),
     "stress": CostModel(slip_bps=5.0, stop_slip_bps=8.0),
+    # Delta India (18 Oct 2026, /v2/products): maker 0.02%, taker 0.05%, both + 18% GST. Limit entries and limit targets
+    # pay maker; stops and time exits are market orders (taker + slippage). For scalps with ExitModel.entry_limit_bps.
+    "delta_maker": CostModel(tp_maker=True),
+    "delta_maker_stress": CostModel(tp_maker=True, slip_bps=5.0, stop_slip_bps=8.0),
 }

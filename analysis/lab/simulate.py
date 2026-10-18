@@ -10,6 +10,11 @@ Rules (each is covered by a test):
   * One open trade per symbol; a new signal while in a trade is ignored.
 Costs are fractions of notional, so they do not depend on leverage; the wallet layer
 turns a trade's net return into dollars.
+
+Limit entries (ExitModel.entry_limit_bps, owner 18 Oct 2026: scalping only pays with maker fees): the order rests at
+the signal bar's close, improved by entry_limit_bps, for entry_window_min. It fills only when a later execution bar
+trades THROUGH the price (a touch is not enough: the queue is ahead of us); otherwise there is no trade. A fill pays
+the maker fee and no slippage. On the fill bar the stop can hit (worst case) but the target cannot.
 """
 from __future__ import annotations
 
@@ -53,6 +58,9 @@ class ExitModel:
     flip_min_r: float = 1.0
     decay_after_min: int | None = None     # no new best for this long (and best >= 1R) -> lock decay_frac of open profit
     decay_frac: float = 0.5
+    # 18 Oct 2026 scalping research: a resting limit entry instead of a market entry at the next open
+    entry_limit_bps: float | None = None   # limit at the signal close, this many bps better (None = market entry)
+    entry_window_min: int = 15             # the limit is cancelled after this long unfilled
 
     def key(self) -> str:
         k = (f"sl{self.stop_atr}_rr{self.rr}_h{self.max_hold_min}_be{self.be_trigger_r}"
@@ -73,6 +81,8 @@ class ExitModel:
             k += f"_flip{self.flip_ema}g{self.flip_gap_r:g}m{self.flip_min_r:g}"
         if self.decay_after_min:
             k += f"_decay{self.decay_after_min}x{self.decay_frac:g}"
+        if self.entry_limit_bps is not None:
+            k += f"_lim{self.entry_limit_bps:g}w{self.entry_window_min}"
         return k
 
 
@@ -108,8 +118,19 @@ def simulate_symbol(sig_bars: Bars, signals: np.ndarray, ex: Bars, exit: ExitMod
         a = float(atr[si])
         if not a > 0:
             continue
-        raw = float(ex.o[e])
-        entry = raw * (1 + slip) if side > 0 else raw * (1 - slip)
+        limit_fill = False
+        if exit.entry_limit_bps is not None:
+            lim = float(sig_bars.c[si]) * (1 - side * exit.entry_limit_bps / 1e4)
+            w_end = min(n - 2, e + max(1, exit.entry_window_min * 60_000 // INTERVAL_MS[ex.interval]) - 1)
+            seg = ex.l[e:w_end + 1] if side > 0 else ex.h[e:w_end + 1]
+            through = np.flatnonzero(seg < lim) if side > 0 else np.flatnonzero(seg > lim)
+            if not len(through):
+                continue                                 # never traded through the limit: no trade
+            e = e + int(through[0])
+            entry, limit_fill = lim, True
+        else:
+            raw = float(ex.o[e])
+            entry = raw * (1 + slip) if side > 0 else raw * (1 - slip)
         stop_dist = exit.stop_atr * a
         stop_dist = max(stop_dist, exit.min_stop_pct * entry)
         if stop_dist > exit.max_stop_pct * entry:
@@ -178,6 +199,8 @@ def simulate_symbol(sig_bars: Bars, signals: np.ndarray, ex: Bars, exit: ExitMod
             if part_hit and not part_done:
                 part_done = True
                 part_gain = side * (part_px - entry)
+            if tp_hit and limit_fill and j == e:
+                tp_hit = False                           # filled at the bar's extreme: no target in the same bar
             if tp_hit:
                 gap = (op >= tp) if side > 0 else (op <= tp)
                 exit_px = op if gap else tp
@@ -253,7 +276,7 @@ def simulate_symbol(sig_bars: Bars, signals: np.ndarray, ex: Bars, exit: ExitMod
         frac = exit.partial_frac if part_done else 0.0
         rem_gain = side * (exit_px - entry)
         gross = (frac * part_gain + (1 - frac) * rem_gain) / entry
-        entry_fee = taker
+        entry_fee = maker if limit_fill else taker
         exit_fee = (1 - frac) * (maker if (reason == "target" and cost.tp_maker) else taker) + frac * (maker if cost.tp_maker else taker)
         fee = entry_fee + exit_fee
         fund = 0.0

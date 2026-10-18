@@ -281,6 +281,134 @@ def _bconf(b, p):
     return np.where(raw == st, raw, 0).astype(np.int8)
 
 
+# ------------------------------------------------- scalping research (owner, 18 Oct 2026: "ETH moved 2360 -> 2430 ->
+# 2368 in a day - why can't we scalp this?"). 5m signals, meant for limit entries (ExitModel.entry_limit_bps) and
+# Delta maker fees; tested in scripts/scalp_research.py before anything trades, and then only on paper.
+def _flat_market(b, max_change):
+    """The 24-hour EMA moved less than max_change over the last 24 hours (5m bars: 288 = one day)."""
+    e = F.ema(b.c, 288)
+    prev = np.r_[np.full(288, np.nan), e[:-288]]
+    return np.nan_to_num(np.abs(e / prev - 1), nan=1.0) < max_change
+
+
+@register("wick_reclaim", "Flush & Reclaim", "scalp", "custom",
+          "A long lower (upper) wick of at least w x ATR on a volume spike, at a 2-hour low (high), closing in the upper "
+          "(lower) half of the bar: the flush failed - trade the reclaim.",
+          {"w": 1.5, "vz": 2.0}, {"w": [1.5, 2.0], "vz": [2.0, 3.0]}, tf="5m")
+def _wick_reclaim(b, p):
+    a = F.atr(b.h, b.l, b.c)
+    rng = b.h - b.l
+    pos = np.where(rng > 0, (b.c - b.l) / np.where(rng > 0, rng, 1.0), 0.5)
+    vz = np.nan_to_num(F.zscore(b.v, 50)) >= p["vz"]
+    lower, upper = np.minimum(b.o, b.c) - b.l, b.h - np.maximum(b.o, b.c)
+    long = (lower >= p["w"] * a) & vz & (b.l <= F.rolling_min(b.l, 24)) & (pos >= 0.5)
+    short = (upper >= p["w"] * a) & vz & (b.h >= F.rolling_max(b.h, 24)) & (pos <= 0.5)
+    return _sig(long, short)
+
+
+@register("range_fade", "24h Range Edge Fade", "scalp", "custom",
+          "In a flat market, a bar that pokes beyond the prior 24-hour low (high) and closes back inside is faded.",
+          {"flat": 0.02}, {"flat": [0.01, 0.02, 0.03]}, tf="5m")
+def _range_fade(b, p):
+    lo = np.r_[np.nan, F.rolling_min(b.l, 288)[:-1]]
+    hi = np.r_[np.nan, F.rolling_max(b.h, 288)[:-1]]
+    flat = _flat_market(b, p["flat"])
+    return _sig(flat & (b.l < lo) & (b.c > lo), flat & (b.h > hi) & (b.c < hi))
+
+
+@register("vwap_stretch", "VWAP Stretch & Turn", "scalp", "custom",
+          "In a flat market, price k standard deviations below (above) the UTC-day VWAP and the bar turns up (down): "
+          "fade back toward VWAP.",
+          {"k": 2.5, "flat": 0.02}, {"k": [2.0, 2.5, 3.0], "flat": [0.01, 0.02]}, tf="5m")
+def _vwap_stretch(b, p):
+    v = F.daily_vwap(b)
+    sd = F.std(b.c - v, 96)
+    z = np.nan_to_num((b.c - v) / np.where(sd == 0, np.nan, sd))
+    flat = _flat_market(b, p["flat"])
+    return _sig(flat & (z <= -p["k"]) & (b.c > b.o), flat & (z >= p["k"]) & (b.c < b.o))
+
+
+# Volume direction (owner, 18 Oct 2026: "check volume also... with volume direction we might find something"): Binance
+# records taker-buy volume per bar, so each bar shows whether aggressive buyers or sellers drove it.
+def _buy_share(b, n: int = 1):
+    """Taker-buy share of volume (0.5 = balanced), averaged over n bars; 0.5 where there was no volume."""
+    s = np.where(b.v > 0, b.tb / np.where(b.v > 0, b.v, 1.0), 0.5)
+    return np.nan_to_num(F.sma(s, n), nan=0.5) if n > 1 else s
+
+
+@register("flow_reclaim", "Flush Absorbed (taker flow)", "scalp", "custom",
+          "A flush-and-reclaim bar, then the NEXT bar closes higher (lower) with aggressive buyers (sellers) in control: "
+          "the dip was absorbed. (The flush bar itself is mostly selling, so the confirmation is the bar after.)",
+          {"w": 1.5, "vz": 2.0, "share": 0.55}, {"vz": [2.0, 3.0], "share": [0.52, 0.55, 0.6]}, tf="5m")
+def _flow_reclaim(b, p):
+    prev = np.r_[0, _wick_reclaim(b, {"w": p["w"], "vz": p["vz"]})[:-1]]
+    sh = _buy_share(b)
+    up, dn = b.c > np.r_[np.inf, b.c[:-1]], b.c < np.r_[-np.inf, b.c[:-1]]
+    return np.where((prev > 0) & (sh >= p["share"]) & up, 1,
+                    np.where((prev < 0) & (sh <= 1 - p["share"]) & dn, -1, 0)).astype(np.int8)
+
+
+@register("flow_divergence", "Low with buyers (volume divergence)", "scalp", "custom",
+          "Price makes a 2-hour low (high) on a green (red) bar while the last 30 minutes of taker volume leaned to "
+          "buying (selling): the sellers (buyers) are running out.",
+          {"share": 0.53}, {"share": [0.52, 0.55, 0.58]}, tf="5m")
+def _flow_divergence(b, p):
+    sh6 = _buy_share(b, 6)
+    long = (b.l <= F.rolling_min(b.l, 24)) & (sh6 >= p["share"]) & (b.c > b.o)
+    short = (b.h >= F.rolling_max(b.h, 24)) & (sh6 <= 1 - p["share"]) & (b.c < b.o)
+    return _sig(long, short)
+
+
+@register("flow_burst", "Taker Flow Burst", "scalp", "custom",
+          "A one-sided burst - taker-buy (sell) share of at least s over 15 minutes on a volume spike: trade with the "
+          "flow (first bar of the burst).",
+          {"share": 0.62, "vz": 2.0}, {"share": [0.6, 0.65], "vz": [2.0, 3.0]}, tf="5m")
+def _flow_burst(b, p):
+    sh3 = _buy_share(b, 3)
+    vz = np.nan_to_num(F.zscore(F.sma(b.v, 3), 50)) >= p["vz"]
+    long, short = vz & (sh3 >= p["share"]), vz & (sh3 <= 1 - p["share"])
+    return _sig(long & ~np.r_[False, long[:-1]], short & ~np.r_[False, short[:-1]])
+
+
+# Filter found in the 3-month diagnosis and checked year by year on 2021-2024 (18 Oct 2026): taker-flow scalps only on
+# weekdays (UTC Mon-Fri) and only when BTC's daily volatility rank is above calm (> 1/3; yesterday's rank, known today).
+_BTC_VOLRANK: dict = {}
+
+
+def _active_market(b):
+    if "d" not in _BTC_VOLRANK:
+        from analysis import regime_gate
+        from analysis.lab.data import load_bars
+        d = load_bars("BTCUSDT", "1d")
+        _BTC_VOLRANK["d"] = (d.t + 86_400_000, regime_gate.vol_rank_series(d.c))     # known at the daily close
+    known, rank = _BTC_VOLRANK["d"]
+    i = np.searchsorted(known, b.t, side="right") - 1
+    vr = np.where(i >= 0, rank[np.clip(i, 0, None)], np.nan)
+    weekday = ((b.t // 86_400_000) + 3) % 7 < 5            # 1970-01-01 was a Thursday
+    return weekday & (np.nan_to_num(vr, nan=0.0) > 1 / 3)
+
+
+@register("taker_flow_active", "Taker Flow (weekdays, active BTC)", "scalp", "custom",
+          "Taker Buy Pressure, only on weekdays and when BTC is not in a calm phase.",
+          {"thr": 0.55}, {"thr": [0.55, 0.58]}, tf="1h")
+def _taker_active(b, p):
+    return np.where(_active_market(b), REGISTRY["taker_flow"].fn(b, p), 0).astype(np.int8)
+
+
+@register("flow_burst_active", "Taker Flow Burst (weekdays, active BTC)", "scalp", "custom",
+          "Taker Flow Burst, only on weekdays and when BTC is not in a calm phase.",
+          {"share": 0.6, "vz": 2.0}, {"share": [0.6], "vz": [2.0, 3.0]}, tf="15m")
+def _burst_active(b, p):
+    return np.where(_active_market(b), _flow_burst(b, p), 0).astype(np.int8)
+
+
+@register("random_active", "Random Entries (weekdays, active BTC)", "baseline", "custom",
+          "The random control under the same weekday / active-BTC filter, so the filter itself cannot flatter a rule.",
+          {"rate": 0.01, "seed": 7}, {})
+def _random_active(b, p):
+    return np.where(_active_market(b), REGISTRY["random"].fn(b, p), 0).astype(np.int8)
+
+
 # -------------------------------------------------------- mean reversion
 @register("rsi2", "Connors RSI(2)", "mean_reversion", "classic",
           "RSI(2) extreme against a 200 SMA trend filter (Connors & Alvarez).",
