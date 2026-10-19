@@ -260,8 +260,10 @@ async def test_the_intraday_resolver_leaves_swing_signals_to_the_swing_replay():
         await s.commit()
     runner = AppRunner()
     st = CryptoState(symbol="solusdt", base_asset="SOL")
-    later = datetime.now(UTC) - timedelta(minutes=20)
-    st.candles_1m = [OHLCVCandle(open=100, high=113, low=99, close=112, volume=1, timestamp=later)]
+    first = (datetime.now(UTC) - timedelta(minutes=29)).replace(second=0, microsecond=0)   # bars from the signal on
+    st.candles_1m = [OHLCVCandle(open=100, high=100.5, low=99.5, close=100, volume=1, timestamp=first + timedelta(minutes=i))
+                     for i in range(8)] + [OHLCVCandle(open=100, high=113, low=99, close=112, volume=1,
+                                                       timestamp=first + timedelta(minutes=8))]
     runner.crypto_store._states["solusdt"] = st
     with patch("scheduler.runner.AsyncSessionFactory", session_maker):
         await runner._resolve_signal_outcomes_job()

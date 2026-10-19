@@ -177,15 +177,18 @@ class TestPessimisticTieBreak(unittest.TestCase):
             end = rest.find("\n    def ", 1)
         self.src = rest[:end] if end != -1 else rest
 
-    def test_the_stop_is_checked_before_the_target(self):
-        self.assertLess(self.src.index("hit_stop:"), self.src.index("hit_tgt:"))
+    def test_the_job_uses_the_shared_rules(self):
+        # 19 Oct 2026: the old check here looked for "hit_stop:" in the source and passed while the job credited the
+        # target on a two-touch bar that closed green. The behaviour is now tested in test_signal_resolution.py.
+        self.assertIn("resolve(", self.src)
+        self.assertIn("window_minutes(sig.timeframe)", self.src)
 
     def test_it_only_resolves_signals_old_enough_to_have_played_out(self):
         self.assertIn("older_than_minutes", self.src)
 
     def test_a_short_history_is_not_mistaken_for_an_expiry(self):
-        self.assertIn("continue", self.src)
-        self.assertIn("paper_max_hold_minutes", self.src)
+        self.assertIn('res.status == "running"', self.src)
+        self.assertIn('res.status == "gap"', self.src)
 
 
 class TestNewScreensAreWired(unittest.TestCase):

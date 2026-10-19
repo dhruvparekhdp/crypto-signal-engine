@@ -2345,25 +2345,25 @@ class AppRunner:
 
     async def _resolve_signal_outcomes_job(self) -> None:
         """
-        Decide whether past signals reached target or stop.
+        Label past intraday signals won / lost / expired (analysis/signal_resolution.py has the rules).
 
-        Resolution walks the stored candle window forward from the signal.
-        We check all pending signals (older than 5 minutes to avoid 1-tick noise),
-        so that signals hitting target early (e.g. in 10-30 mins) are captured
-        immediately before rolling in-memory candles are evicted.
-
-        Unresolved signals remain 'pending' until either target/stop is hit
-        or until the holding horizon has elapsed, at which point they are marked 'expired'.
+        Each signal is judged on its own claim - target within its timeframe (e.g. '81m') - on the 1m bars that open
+        after it, stop first when a bar touches both, expired only once the whole window has been seen. The engine's
+        in-memory 1m candles cover the last few hours; when they have a hole at this signal (after a restart, say),
+        the bars come from Delta instead, and a signal no source can cover stays pending until it is too old to
+        fetch, then is marked no_data rather than given a made-up label. Swing signals are replayed by
+        _swing_outcomes_job.
         """
+        from analysis.signal_resolution import resolve, window_minutes
         try:
             async with AsyncSessionFactory() as session:
                 repo = Repository(session)
-                pending = await repo.pending_crypto_signals(older_than_minutes=5)
+                pending = await repo.pending_crypto_signals(older_than_minutes=5, limit=500)
                 if not pending:
                     return
 
-                pcfg = await repo.get_paper_config()
                 states = {st.symbol: st for st in await self.crypto_store.get_all()}
+                now = datetime.now(UTC).replace(tzinfo=None)
                 resolved = 0
                 for sig in pending:
                     if getattr(sig, "trade_mode", "") == "swing":
@@ -2372,67 +2372,21 @@ class AppRunner:
                         await repo.resolve_crypto_signal(sig.id, "expired", 0.0)
                         resolved += 1
                         continue
-
+                    window = window_minutes(sig.timeframe)
                     st = states.get(sig.symbol.lower())
-                    if st is None or not st.candles_1m:
+                    args = (sig.direction, sig.current_price, sig.target_price, sig.stop_loss, sig.timestamp)
+                    res = resolve(*args, (st.candles_1m if st else []) or [], window)
+                    if res.status == "gap":
+                        res = resolve(*args, await self._signal_bars(sig.symbol, sig.timestamp, now), window)
+                    if res.status == "gap":
+                        ts = sig.timestamp.replace(tzinfo=None) if sig.timestamp.tzinfo else sig.timestamp
+                        if now - ts > timedelta(minutes=window) + timedelta(hours=24):
+                            await repo.resolve_crypto_signal(sig.id, "no_data", 0.0)
+                            resolved += 1
                         continue
-                    sig_ts = (sig.timestamp.replace(tzinfo=None) if sig.timestamp.tzinfo
-                             else sig.timestamp)
-                    after = [c for c in st.candles_1m
-                             if (c.timestamp.replace(tzinfo=None) if c.timestamp.tzinfo
-                                 else c.timestamp) > sig_ts]
-                    if not after:
+                    if res.status == "running":
                         continue
-
-                    long_ = sig.direction == "long"
-                    outcome, pnl = None, 0.0
-                    for c in after:
-                        hit_stop = c.low <= sig.stop_loss if long_ else c.high >= sig.stop_loss
-                        hit_tgt = c.high >= sig.target_price if long_ else c.low <= sig.target_price
-
-                        if hit_tgt and hit_stop:
-                            # Both hit on same bar: check if bar moved in trade direction
-                            favorable = (c.close >= c.open) if long_ else (c.close <= c.open)
-                            if favorable:
-                                outcome = "won"
-                                pnl = ((sig.target_price - sig.current_price)
-                                      / sig.current_price * 100)
-                            else:
-                                outcome = "lost"
-                                pnl = (sig.stop_loss - sig.current_price) / sig.current_price * 100
-                            break
-                        elif hit_tgt:
-                            outcome = "won"
-                            pnl = (sig.target_price - sig.current_price) / sig.current_price * 100
-                            break
-                        elif hit_stop:
-                            outcome = "lost"
-                            pnl = (sig.stop_loss - sig.current_price) / sig.current_price * 100
-                            break
-
-                        # Signal is still running. Only expire if past maximum hold time
-                        last_c_ts = (after[-1].timestamp.replace(tzinfo=None)
-                                    if after[-1].timestamp.tzinfo else after[-1].timestamp)
-                        span = last_c_ts - sig_ts
-                        paper_max_hold_minutes = pcfg.max_hold_minutes
-                        if span.total_seconds() / 60 < paper_max_hold_minutes:
-                            continue
-                        outcome = "expired"
-                        pnl = (after[-1].close - sig.current_price) / sig.current_price * 100
-
-                    if outcome is None:
-                        # Still genuinely running: no bar hit target or stop,
-                        # and the newest one hasn't reached max hold yet
-                        # either. Nothing to record — leave it pending for
-                        # the next pass. Falling through used to call
-                        # resolve_crypto_signal(sig.id, None, ...), which
-                        # the database rejects (outcome is NOT NULL) and
-                        # crashed this job on the same signal every run
-                        # until it aged past its own history window.
-                        continue
-
-                    await repo.resolve_crypto_signal(
-                        sig.id, outcome, round(pnl * (1 if long_ else -1), 4))
+                    await repo.resolve_crypto_signal(sig.id, res.status, res.pnl_pct)
                     resolved += 1
 
                 if resolved:
@@ -2440,6 +2394,37 @@ class AppRunner:
                              still_pending=len(pending) - resolved)
         except Exception:
             log.exception("resolve_signal_outcomes_failed")
+
+    async def _signal_bars(self, symbol: str, since: datetime, now: datetime) -> list:
+        """Closed 1m bars from a signal's time to now, for the resolver when the in-memory candles have a hole: Delta
+        first, Binance's public REST as the fallback; [] when neither answers or the signal is older than one request
+        reaches (1,500 bars)."""
+        import httpx
+        ts = since.astimezone(UTC).replace(tzinfo=None) if since.tzinfo else since
+        minutes = int((now - ts).total_seconds() // 60) + 3
+        if minutes > 1500:
+            return []
+        bars: list = []
+        dm = getattr(self, "delta_market", None)
+        if dm is not None:
+            try:
+                bars = await dm.fetch_candles(symbol.upper(), "1m", limit=minutes)
+            except Exception:  # noqa: BLE001
+                bars = []
+        if not bars:
+            try:
+                async with httpx.AsyncClient(timeout=10) as c:
+                    r = await c.get("https://fapi.binance.com/fapi/v1/klines", params={
+                        "symbol": symbol.upper(), "interval": "1m", "limit": minutes,
+                        "startTime": int(ts.replace(tzinfo=UTC).timestamp() * 1000) - 60_000})
+                r.raise_for_status()
+                bars = [{"timestamp": datetime.fromtimestamp(int(k[0]) / 1000, tz=UTC), "open": float(k[1]),
+                         "high": float(k[2]), "low": float(k[3]), "close": float(k[4])} for k in r.json()]
+            except Exception:  # noqa: BLE001
+                bars = []
+        cutoff = now - timedelta(minutes=1)                     # drop the bar still forming
+        return [b for b in bars if (b["timestamp"].astimezone(UTC).replace(tzinfo=None)
+                                    if b["timestamp"].tzinfo else b["timestamp"]) <= cutoff]
 
     async def _swing_outcomes_job(self) -> None:
         """Replay every pending swing signal on 1h bars (stop first on a tie, 7-day limit) and record its outcome,

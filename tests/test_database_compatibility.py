@@ -115,10 +115,10 @@ async def test_signal_outcome_resolution_with_mixed_naive_and_aware_timestamps()
     t0_aware = datetime(2026, 9, 16, 12, 0, tzinfo=UTC)
     t0_naive = datetime(2026, 9, 16, 12, 0)
 
-    # Add candles: 1 naive, 1 aware
+    # Add candles: 1 naive, 1 aware (consecutive minutes: since 19 Oct a hole in the bars is a gap, not a label)
     c1 = OHLCVCandle(60000.0, 60100.0, 59900.0, 60050.0, 10.0, t0_naive)
     c2 = OHLCVCandle(
-        60050.0, 61500.0, 60000.0, 61200.0, 15.0, t0_aware + timedelta(minutes=5)
+        60050.0, 61500.0, 60000.0, 61200.0, 15.0, t0_aware + timedelta(minutes=1)
     )
     state.candles_1m.extend([c1, c2])
     runner.crypto_store._states["btcusdt"] = state
