@@ -536,6 +536,16 @@ def _iso(dt):
     return dt.isoformat()
 
 
+def _history_limit(query) -> int:
+    """Rows for /api/signals/history. 400 by default; the 7-day signals table asks for more, because intraday signals
+    arrive 100-270 a day and 400 rows covered about two of the seven days it claimed (19 Oct 2026)."""
+    try:
+        n = int(query.get("limit") or 400)
+    except (TypeError, ValueError):
+        n = 400
+    return max(1, min(3000, n))
+
+
 def _signal_row(r) -> dict:
     return {
         "id": r.id, "symbol": r.symbol.upper(), "signal_type": r.signal_type,
@@ -546,6 +556,8 @@ def _signal_row(r) -> dict:
         "timestamp": _iso(r.timestamp),
         "trade_mode": getattr(r, "trade_mode", "intraday"),
         "veto_reason": getattr(r, "veto_reason", "") or getattr(r, "suppressed_by", "") or getattr(r, "skip_reason", "") or None,
+        # every intraday signal is logged with its mirror (the same setup, opposite side) as a control
+        "role": "mirror" if str(getattr(r, "candidate_role", "") or "").startswith("mirror") else "primary",
     }
 
 
@@ -795,7 +807,7 @@ async def _api_signal_history(runner, request: web.Request) -> web.Response:
     before = max(0, min(365, int(request.query.get("before") or 0)))
     async with AsyncSessionFactory() as session:
         repo = Repository(session)
-        rows = await repo.crypto_signals_between(days, before)
+        rows = await repo.crypto_signals_between(days, before, limit=_history_limit(request.query))
         counts = await repo.crypto_signal_counts() if before else None
 
     payload = [_signal_row(r) for r in rows]

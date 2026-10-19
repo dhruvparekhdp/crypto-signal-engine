@@ -274,6 +274,26 @@
   function moveOf(s) { return s.target_price && s.current_price ? Math.abs(s.target_price - s.current_price) / s.current_price * 100 : 0; }
   function minTarget(D) { return D.accuracy && U.num(D.accuracy.min_target_pct) ? D.accuracy.min_target_pct : 0.4; }
   function sigStatus(s, min) { return s.veto_reason ? "VETOED" : moveOf(s) >= min ? "VIABLE" : "SUB-COST"; }
+  // why a signal was not traded, in plain words (the raw code stays in the tooltip)
+  var WHY = {
+    shadow_only: "research only: intraday is not traded",
+    counter_trend_short_shadow: "counter-trend short: research only", counter_trend_short_shadow_held: "counter-trend short: research only",
+    mirror_review_tracking: "mirror kept for comparison", already_open_in_symbol: "coin already has a trade",
+    coin_without_edge: "coin left out: no backtest edge", news_blackout: "news window: no new trades",
+    stale: "too old when checked", adaptive_loss_cooldown: "paused after losses", opposite_side_won: "the other side was picked"
+  };
+  function whyText(r) {
+    if (!r) return "";
+    if (WHY[r]) return WHY[r];
+    if (/^side_risk_cap/.test(r)) return "too much risk on one side already";
+    if (/^AI Hard Veto/i.test(r)) return "AI veto: " + r.replace(/^AI Hard Veto:\s*/i, "").split(" | ")[0];
+    return r.replace(/_/g, " ");
+  }
+  function outcomeTag(s) {
+    var o = s.outcome || "pending";
+    var tag = C.tag(o.toUpperCase(), o === "won" ? "" : o === "lost" ? "skip" : o === "pending" ? "wait" : "neutral");
+    return '<span class="cell-stack">' + tag + (o !== "pending" && U.num(s.pnl_pct) ? '<span class="tiny ' + (s.pnl_pct >= 0 ? "up" : "dn") + '">' + e(U.pct(s.pnl_pct)) + "</span>" : "") + "</span>";
+  }
 
   UI.widget("signals-summary", {
     bare: true, uses: ["history7", "accuracy"],
@@ -283,20 +303,24 @@
       var viable = list.filter(function (s) { return sigStatus(s, min) === "VIABLE"; }).length;
       var vetoed = list.filter(function (s) { return s.veto_reason; }).length;
       var swing = list.filter(function (s) { return (s.trade_mode || "") === "swing"; }).length;
+      var won = list.filter(function (s) { return s.outcome === "won"; }).length, lost = list.filter(function (s) { return s.outcome === "lost"; }).length;
       el.innerHTML = '<div class="hero-band"><b>' + list.length + " signals · 7 days</b><span>" + viable + " cleared the " + min.toFixed(2) + "% cost floor, " + vetoed +
-        " were vetoed or skipped, " + swing + " came from the swing book. Everything older is in Evidence › History.</span></div>";
+        " were vetoed or skipped, " + swing + " came from the swing book. " + won + " won and " + lost + " lost" +
+        (won + lost ? " (" + Math.round(won / (won + lost) * 100) + "% won, before fees)" : "") + ". Everything older is in Evidence › History.</span></div>";
     }
   });
   UI.widget("signals-table", {
     title: "EVERY SIGNAL · LAST 7 DAYS", uses: ["history7", "accuracy"],
     mount: function (el, ctx) {
-      ctx.s.f = { sym: "", dir: "", st: "", q: "" }; ctx.s.t = { sort: null };
+      ctx.s.f = { sym: "", dir: "", st: "", out: "", role: "", q: "" }; ctx.s.t = { sort: null };
       el.innerHTML = '<div class="toolbar"></div><div data-slot="t"></div>';
     },
     on: {
       sym: function (el, ev, t, ctx) { ctx.s.f.sym = t.value; ctx.render(); },
       dir: function (el, ev, t, ctx) { ctx.s.f.dir = t.value; ctx.render(); },
       st: function (el, ev, t, ctx) { ctx.s.f.st = t.value; ctx.render(); },
+      out: function (el, ev, t, ctx) { ctx.s.f.out = t.value; ctx.render(); },
+      role: function (el, ev, t, ctx) { ctx.s.f.role = t.value; ctx.render(); },
       q: function (el, ev, t, ctx) { ctx.s.f.q = t.value.toLowerCase(); ctx.render(); },
       sort: function (el, ev, t, ctx) { C.sortState(ctx.s.t, t.dataset.k); ctx.render(); }
     },
@@ -308,24 +332,30 @@
         ctx.s.tb = syms.join();
         el.querySelector(".toolbar").innerHTML = C.select("sym", "Coin", [["", "All"]].concat(syms.map(function (s) { return [s, U.base(s)]; })), f.sym) +
           C.select("dir", "Side", [["", "Both"], ["long", "Long"], ["short", "Short"]], f.dir) +
-          C.select("st", "Status", [["", "All"], ["VIABLE", "Viable"], ["SUB-COST", "Sub-cost"], ["VETOED", "Vetoed"]], f.st) + C.search("q", "Search setup or reason…", f.q);
+          C.select("st", "Status", [["", "All"], ["VIABLE", "Viable"], ["SUB-COST", "Sub-cost"], ["VETOED", "Vetoed"]], f.st) +
+          C.select("out", "Outcome", [["", "All"], ["won", "Won"], ["lost", "Lost"], ["expired", "Expired"], ["pending", "Pending"]], f.out) +
+          C.select("role", "Kind", [["", "All"], ["primary", "Signal"], ["mirror", "Mirror (other side)"]], f.role) + C.search("q", "Search setup or reason…", f.q);
       }
       var rows = all.filter(function (s) {
         var st = sigStatus(s, min);
         return (!f.sym || s.symbol === f.sym) && (!f.dir || s.direction === f.dir) && (!f.st || st === f.st) &&
-          (!f.q || (s.signal_type + " " + (s.veto_reason || "")).toLowerCase().indexOf(f.q) >= 0);
+          (!f.out || (s.outcome || "pending") === f.out) && (!f.role || (s.role || "primary") === f.role) &&
+          (!f.q || (s.signal_type + " " + (s.veto_reason || "") + " " + whyText(s.veto_reason)).toLowerCase().indexOf(f.q) >= 0);
       });
-      ctx.right(rows.length + " of " + all.length);
+      var w = rows.filter(function (s) { return s.outcome === "won"; }).length, l = rows.filter(function (s) { return s.outcome === "lost"; }).length;
+      ctx.right(rows.length + " of " + all.length + (w + l ? " · " + w + " won / " + l + " lost (" + Math.round(w / (w + l) * 100) + "%)" : ""));
       el.querySelector('[data-slot="t"]').innerHTML = C.table([
-        { label: "FIRED", w: "110px", cell: function (s) { return '<span class="dim">' + e(U.stamp(s.timestamp)) + "</span>"; }, sort: function (s) { return s.timestamp; } },
-        { label: "COIN", w: "70px", cell: function (s) { return "<b>" + e(U.base(s.symbol)) + "</b>"; }, sort: function (s) { return s.symbol; } },
-        { label: "SETUP", w: "minmax(0,1.3fr)", cell: function (s) { return e(U.name(s.signal_type)) + ' <span class="dim">' + e(s.timeframe || "") + "</span>"; } },
+        { label: "FIRED", w: "100px", cell: function (s) { return '<span class="dim">' + e(U.stamp(s.timestamp)) + "</span>"; }, sort: function (s) { return s.timestamp; } },
+        { label: "COIN", w: "64px", cell: function (s) { return "<b>" + e(U.base(s.symbol)) + "</b>"; }, sort: function (s) { return s.symbol; } },
+        { label: "SETUP", w: "minmax(0,1.3fr)", cell: function (s) { return e(U.name(s.signal_type)) + ' <span class="dim">' + e(s.timeframe || "") + "</span>" + (s.role === "mirror" ? '<br><span class="dim tiny">mirror: same setup, other side</span>' : ""); } },
         { label: "SIDE", w: "70px", cell: function (s) { return C.side(s.direction); } },
-        { label: "MODE", w: "80px", cell: function (s) { return '<span class="dim">' + e(s.trade_mode || "intraday") + "</span>"; } },
-        { label: "MOVE", w: "80px", cell: function (s) { return e(moveOf(s).toFixed(2) + "%"); }, sort: moveOf },
-        { label: "CONF", w: "60px", cell: function (s) { return e(s.confidence + "%"); }, sort: function (s) { return s.confidence; } },
-        { label: "STATUS", w: "minmax(0,1fr)", cell: function (s) { var st = sigStatus(s, min); return C.tag(st, st === "VIABLE" ? "" : st === "VETOED" ? "skip" : "neutral") + (s.veto_reason ? ' <span class="dim tiny">' + e(s.veto_reason) + "</span>" : ""); } },
-        { label: "OUTCOME", w: "90px", cell: function (s) { return '<span class="dim">' + e(s.outcome || "pending") + "</span>"; } }
+        { label: "MODE", w: "72px", cell: function (s) { return '<span class="dim">' + e(s.trade_mode || "intraday") + "</span>"; } },
+        { label: "MOVE", w: "64px", cell: function (s) { return e(moveOf(s).toFixed(2) + "%"); }, sort: moveOf },
+        { label: "CONF", w: "56px", cell: function (s) { return e(s.confidence + "%"); }, sort: function (s) { return s.confidence; } },
+        { label: "STATUS", w: "minmax(0,1.2fr)", cell: function (s) { var st = sigStatus(s, min);
+            return '<span class="cell-stack">' + C.tag(st, st === "VIABLE" ? "" : st === "VETOED" ? "skip" : "neutral") +
+              (s.veto_reason ? '<span class="dim tiny" title="' + e(s.veto_reason) + '">' + e(whyText(s.veto_reason)) + "</span>" : "") + "</span>"; } },
+        { label: "OUTCOME", w: "92px", cell: outcomeTag, sort: function (s) { return s.pnl_pct == null ? -999 : s.pnl_pct; } }
       ], rows, { state: ctx.s.t, minWidth: 900, empty: "No signals match these filters." });
     }
   });
@@ -336,7 +366,7 @@
       var min = minTarget(D), why = {};
       D.history7.forEach(function (s) {
         if (moveOf(s) < min) why["Below the " + min.toFixed(2) + "% cost floor"] = (why["Below the " + min.toFixed(2) + "% cost floor"] || 0) + 1;
-        if (s.veto_reason) why[s.veto_reason] = (why[s.veto_reason] || 0) + 1;
+        if (s.veto_reason) { var k = whyText(s.veto_reason); why[k] = (why[k] || 0) + 1; }
       });
       var rows = Object.keys(why).map(function (k) { return [k, why[k], String(why[k]), "dn"]; }).sort(function (a, b) { return b[1] - a[1]; });
       el.innerHTML = rows.length ? C.bars(rows) : C.empty("Nothing refused in the last 7 days.");
