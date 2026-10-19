@@ -359,6 +359,8 @@
     if (!loc.known) history.replaceState({}, "", Nav.href(loc.hub, loc.tab));
     var h = loc.hub, t = loc.tab;
     drawNav(h, t);
+    // the strip is the paper book's (open swing trades, worst case, filter); the real-money page shows only Delta
+    U.$("#strip").style.display = h.id + "/" + t.id === "book/live" ? "none" : "";
     if (Shell.hub === h.id && Shell.tab === t.id) return;
     Shell.hub = h.id; Shell.tab = t.id;
     unmountAll();

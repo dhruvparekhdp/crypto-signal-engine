@@ -5,6 +5,11 @@ Live (real money) Delta India book, for the portal's Book > Live page (owner, 18
                             (entry, mark, liquidation, margin, unrealised P&L in Rs, the exchange stop and target, the
                             engine's lock), open orders and the live order journal. Cached 4 s; the page polls every 5 s.
 
+Every number is Delta's own, marked the way the Delta app marks it (owner, 19 Oct 2026: "real value of delta are
+different on this page"): P&L = (mark - real fill) x contracts x coins per contract, the same as the app's UPL@Mark,
+because the unrealized_pnl field in /v2/positions/margined is not marked to the current price. Free margin is Delta's
+available balance less open losses, which is what the app shows as available in cross margin.
+
 Read-only: this endpoint never places, moves or cancels anything.
 """
 from __future__ import annotations
@@ -15,6 +20,7 @@ from pathlib import Path
 
 from aiohttp import web
 
+from analysis.instruments import delta_contract_for
 from execution.delta_book import SHADOW_PATH, STATE_PATH
 
 _cache: dict = {"t": 0.0, "body": None}
@@ -40,25 +46,26 @@ def live_rows(records: dict, exchange: list[dict], orders: list[dict], rate: flo
         side = "short" if (size < 0 or rec.get("side") == "sell") else "long"
         entry = _f(ex.get("entry_price")) or _f(rec.get("entry_fill")) or _f(rec.get("entry"))
         mark = _f(ex.get("mark_price"))
-        upnl_usd = _f(ex.get("unrealized_pnl"))
         cv = _f(ex.get("product", {}).get("contract_value") if isinstance(ex.get("product"), dict) else None) or \
-            _f(rec.get("contract_value")) or 1.0
-        if upnl_usd is None and entry and mark and size:
-            upnl_usd = (mark - entry) * size * cv
+            _f(rec.get("contract_value")) or delta_contract_for(str(rec.get("binance_symbol") or "")) or 1.0
+        upnl_usd = (mark - entry) * size * cv if entry and mark and size else _f(ex.get("unrealized_pnl"))
         pid = ex.get("product_id") or rec.get("product_id")
         mine = [o for o in orders if str(o.get("product_id")) == str(pid)]
         stop_o = next((o for o in mine if o.get("stop_order_type") == "stop_loss_order"), None)
         tp_o = next((o for o in mine if o.get("stop_order_type") == "take_profit_order"), None)
-        init_stop, risk = _f(rec.get("init_stop")), _f(rec.get("risk"))
+        init_stop = _f(rec.get("init_stop"))
+        risk = abs(init_stop - entry) if init_stop and entry else _f(rec.get("risk"))    # 1R from the real fill
         r_now = None
         if entry and mark and risk:
             r_now = ((mark - entry) if side == "long" else (entry - mark)) / risk
         upnl_inr = upnl_usd * rate if upnl_usd is not None else None
+        margin_inr = (_f(ex.get("margin"), 0) or 0) * rate
         out.append({
             "symbol": sym, "side": side, "contracts": abs(size) if size else rec.get("size"),
             "entry": entry, "mark": mark, "liquidation": _f(ex.get("liquidation_price")),
-            "margin_inr": (_f(ex.get("margin"), 0) or 0) * rate,
+            "margin_inr": margin_inr, "tick": _f(rec.get("tick")),
             "upnl_inr": round(upnl_inr, 2) if upnl_inr is not None else None,
+            "roe_pct": round(upnl_inr / margin_inr * 100, 2) if upnl_inr is not None and margin_inr else None,
             "upnl_pct_wallet": round(upnl_inr / wallet_inr * 100, 2) if upnl_inr is not None and wallet_inr else None,
             "r_now": round(r_now, 2) if r_now is not None else None,
             "exchange_stop": _f(stop_o.get("stop_price")) if stop_o else None,
@@ -71,6 +78,15 @@ def live_rows(records: dict, exchange: list[dict], orders: list[dict], rate: flo
                      + ([] if stop_o or not size else ["NO STOP ON EXCHANGE"]),
         })
     return out
+
+
+def wallet_summary(total_inr: float, available_inr: float, rows: list[dict], rate: float) -> dict:
+    """The wallet as the Delta app shows it: balance, open P&L, equity (balance + open P&L) and free margin (the
+    available balance less open losses; an open profit is not counted as free money here)."""
+    upnl = round(sum(r["upnl_inr"] for r in rows if r.get("upnl_inr") is not None), 2)
+    return {"total_inr": round(total_inr, 2), "available_inr": round(available_inr, 2), "upnl_inr": upnl,
+            "equity_inr": round(total_inr + upnl, 2), "free_inr": round(available_inr + min(0.0, upnl), 2),
+            "rate": rate}
 
 
 def _tail(path: Path, n: int) -> list[dict]:
@@ -125,11 +141,12 @@ async def snapshot() -> dict:
     ex = ex if isinstance(ex, list) else []
     orders = orders if isinstance(orders, list) else []
     start = _f(day.get("start_inr")) if day.get("date") == time.strftime("%Y-%m-%d", time.gmtime()) else None
+    rows = live_rows(records, ex, orders, rate, total)
     body.update({
-        "wallet": {"available_inr": round(avail, 2), "total_inr": round(total, 2), "rate": rate},
+        "wallet": wallet_summary(total, avail, rows, rate),
         "day": {"start_inr": start, "pnl_inr": round(total - start, 2) if start else None,
                 "limit_inr": round(start * settings.delta_india_daily_loss_pct, 2) if start else None},
-        "positions": live_rows(records, ex, orders, rate, total),
+        "positions": rows,
         "orders": [{"symbol": o.get("product_symbol"), "type": o.get("stop_order_type") or o.get("order_type"),
                     "side": o.get("side"), "size": o.get("size"), "stop_price": _f(o.get("stop_price")),
                     "limit_price": _f(o.get("limit_price")), "reduce_only": o.get("reduce_only"),
