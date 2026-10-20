@@ -1577,6 +1577,10 @@ class AppRunner:
                     if n < 1:
                         await self._mark_skipped(log_id, "below_one_contract")
                         continue
+                    why = await self._live_book_guard(sig.symbol, side, n, abs(price - stop) / price, live_coins)
+                    if why:                                                     # live would refuse it: so does paper
+                        await self._mark_skipped(log_id, why)
+                        continue
                     margin = n * one_inr / leverage
                     if margin > cstate.wallet * 0.9:
                         await self._mark_skipped(log_id, "no_free_margin")
@@ -1712,6 +1716,9 @@ class AppRunner:
                                  min_wallet_inr=0.0 if testnet else float(settings.delta_india_min_wallet_inr),
                                  min_leverage=int(settings.delta_india_min_leverage),
                                  round_up_risk_pct=float(settings.delta_india_round_up_risk_pct),
+                                 entry_guard=not testnet,      # the demo book's prices drift; real money only
+                                 max_spread_pct=float(settings.delta_india_max_spread_pct),
+                                 max_slip_r=float(settings.delta_india_max_slippage_r),
                                  shadow_path=Path("data/delta_testnet.jsonl") if testnet else SHADOW_PATH,
                                  state_path=Path("data/delta_testnet_state.json") if testnet else STATE_PATH)
                 out = await getattr(book, method)(*args)
@@ -1746,6 +1753,102 @@ class AppRunner:
                 except Exception:  # noqa: BLE001
                     pass
         self._delta_read_fails = seen
+
+    _PARITY_FILE = "data/parity_report.json"
+
+    async def _parity_job(self, days: float = 7.0, alert: bool = True) -> dict:
+        """Backtest = live check (analysis/parity.py, owner 19 Oct 2026). Swing signals: every closed 4h / 8h bar of
+        the last `days`, the live log against the live computation re-run on the same Delta bars (a mismatch is a
+        scanner fault), against a longer warm-up on the same bars, and against Binance with long history (the
+        backtest's view). Execution: every live Delta position against its paper copy. Writes data/parity_report.json;
+        Telegram only when something does not match."""
+        import httpx
+
+        from analysis import parity as par
+        from analysis import swing_book as sb
+        from analysis.instruments import delta_contract_for
+        from analysis.lab.runner import CRYPTO
+        from execution.delta_book import STATE_PATH
+        now = datetime.now(UTC)
+        now_ms = int(now.timestamp() * 1000)
+        specs = sb.parse_specs(settings.swing_strategies)
+        async with AsyncSessionFactory() as session:
+            repo = Repository(session)
+            logged = await repo.swing_signals_since(int(days) + 2)
+            running = await repo.running_cycles()
+            paper_rows = await repo.get_open_positions(running[-1].id) if running else []
+        extra = [x.strip().upper() for x in (settings.swing_extra_symbols or "").split(",") if x.strip()]
+        symbols = list(dict.fromkeys(CRYPTO + extra))
+        sp = par.SignalParity()
+        fetch_errors: list[str] = []
+        need = par.LIVE_WINDOW + int(days * 86_400_000 // min(par.INTERVAL_MS["4h"], par.INTERVAL_MS["8h"])) + 400
+        async with httpx.AsyncClient() as client:
+            for tf in sb.timeframes(specs):
+                live = par.logged_live_fires(logged, tf)
+                for sym in symbols:
+                    try:
+                        bars = await sb.fetch_bars(client, sym, now_ms, tf, limit=need)     # the live data path
+                        r = await client.get(sb.FAPI_KLINES, params={"symbol": sym, "interval": tf, "limit": 1500},
+                                             timeout=15)
+                        r.raise_for_status()
+                        back_bars = sb.bars_from_klines(sym, r.json(), now_ms, tf)
+                    except Exception as e:  # noqa: BLE001 - one coin failing must not stop the rest
+                        fetch_errors.append(f"{sym}@{tf}: {str(e)[:60]}")
+                        continue
+                    if bars is None or back_bars is None:
+                        fetch_errors.append(f"{sym}@{tf}: no bars")
+                        continue
+                    opens = par.recent_bar_opens(bars, days, now_ms)
+                    par.compare_signals(sym, tf, opens, {t: v for (s_, t), v in live.items() if s_ == sym},
+                                        par.fires_windowed(bars, specs, opens, par.LIVE_WINDOW),
+                                        par.fires_full(bars, specs, opens), par.fires_full(back_bars, specs, opens),
+                                        None, sp)
+        try:
+            live_positions = (json.loads(STATE_PATH.read_text()).get("positions") or {})
+        except (OSError, ValueError):
+            live_positions = {}
+        try:
+            marks = await self._perp_prices()
+        except Exception:  # noqa: BLE001
+            marks = {}
+        ex = par.execution_parity(live_positions, paper_rows, marks, delta_contract_for)
+        report = {"ran_at": now.isoformat(), "days": days, "summary": par.summary(sp, ex),
+                  "signal_faults": sp.faults, "expected_skips": sp.expected_skips[:30],
+                  "warmup_diffs": sp.warmup_diffs[:30], "venue_diffs": sp.venue_diffs[:30],
+                  "execution": ex, "fetch_errors": fetch_errors}
+        self._parity_last = report
+        try:
+            Path(self._PARITY_FILE).write_text(json.dumps(report, default=str))
+        except OSError:
+            pass
+        sm = report["summary"]
+        log.info("parity_check", **{k: v for k, v in sm.items()})
+        if alert and not sm["ok"]:
+            lines = [f"⚠️ Backtest = live check: {sm['signal_faults']} signal mismatch(es), "
+                     f"{sm['execution_problems']} execution problem(s) (last {days:g} days)"]
+            lines += [f"- {f['symbol']} {f['tf']} bar {f['bar_close']}: live {f['live']}, replay {f['replay']}"
+                      for f in sp.faults[:5]]
+            lines += [f"- {r['symbol']}: {p}" for r in ex for p in r["problems"]][:5]
+            try:
+                await self.notifier.send_text("\n".join(lines))
+            except Exception:  # noqa: BLE001
+                pass
+        return report
+
+    async def _live_book_guard(self, symbol: str, side: int, contracts: int, stop_frac: float,
+                               live_coins: set[str]) -> str:
+        """The live book's spread / depth refusal (execution/entry_guard.py), run for paper when it copies a coin live
+        would trade with real money on - so paper skips what live skips. '' when the order may go."""
+        if not (settings.delta_india_mode == "live" and settings.delta_india_live_orders
+                and not settings.delta_india_kill_switch and symbol.lower() in live_coins):
+            return ""
+        from execution.entry_guard import check as book_check
+        book = await self.delta_market.fetch_orderbook(symbol)
+        if book is None:
+            return "orderbook_unreadable"
+        g = book_check(book, "buy" if side > 0 else "sell", contracts, stop_frac,
+                       float(settings.delta_india_max_spread_pct), float(settings.delta_india_max_slippage_r))
+        return g.reason
 
     async def _mirror_delta_india(self, symbol: str, side_word: str, entry: float, stop: float,
                                   target: float, signal_type: str, usdt_inr: float = 83.0) -> bool:
@@ -3939,6 +4042,9 @@ class AppRunner:
         self.scheduler.add_job(
             self._delta_reconcile_job, "interval", minutes=5, id="delta_reconcile", max_instances=1,
             next_run_time=datetime.now(UTC) + timedelta(seconds=90))
+        self.scheduler.add_job(
+            self._parity_job, "cron", hour=0, minute=40,     # after the 00:00 4h / 8h bars have been scanned
+            id="parity_check", max_instances=1)
         self.scheduler.add_job(
             self._weekly_forward_report_job,
             "cron",

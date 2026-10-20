@@ -125,6 +125,21 @@ class DeltaMarket:
             self.last_error = f"{delta_sym}: {type(e).__name__}: {e}"
             return []
 
+    async def fetch_orderbook(self, symbol: str) -> dict | None:
+        """Public L2 order book for a Binance-style symbol (ADAUSDT -> ADAUSD); None when Delta did not answer."""
+        delta_sym = binance_to_delta_symbol(symbol)
+        try:
+            async with httpx.AsyncClient(timeout=self.timeout) as c:
+                r = await c.get(f"{self.base}/v2/l2orderbook/{delta_sym}", headers=self._headers())
+            if r.status_code != 200:
+                self.last_error = f"{delta_sym} book: HTTP {r.status_code}"
+                return None
+            got = r.json().get("result")
+            return got if isinstance(got, dict) else None
+        except Exception as e:  # noqa: BLE001
+            self.last_error = f"{delta_sym} book: {type(e).__name__}: {e}"
+            return None
+
     async def fetch_mark_prices(self) -> dict[str, float]:
         """Binance-shaped symbol -> mark price (BTCUSDT -> float). Cached 10s."""
         if time.time() - self._price_cache_at < 10 and self._price_cache:

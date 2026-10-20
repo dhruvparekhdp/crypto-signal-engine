@@ -103,7 +103,8 @@ class DeltaBook:
                  shadow_path: Path = SHADOW_PATH, state_path: Path = STATE_PATH,
                  kill_switch: bool = False, backstop_r: float = 0.5,
                  daily_loss_pct: float = 0.0, min_wallet_inr: float = 0.0, min_leverage: int = MIN_LEVERAGE,
-                 round_up_risk_pct: float = 0.0):
+                 round_up_risk_pct: float = 0.0, entry_guard: bool = False,
+                 max_spread_pct: float = 0.5, max_slip_r: float = 0.10):
         self.client = client
         self.mode = mode
         self.live_orders = live_orders
@@ -120,6 +121,9 @@ class DeltaBook:
         self.round_up_risk_pct = float(round_up_risk_pct)   # one contract allowed up to this share of the wallet
         self.retry_delay_s = 1.0
         self.rate_seen = False                    # True once usd_inr came from the exchange's own wallet rows
+        self.entry_guard = bool(entry_guard)      # spread / depth check before a real-money entry (entry_guard.py)
+        self.max_spread_pct = float(max_spread_pct)
+        self.max_slip_r = float(max_slip_r)
 
     @property
     def live(self) -> bool:
@@ -275,6 +279,23 @@ class DeltaBook:
                 return MirrorPlan(False, f"market_{status.split(' ')[0]}", plan.mode, plan.binance_symbol,
                                   plan.delta_symbol, plan.product_id, plan.side, plan.size, plan.entry, plan.stop,
                                   plan.target, plan.notional_usd, plan.risk_inr, plan.inr_available, plan.leverage)
+        if self.entry_guard:
+            # spread and depth (19 Oct 2026): no market order into a book that is wide, thin, or unreadable
+            from execution.entry_guard import check as book_check
+            try:
+                book = await self.client.orderbook(plan.delta_symbol)
+            except (DeltaError, httpx.HTTPError, ValueError) as e:
+                book, row["book_error"] = None, str(e)[:120]
+            g = book_check(book, plan.side, plan.size, abs(plan.entry - plan.stop) / plan.entry if plan.entry else 0.0,
+                           self.max_spread_pct, self.max_slip_r)
+            row["book"] = {"spread_pct": g.spread_pct, "slip_pct": g.slip_pct, "slip_r": g.slip_r}
+            if not g.ok:
+                reason = "orderbook_unreadable" if book is None else g.reason
+                row.update(placed=False, error=reason)
+                self._append_shadow(row)
+                return MirrorPlan(False, reason, plan.mode, plan.binance_symbol, plan.delta_symbol, plan.product_id,
+                                  plan.side, plan.size, plan.entry, plan.stop, plan.target, plan.notional_usd,
+                                  plan.risk_inr, plan.inr_available, plan.leverage)
         if hasattr(self.client, "set_leverage"):
             try:
                 await self.client.set_leverage(plan.product_id, plan.leverage)

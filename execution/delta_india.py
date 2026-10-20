@@ -298,6 +298,12 @@ class DeltaIndia:
             raise DeltaError(r.status_code, data)
         return str((data.get("result") or {}).get("trading_status") or "")
 
+    async def orderbook(self, symbol: str) -> dict:
+        """Public L2 order book of one contract: {'buy': [{'price','size'}, ...], 'sell': [...]}, sizes in contracts
+        (execution/entry_guard.py reads it before a live market entry)."""
+        got = await self._request("GET", f"/v2/l2orderbook/{symbol.upper()}", signed=False)
+        return got if isinstance(got, dict) else {}
+
     async def set_leverage(self, product_id: int, leverage: int) -> dict:
         """Order leverage for one product on this account (POST /v2/products/{id}/orders/leverage). Delta keeps it
         per product per account; a live account's default can be 100x+ (17 Oct 2026 review)."""

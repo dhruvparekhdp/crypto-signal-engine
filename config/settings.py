@@ -332,6 +332,10 @@ class Settings(BaseSettings):
     # 18 Oct 2026, owner: "i know amount 3% risk, but try to fit some more coins". When 3% buys less than one contract,
     # take ONE contract if that risks at most this share of the wallet (0 = never round up). Same rule on paper.
     delta_india_round_up_risk_pct: float = 0.05
+    # Spread / depth guard before a real-money market entry (execution/entry_guard.py, 19 Oct 2026). Normal spreads on
+    # the live coins are 0.00-0.09%; the guard is for abnormal books, not a filter on ordinary trades.
+    delta_india_max_spread_pct: float = 0.5
+    delta_india_max_slippage_r: float = 0.10
     # 14 Oct 2026 owner: strong-confidence intraday trades in paper too, with their own limits so they cannot crowd
     # out the swing book: confidence >= intraday_min_confidence, at most intraday_max_open open, margin <= 10%
     paper_open_families: str = "swing"          # production: "swing,intraday" on /settings (owner 14 Oct)
