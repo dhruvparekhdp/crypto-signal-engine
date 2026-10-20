@@ -367,7 +367,7 @@
       var sm = rep.summary || {};
       ctx.right("last run " + U.stamp(rep.ran_at) + " · last " + rep.days + " days");
       var why = '<p class="mono small dim" style="margin:0 0 10px">Every 4h / 8h bar: what live logged vs the same computation re-run on the same Delta bars ' +
-        "(a mismatch is a fault), vs a longer warm-up, and vs the backtest's Binance bars. Every live position vs its paper copy.</p>";
+        "(a mismatch is a fault), vs a longer warm-up, and vs the backtest's Binance bars. Every live position vs its paper copy; size is compared as risk in % of each book's own wallet.</p>";
       var tiles = C.tiles([
         ["RESULT", sm.ok ? "ALL MATCH" : "CHECK", sm.ok ? "live did what the backtest code says" : "see the list below", sm.ok ? "up" : "dn"],
         ["BARS COMPARED", String(sm.signals_compared), (sm.live_fired || 0) + " live signals, " + (sm.replay_fired || 0) + " in the replay"],
@@ -386,7 +386,9 @@
         { label: "COIN", w: "80px", cell: function (r) { return "<b>" + e(String(r.symbol).replace(/USD$/, "")) + "</b> " + C.side(r.side); } },
         { label: "ENTRY VS PAPER", w: "110px", cell: function (r) { return r.entry_gap_bps == null ? "—" : e((r.entry_gap_bps > 0 ? "+" : "") + r.entry_gap_bps + " bps"); } },
         { label: "STOP / TARGET", w: "120px", cell: function (r) { return e("stop " + (r["initial stop gap R"] == null ? "—" : r["initial stop gap R"] + "R") + " · tgt " + (r["target gap R"] == null ? "—" : r["target gap R"] + "R")); } },
-        { label: "CONTRACTS", w: "100px", cell: function (r) { return r.contracts ? e(r.contracts.live + " live / " + r.contracts.paper + " paper") : "—"; } },
+        { label: "SIZE · RISK OF WALLET", w: "170px", cell: function (r) { var c = r.contracts || {}, k = r.risk_pct || {};
+            return e((c.live != null ? c.live + " ct" : "—") + (k.live != null ? " (" + k.live + "%)" : "") + " live") + '<br><span class="dim tiny">' +
+              e((c.paper != null ? c.paper + " ct" : "—") + (k.paper != null ? " (" + k.paper + "%)" : "") + " paper, own wallet") + "</span>"; } },
         { label: "R NOW", w: "120px", cell: function (r) { return r.r_now ? e(r.r_now.live.toFixed(2) + " live / " + r.r_now.paper.toFixed(2) + " paper") : "—"; } },
         { label: "PROBLEMS", w: "minmax(0,1.4fr)", cell: function (r) { return r.problems.length ? '<span class="dn small">' + e(r.problems.join(" · ")) + "</span>" : '<span class="up small">none</span>'; } }
       ], rep.execution, { minWidth: 820 }) : C.empty("No live positions to compare.");

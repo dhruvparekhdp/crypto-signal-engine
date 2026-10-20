@@ -3,6 +3,7 @@ from datetime import UTC, datetime
 from types import SimpleNamespace
 
 import numpy as np
+import pytest
 
 from analysis import parity as par
 from analysis.lab.data import INTERVAL_MS, Bars
@@ -69,14 +70,18 @@ LIVE = {"XRPUSD": {"side": "sell", "size": 2, "entry": 1.26302, "entry_fill": "1
 
 
 def test_a_live_position_that_matches_its_paper_copy_has_no_problems():
-    rows = par.execution_parity(LIVE, [_paper()], {"XRPUSDT": 1.3032}, lambda s: 1.0)
+    # 20 Oct 2026 production: 2 live contracts on Rs500 and 30 paper contracts on paper's larger wallet are one trade
+    rows = par.execution_parity(LIVE, [_paper(coin_qty=30.0, usdt_inr=85.0)], {"XRPUSDT": 1.3032}, lambda s: 1.0,
+                                live_wallet_inr=499.8, paper_equity_inr=5500.0)
     r = rows[0]
-    assert r["problems"] == [] and r["contracts"] == {"live": 2, "paper": 2.0} and abs(r["entry_gap_bps"]) < 1
+    assert r["problems"] == [] and r["contracts"] == {"live": 2, "paper": 30.0} and abs(r["entry_gap_bps"]) < 1
+    assert r["risk_pct"]["live"] == pytest.approx(2.15, abs=0.02) and r["risk_pct"]["paper"] == pytest.approx(2.94, abs=0.02)
 
 
-def test_size_stop_and_missing_paper_are_problems():
-    rows = par.execution_parity(LIVE, [_paper(coin_qty=3.0, stop_price=1.30)], {}, lambda s: 1.0)
-    assert any(p.startswith("size") for p in rows[0]["problems"])
+def test_risk_over_the_cap_stop_gaps_and_missing_paper_are_problems():
+    rows = par.execution_parity(LIVE, [_paper(coin_qty=300.0, stop_price=1.30, usdt_inr=85.0)], {}, lambda s: 1.0,
+                                live_wallet_inr=499.8, paper_equity_inr=5500.0)
+    assert any(p.startswith("paper risks") for p in rows[0]["problems"])          # 29% of the wallet
     assert any(p.startswith("current stop") for p in rows[0]["problems"])          # ladder moved paper, not live
     assert par.execution_parity(LIVE, [], {}, lambda s: 1.0)[0]["problems"] == ["no open paper position on this coin and side"]
 

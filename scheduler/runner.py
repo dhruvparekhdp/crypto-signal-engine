@@ -1756,7 +1756,7 @@ class AppRunner:
 
     _PARITY_FILE = "data/parity_report.json"
 
-    async def _parity_job(self, days: float = 7.0, alert: bool = True) -> dict:
+    async def _parity_job(self, days: float = 2.0, alert: bool = True) -> dict:
         """Backtest = live check (analysis/parity.py, owner 19 Oct 2026). Swing signals: every closed 4h / 8h bar of
         the last `days`, the live log against the live computation re-run on the same Delta bars (a mismatch is a
         scanner fault), against a longer warm-up on the same bars, and against Binance with long history (the
@@ -1804,14 +1804,19 @@ class AppRunner:
                                         par.fires_full(bars, specs, opens), par.fires_full(back_bars, specs, opens),
                                         None, sp)
         try:
-            live_positions = (json.loads(STATE_PATH.read_text()).get("positions") or {})
+            live_state = json.loads(STATE_PATH.read_text())
         except (OSError, ValueError):
-            live_positions = {}
+            live_state = {}
+        live_positions = live_state.get("positions") or {}
+        live_wallet = float((live_state.get("day") or {}).get("start_inr") or 0.0)
+        paper_equity = (float(running[-1].wallet) + sum(float(p.margin) for p in paper_rows)) if running else 0.0
         try:
             marks = await self._perp_prices()
         except Exception:  # noqa: BLE001
             marks = {}
-        ex = par.execution_parity(live_positions, paper_rows, marks, delta_contract_for)
+        ex = par.execution_parity(live_positions, paper_rows, marks, delta_contract_for, live_wallet_inr=live_wallet,
+                                  paper_equity_inr=paper_equity, rate=self._delta_usd_inr(),
+                                  max_risk_pct=max(settings.delta_india_risk_pct, settings.delta_india_round_up_risk_pct) * 100)
         report = {"ran_at": now.isoformat(), "days": days, "summary": par.summary(sp, ex),
                   "signal_faults": sp.faults, "expected_skips": sp.expected_skips[:30],
                   "warmup_diffs": sp.warmup_diffs[:30], "venue_diffs": sp.venue_diffs[:30],

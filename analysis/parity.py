@@ -144,8 +144,11 @@ def compare_signals(symbol: str, tf: str, bar_opens: list[int], live: dict[int, 
                 out.venue_diffs.append({**cell, "backtest": _desc(back[t]), "delta": _desc(warm[t])})
 
 
-def execution_parity(live_positions: dict, paper_rows: list, marks: dict, contract_of) -> list[dict]:
-    """One row per live position, against the open paper swing position on the same coin and side."""
+def execution_parity(live_positions: dict, paper_rows: list, marks: dict, contract_of, live_wallet_inr: float = 0.0,
+                     paper_equity_inr: float = 0.0, rate: float = 85.0, max_risk_pct: float = 5.0) -> list[dict]:
+    """One row per live position, against the open paper swing position on the same coin and side. Size is compared
+    as risk in % of each book's own wallet (paper has its own, larger wallet: 130 paper contracts and 11 live ones are
+    the same 3% trade); whole contracts round live down, so only a risk above the round-up cap is a problem."""
     out = []
     for dsym, rec in (live_positions or {}).items():
         sym = str(rec.get("binance_symbol") or "").lower()
@@ -175,10 +178,15 @@ def execution_parity(live_positions: dict, paper_rows: list, marks: dict, contra
                 row["problems"].append(f"{key}: live {float(live_v):.6g} vs paper {float(paper_v):.6g} ({gap:.2f}R)")
         cv = contract_of(sym) or 0
         if cv:
-            paper_ct = round(float(paper.coin_qty) / cv, 6)
-            row["contracts"] = {"live": rec.get("size"), "paper": paper_ct}
-            if rec.get("size") is not None and abs(float(rec["size"]) - paper_ct) > 1e-6:
-                row["problems"].append(f"size: live {rec['size']} vs paper {paper_ct:g} contracts")
+            row["contracts"] = {"live": rec.get("size"), "paper": round(float(paper.coin_qty) / cv, 4)}
+        if cv and rec.get("size") and live_wallet_inr and paper_equity_inr:
+            live_risk = float(rec["size"]) * cv * abs(fill - float(rec.get("init_stop") or fill)) * rate
+            paper_risk = float(paper.coin_qty) * risk * float(getattr(paper, "usdt_inr", rate) or rate)
+            lr, pr = live_risk / live_wallet_inr * 100, paper_risk / paper_equity_inr * 100
+            row["risk_pct"] = {"live": round(lr, 2), "paper": round(pr, 2)}
+            for who, v in (("live", lr), ("paper", pr)):
+                if v > max_risk_pct + 0.1:
+                    row["problems"].append(f"{who} risks {v:.1f}% of its wallet (cap {max_risk_pct:g}%)")
         mark = marks.get(sym.upper())
         if mark and risk and fill:
             live_r = side * (mark - fill) / abs(fill - float(rec.get("init_stop") or 0) or risk)
