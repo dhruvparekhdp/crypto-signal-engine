@@ -356,7 +356,45 @@
       ], (d.journal || []).slice().reverse(), { minWidth: 520, empty: "No live orders yet." });
     }
   });
-  UI.view("book/live", [["live-strip"], ["live-positions"], [{ w: "live-orders", size: "grow" }], ["live-journal"]]);
+  // backtest = live check (19 Oct 2026): analysis/parity.py, run daily at 00:40 UTC and on demand
+  UI.widget("live-parity", {
+    title: "BACKTEST = LIVE CHECK", uses: ["parity"],
+    on: { run: function (el, ev, t) { t.disabled = true; t.textContent = "Running…"; UI.Net.get("/api/parity?run=1").then(function () { UI.Store.fetch("parity"); }); } },
+    render: function (el, D, ctx) {
+      var d = D.parity; if (!d) { el.innerHTML = C.state(D, "parity"); return; }
+      var rep = d.report, btn = '<button class="mini" data-act="run"' + (d.running ? " disabled>Running…" : ">Run now") + "</button>";
+      if (!rep) { el.innerHTML = '<div class="toolbar">' + btn + "</div>" + C.empty("No check has run yet. It runs every day at 00:40 UTC."); return; }
+      var sm = rep.summary || {};
+      ctx.right("last run " + U.stamp(rep.ran_at) + " · last " + rep.days + " days");
+      var why = '<p class="mono small dim" style="margin:0 0 10px">Every 4h / 8h bar: what live logged vs the same computation re-run on the same Delta bars ' +
+        "(a mismatch is a fault), vs a longer warm-up, and vs the backtest's Binance bars. Every live position vs its paper copy.</p>";
+      var tiles = C.tiles([
+        ["RESULT", sm.ok ? "ALL MATCH" : "CHECK", sm.ok ? "live did what the backtest code says" : "see the list below", sm.ok ? "up" : "dn"],
+        ["BARS COMPARED", String(sm.signals_compared), (sm.live_fired || 0) + " live signals, " + (sm.replay_fired || 0) + " in the replay"],
+        ["SIGNAL MISMATCHES", String(sm.signal_faults), (sm.expected_skips || 0) + " skipped on purpose", sm.signal_faults ? "dn" : "up"],
+        ["WARM-UP GAPS", String(sm.warmup_diffs), "500 bars vs full history", sm.warmup_diffs ? "dn" : "up"],
+        ["SAME AS BACKTEST", sm.venue_agreement_pct == null ? "—" : sm.venue_agreement_pct + "%", "Delta vs Binance bars"],
+        ["LIVE POSITIONS", String(sm.positions_checked), (sm.execution_problems || 0) + " problems", sm.execution_problems ? "dn" : "up"]]);
+      var faults = (rep.signal_faults || []).length ? C.table([
+        { label: "COIN", w: "70px", cell: function (f) { return "<b>" + e(String(f.symbol).replace(/USDT$/, "")) + "</b>"; } },
+        { label: "TF", w: "50px", cell: function (f) { return e(f.tf); } },
+        { label: "BAR CLOSE", w: "110px", cell: function (f) { return e(f.bar_close); } },
+        { label: "LIVE LOGGED", w: "minmax(0,1fr)", cell: function (f) { return e(f.live); } },
+        { label: "REPLAY SAYS", w: "minmax(0,1fr)", cell: function (f) { return e(f.replay); } }
+      ], rep.signal_faults, { minWidth: 560 }) : "";
+      var ex = (rep.execution || []).length ? C.table([
+        { label: "COIN", w: "80px", cell: function (r) { return "<b>" + e(String(r.symbol).replace(/USD$/, "")) + "</b> " + C.side(r.side); } },
+        { label: "ENTRY VS PAPER", w: "110px", cell: function (r) { return r.entry_gap_bps == null ? "—" : e((r.entry_gap_bps > 0 ? "+" : "") + r.entry_gap_bps + " bps"); } },
+        { label: "STOP / TARGET", w: "120px", cell: function (r) { return e("stop " + (r["initial stop gap R"] == null ? "—" : r["initial stop gap R"] + "R") + " · tgt " + (r["target gap R"] == null ? "—" : r["target gap R"] + "R")); } },
+        { label: "CONTRACTS", w: "100px", cell: function (r) { return r.contracts ? e(r.contracts.live + " live / " + r.contracts.paper + " paper") : "—"; } },
+        { label: "R NOW", w: "120px", cell: function (r) { return r.r_now ? e(r.r_now.live.toFixed(2) + " live / " + r.r_now.paper.toFixed(2) + " paper") : "—"; } },
+        { label: "PROBLEMS", w: "minmax(0,1.4fr)", cell: function (r) { return r.problems.length ? '<span class="dn small">' + e(r.problems.join(" · ")) + "</span>" : '<span class="up small">none</span>'; } }
+      ], rep.execution, { minWidth: 820 }) : C.empty("No live positions to compare.");
+      el.innerHTML = '<div class="toolbar">' + btn + "</div>" + why + tiles + (faults ? '<h4 class="mono small" style="margin:14px 0 6px">SIGNAL MISMATCHES</h4>' + faults : "") +
+        '<h4 class="mono small" style="margin:14px 0 6px">LIVE POSITIONS VS PAPER</h4>' + ex;
+    }
+  });
+  UI.view("book/live", [["live-strip"], ["live-positions"], [{ w: "live-orders", size: "grow" }], ["live-parity"], ["live-journal"]]);
 
   // ------------------------------------------------------------- session guard
   function guard(trades) {
