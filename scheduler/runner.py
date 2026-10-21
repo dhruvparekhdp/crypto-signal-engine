@@ -1754,6 +1754,74 @@ class AppRunner:
                     pass
         self._delta_read_fails = seen
 
+    _BRACKET_OPEN = "data/bracket_book.json"
+    _BRACKET_CLOSED = "data/bracket_trades.jsonl"
+
+    async def _bracket_paper_job(self, now: datetime | None = None) -> dict:
+        """Channel-style bracket on every new signal, paper research only (analysis/bracket_book.py; owner 21 Oct 2026:
+        "add this types of trading in paper for now, let's review it for 2-5 days"). Opens one virtual trade per new
+        logged signal (the pick, its mirror, swing), then walks each open one forward on closed 1m bars - in-memory
+        candles, or one Delta/Binance fetch per coin when memory has a hole (after a restart). Closed trades go to
+        data/bracket_trades.jsonl. Nothing here places an order or touches the paper wallet."""
+        if not settings.bracket_paper_enabled:
+            return {}
+        from analysis import bracket_book as bb
+        now = (now or datetime.now(UTC)).replace(tzinfo=None)
+        path = Path(self._BRACKET_OPEN)
+        try:
+            book = json.loads(path.read_text())
+        except (OSError, ValueError):
+            book = {"last_id": None, "open": [], "started": now.isoformat()}
+        async with AsyncSessionFactory() as session:
+            repo = Repository(session)
+            if book["last_id"] is None:                  # first run: start from the newest signal, not history
+                latest = await repo.crypto_signals_between(2, limit=1, include_suppressed=True)
+                book["last_id"] = latest[0].id if latest else 0
+                new = []
+            else:
+                new = await repo.crypto_signals_after(book["last_id"])
+        for r in new:
+            book["last_id"] = max(book["last_id"], r.id)
+            if r.suppressed_by or not r.current_price or r.current_price <= 0:
+                continue
+            book["open"].append(bb.open_trade(
+                r.id, r.symbol, 1 if r.direction == "long" else -1, r.signal_type,
+                "mirror" if str(getattr(r, "candidate_role", "") or "").startswith("mirror") else "primary",
+                "swing" if getattr(r, "trade_mode", "") == "swing" else "intraday",
+                r.timestamp, r.current_price, r.confidence or 0.0))
+        states = {st.symbol: st for st in await self.crypto_store.get_all()}
+        fetched: dict[str, list] = {}
+        still, closed = [], []
+        for tr in book["open"]:
+            sym = tr["symbol"].lower()
+            last = datetime.fromisoformat(tr["last_ts"])
+            st = states.get(sym)
+            mem = [c for c in ((st.candles_1m if st else None) or []) if getattr(c, "is_closed", True)]
+            first = min((c.timestamp.replace(tzinfo=None) if c.timestamp.tzinfo else c.timestamp for c in mem),
+                        default=None)
+            bars = mem
+            if first is None or first > last + timedelta(minutes=2):          # a hole: fetch once per coin
+                if sym not in fetched:
+                    oldest = min(datetime.fromisoformat(t["last_ts"]) for t in book["open"]
+                                 if t["symbol"].lower() == sym)
+                    fetched[sym] = await self._signal_bars(sym, oldest, now)
+                bars = fetched[sym]
+            if not bars and now - last > timedelta(hours=24):
+                tr.update(status="closed", exit="no data")
+                closed.append(tr)
+                continue
+            bb.advance(tr, bars)
+            (closed if tr["status"] == "closed" else still).append(tr)
+        book["open"] = still
+        if closed:
+            with open(self._BRACKET_CLOSED, "a") as fh:
+                for tr in closed:
+                    fh.write(json.dumps(tr) + "\n")
+        tmp = path.with_suffix(".tmp")
+        tmp.write_text(json.dumps(book))
+        tmp.replace(path)
+        return {"new": len(new), "open": len(still), "closed": len(closed)}
+
     _PARITY_FILE = "data/parity_report.json"
 
     async def _parity_job(self, days: float = 2.0, alert: bool = True) -> dict:
@@ -4050,6 +4118,9 @@ class AppRunner:
         self.scheduler.add_job(
             self._parity_job, "cron", hour=0, minute=40,     # after the 00:00 4h / 8h bars have been scanned
             id="parity_check", max_instances=1)
+        self.scheduler.add_job(
+            self._bracket_paper_job, "interval", minutes=2, id="bracket_paper", max_instances=1,
+            next_run_time=datetime.now(UTC) + timedelta(seconds=75))
         self.scheduler.add_job(
             self._weekly_forward_report_job,
             "cron",

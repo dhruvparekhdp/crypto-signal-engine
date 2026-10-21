@@ -1108,6 +1108,12 @@ class Repository:
 
     # ── Signal history and accuracy ───────────────────────────────────────
 
+    async def crypto_signals_after(self, last_id: int, limit: int = 1000) -> list[CryptoSignalLog]:
+        """Signals logged after `last_id`, oldest first (the bracket paper book reads each new signal once)."""
+        res = await self.session.execute(select(CryptoSignalLog).where(CryptoSignalLog.id > last_id)
+                                         .order_by(CryptoSignalLog.id).limit(limit))
+        return list(res.scalars().all())
+
     async def crypto_signals_between(self, newer_than_days: int,
                                      older_than_days: int = 0,
                                      limit: int = 400,

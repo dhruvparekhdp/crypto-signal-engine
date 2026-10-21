@@ -132,6 +132,7 @@
   Store.def("golive", "/api/golive", 20000);
   Store.def("delta_live", "/api/delta/live", 5000);
   Store.def("parity", "/api/parity", 30000);
+  Store.def("bracket", "/api/bracket", 60000);
   Store.def("history7", "/api/signals/history?days=7&limit=3000", 60000);
   Store.def("archive", "/api/signals/history?days=365&before=7", 300000);
   Store.def("accuracy", "/api/signals/accuracy", 300000);

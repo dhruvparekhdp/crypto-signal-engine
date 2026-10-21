@@ -338,6 +338,9 @@ class Settings(BaseSettings):
     delta_india_round_up_risk_pct: float = 0.10
     # Spread / depth guard before a real-money market entry (execution/entry_guard.py, 19 Oct 2026). Normal spreads on
     # the live coins are 0.00-0.09%; the guard is for abnormal books, not a filter on ordinary trades.
+    # Channel-style bracket, paper research only (analysis/bracket_book.py, owner 21 Oct 2026): every logged signal
+    # gets a virtual -5% stop / +1..+10.7% four-target trade, tracked on 1m bars; no orders, no paper wallet
+    bracket_paper_enabled: bool = True
     delta_india_max_spread_pct: float = 0.5
     delta_india_max_slippage_r: float = 0.10
     # 14 Oct 2026 owner: strong-confidence intraday trades in paper too, with their own limits so they cannot crowd

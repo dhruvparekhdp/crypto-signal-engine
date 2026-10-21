@@ -281,7 +281,49 @@
         ], rows, { minWidth: 1100 });
     }
   });
-  UI.view("book/paper", [["paper-strip"], ["paper-open"], ["paper-demo"], ["paper-history"]]);
+  // channel-style bracket, paper research only (owner, 21 Oct 2026): does a +1% first target / -5% stop make money on our signals?
+  UI.widget("paper-bracket", {
+    title: "CHANNEL-STYLE BRACKET · PAPER RESEARCH", uses: ["bracket"],
+    render: function (el, D, ctx) {
+      var d = D.bracket; if (!d) { el.innerHTML = C.state(D, "bracket"); return; }
+      var S = d.summary || {}, A = S.all, pl = d.plan || {};
+      ctx.right((d.started ? "since " + U.stamp(d.started) + " · " : "") + d.open + " open");
+      var intro = '<p class="mono small dim" style="margin:0 0 10px">Every signal gets a virtual trade with a Telegram channel\'s bracket: stop −' + pl.stop_pct + "%, targets " +
+        (pl.targets_pct || []).map(function (t) { return "+" + t + "%"; }).join(" / ") + " (a quarter at each), stop to entry after the first, closed after " + pl.max_hold_hours +
+        " h. No orders, no wallet. Fees " + pl.cost_pct + "% round trip. Our pick vs its mirror (same setup, other side) shows whether the entries add anything to the bracket's built-in ~81% first-target rate.</p>";
+      if (!A) { el.innerHTML = intro + C.empty("No closed bracket trades yet: the first ones close as targets, stops or the 48 h limit are reached."); return; }
+      var tiles = C.tiles([
+        ["CLOSED", String(A.n), d.open + " still open"],
+        ["FIRST TARGET HIT", A.tp1_pct + "%", "random entries: ~81%"],
+        ["ENDED IN PROFIT", A.profit_pct + "%", A.full_stops + " full −5% stops"],
+        ["AVG AFTER FEES", (A.avg_net_pct > 0 ? "+" : "") + A.avg_net_pct + "%", "of price per trade", A.avg_net_pct >= 0 ? "up" : "dn"],
+        ["AVG ROI AT " + pl.roi_leverage + "×", (A.avg_roi_5x > 0 ? "+" : "") + A.avg_roi_5x + "%", "on margin, per trade", A.avg_roi_5x >= 0 ? "up" : "dn"]]);
+      var groups = [["Our picks (intraday)", "role:primary"], ["Their mirrors (control)", "role:mirror"], ["Swing signals", "source:swing"], ["Intraday all", "source:intraday"]];
+      var coins = Object.keys(S).filter(function (k) { return k.indexOf("symbol:") === 0; }).sort(function (a, b) { return S[b].n - S[a].n; });
+      var rows = groups.concat(coins.map(function (k) { return [k.replace("symbol:", "").replace("USDT", ""), k]; })).filter(function (g) { return S[g[1]]; });
+      var table = C.table([
+        { label: "GROUP", w: "minmax(0,1.4fr)", cell: function (g) { return "<b>" + e(g[0]) + "</b>"; } },
+        { label: "TRADES", w: "70px", cell: function (g) { return e(S[g[1]].n); } },
+        { label: "1ST TARGET", w: "90px", cell: function (g) { return e(S[g[1]].tp1_pct + "%"); } },
+        { label: "IN PROFIT", w: "90px", cell: function (g) { return e(S[g[1]].profit_pct + "%"); } },
+        { label: "FULL STOPS", w: "90px", cell: function (g) { return e(S[g[1]].full_stops); } },
+        { label: "AVG AFTER FEES", w: "120px", cell: function (g) { return C.signed(S[g[1]].avg_net_pct, function (x) { return (x > 0 ? "+" : "") + x.toFixed(3) + "%"; }); } },
+        { label: "ROI AT 5×", w: "100px", cell: function (g) { return C.signed(S[g[1]].avg_roi_5x, function (x) { return (x > 0 ? "+" : "") + x.toFixed(2) + "%"; }); } }
+      ], rows, { minWidth: 680 });
+      var recent = C.table([
+        { label: "CLOSED", w: "110px", cell: function (r) { return '<span class="dim">' + e(U.stamp(r.closed_ts)) + "</span>"; } },
+        { label: "COIN", w: "70px", cell: function (r) { return "<b>" + e(String(r.symbol).replace("USDT", "")) + "</b>"; } },
+        { label: "SIDE", w: "76px", cell: function (r) { return C.side(r.side > 0 ? "long" : "short"); } },
+        { label: "KIND", w: "90px", cell: function (r) { return '<span class="dim">' + e(r.source === "swing" ? "swing" : r.role) + "</span>"; } },
+        { label: "EXIT", w: "minmax(0,1fr)", cell: function (r) { return e(r.exit + (r.legs ? " · " + r.legs + "/4 targets" : "")); } },
+        { label: "AFTER FEES", w: "100px", cell: function (r) { return C.signed(r.net_pct, function (x) { return (x > 0 ? "+" : "") + x.toFixed(2) + "%"; }); } },
+        { label: "ROI 5×", w: "80px", cell: function (r) { return C.signed(r.roi_5x_pct, function (x) { return (x > 0 ? "+" : "") + x.toFixed(1) + "%"; }); } }
+      ], d.recent || [], { minWidth: 640 });
+      el.innerHTML = intro + tiles + '<h4 class="mono small" style="margin:14px 0 6px">BY GROUP</h4>' + table +
+        '<h4 class="mono small" style="margin:14px 0 6px">LATEST CLOSED</h4>' + recent;
+    }
+  });
+  UI.view("book/paper", [["paper-strip"], ["paper-open"], ["paper-bracket"], ["paper-demo"], ["paper-history"]]);
 
   // ------------------------------------------------------------- live, real money (owner, 18 Oct 2026)
   // paise, like the Delta app: a ₹500 wallet rounded to ₹500 hid the ₹0.21 that was really gone (19 Oct 2026)
