@@ -1,0 +1,168 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Swing Test Monitor</title>
+<style>
+:root{--bg:#0e1319;--card:#161e27;--fg:#e9eef4;--mut:#8b9bad;--line:#253140;--ok:#45c48a;--warn:#e6ad45;--bad:#ee6b67;--acc:#5ab3e6;--soft:#1e2a37}
+@media (prefers-color-scheme:light){:root{--bg:#f3f5f8;--card:#fff;--fg:#17202b;--mut:#5b6776;--line:#dde2e8;--ok:#1d7a4b;--warn:#9c6300;--bad:#b3322c;--acc:#0b6da6;--soft:#eef2f6}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--fg);font:15px/1.5 system-ui,-apple-system,"Segoe UI",sans-serif}
+.wrap{max-width:1120px;margin:0 auto;padding:16px 16px 60px}
+h1{font-size:21px;margin:0}h2{font-size:12px;letter-spacing:.09em;text-transform:uppercase;color:var(--mut);margin:24px 0 8px}
+.sub{color:var(--mut);font-size:12.5px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:14px;margin-bottom:10px;min-width:0}
+.row{display:flex;gap:10px;align-items:center;justify-content:space-between;flex-wrap:wrap}
+.pills{display:flex;gap:6px;flex-wrap:wrap}
+.pill{font-size:11.5px;font-weight:700;padding:3px 10px;border-radius:99px;background:var(--soft);color:var(--mut);white-space:nowrap}
+.pill.ok{color:var(--ok)}.pill.bad{color:var(--bad)}.pill.run{color:var(--acc)}
+.bar{height:10px;background:var(--line);border-radius:6px;overflow:hidden;margin:8px 0 4px}
+.bar i{display:block;height:100%;background:linear-gradient(90deg,var(--acc),var(--ok));transition:width .8s}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px}
+.kpi{background:var(--soft);border-radius:10px;padding:10px 12px;min-width:0}
+.kpi .k{color:var(--mut);font-size:11.5px}.kpi .v{font-size:21px;font-weight:700;line-height:1.25}
+.cols{display:grid;grid-template-columns:repeat(auto-fit,minmax(330px,1fr));gap:10px}
+.tw{overflow-x:auto}
+table{width:100%;border-collapse:collapse;font-size:12.5px}
+th,td{padding:6px 7px;border-bottom:1px solid var(--line);text-align:left;white-space:nowrap}
+th{color:var(--mut);font-weight:600;font-size:11.5px}
+td.n,th.n{text-align:right;font-variant-numeric:tabular-nums}
+.pos{color:var(--ok)}.neg{color:var(--bad)}.dim{color:var(--mut)}
+.seg{display:inline-flex;border:1px solid var(--line);border-radius:8px;overflow:hidden}
+.seg button{all:unset;cursor:pointer;padding:4px 10px;font-size:12px;color:var(--mut)}
+.seg button.on{background:var(--acc);color:var(--bg);font-weight:700}
+.note{font-size:12.5px;color:var(--mut);margin:6px 0 0}
+.feed div{padding:7px 0;border-bottom:1px solid var(--line);font-size:13px}
+.feed div:last-child{border-bottom:0}
+.tag{font-size:10.5px;font-weight:700;padding:1px 7px;border-radius:5px;margin-right:6px}
+.tag.TAKE{background:rgba(69,196,138,.15);color:var(--ok)}.tag.SKIP{background:rgba(238,107,103,.15);color:var(--bad)}
+@media (max-width:520px){.kpi .v{font-size:18px}h1{font-size:18px}}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="row">
+    <div><h1>Swing test monitor</h1><div class="sub" id="upd">loading…</div></div>
+    <div class="pills" id="pills"></div>
+  </div>
+
+  <h2>1 · Setup: qwen3:14b to the ThinkPad</h2>
+  <div class="card" id="setup"></div>
+
+  <h2>2 · Local LLM reviewer (ThinkPad)</h2>
+  <div class="card" id="llm"></div>
+
+  <h2>3 · Live simulator results (₹500 start, live rules)</h2>
+  <div class="card">
+    <div class="row"><div class="sub" id="simmeta"></div>
+      <div class="seg" id="per"><button data-p="all" class="on">All years</button><button data-p="2021-24">2021-24</button><button data-p="2025-26">2025-26</button></div></div>
+    <div class="tw"><table id="risks"></table></div>
+    <p class="note">All 8 strategies together. Won/lost = closed trades in profit/loss after Delta fees. Drawdown is measured on closed trades. Higher risk compounds faster and falls harder; the ₹500 wallet skips signals whose one contract would risk too much.</p>
+  </div>
+  <div class="cols">
+    <div class="card"><div class="sub" style="margin-bottom:6px">Each strategy alone, ₹500, all years</div><div class="tw"><table id="singles"></table></div></div>
+    <div class="card"><div class="sub" style="margin-bottom:6px">Best combinations picked on 2021-24 only, then 2025-26 (unseen)</div><div class="tw"><table id="best"></table></div></div>
+  </div>
+
+  <h2>4 · Real live trades (production)</h2>
+  <div class="card" id="live"></div>
+</div>
+<script>
+var S = {}, period = "all";
+function $(id) { return document.getElementById(id); }
+function esc(s) { return String(s == null ? "" : s).replace(/[&<>"]/g, function (c) { return {"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;"}[c]; }); }
+function inr(x) { return x == null ? "—" : "₹" + Math.round(x).toLocaleString("en-IN"); }
+function sgn(x, d, suf) { if (x == null) return "—"; var v = (x > 0 ? "+" : "") + Number(x).toFixed(d == null ? 2 : d) + (suf || ""); return '<span class="' + (x > 0 ? "pos" : x < 0 ? "neg" : "") + '">' + v + "</span>"; }
+function ago(t) { if (!t) return "never"; var s = Math.max(0, S.now - t); return s < 90 ? Math.round(s) + " s ago" : s < 5400 ? Math.round(s / 60) + " min ago" : (s / 3600).toFixed(1) + " h ago"; }
+function kpi(k, v, sub) { return '<div class="kpi"><div class="k">' + esc(k) + '</div><div class="v">' + v + "</div>" + (sub ? '<div class="sub">' + sub + "</div>" : "") + "</div>"; }
+function bar(p) { return '<div class="bar"><i style="width:' + Math.max(0, Math.min(100, p)).toFixed(1) + '%"></i></div>'; }
+
+function render() {
+  $("upd").textContent = "updated " + new Date(S.now * 1000).toLocaleTimeString() + " · refreshes every 5 s";
+  var tp = S.thinkpad || {}, dl = S.download || {}, llm = S.llm, tr = S.transfer || {};
+  var installed = (tp.models || []).indexOf("qwen3:14b") >= 0;
+  $("pills").innerHTML = '<span class="pill ' + (tp.up ? "ok" : "bad") + '">ThinkPad ' + (tp.up ? "connected" : "not answering") + "</span>" +
+    '<span class="pill ' + (installed ? "ok" : "run") + '">qwen3:14b ' + (installed ? "installed" : "being set up") + "</span>" +
+    '<span class="pill ' + (llm && llm.done < llm.total ? "run" : llm ? "ok" : "") + '">reviewer ' + (llm ? llm.done + " / " + llm.total : "not started") + "</span>";
+
+  var dp = dl.total ? 100 * dl.bytes / dl.total : 0;
+  var eta = dl.mb_s > 0 ? ((dl.total - dl.bytes) / 1e6 / dl.mb_s / 60).toFixed(0) + " min left" : "";
+  $("setup").innerHTML = '<div class="grid">' +
+    kpi("Download to the Mac", (dl.bytes / 1e9).toFixed(2) + " / " + (dl.total / 1e9).toFixed(2) + " GB", dl.done ? '<span class="pos">complete</span>' : dl.mb_s + " MB/s · " + eta) +
+    kpi("Copy to the ThinkPad", tr.state ? esc(tr.state) : (installed ? "done" : "waiting"), tr.detail ? esc(tr.detail) : "over the LAN cable") +
+    kpi("Model on the ThinkPad", installed ? '<span class="pos">ready</span>' : "not yet", (tp.models || []).join(", ")) +
+    kpi("ThinkPad", tp.up ? '<span class="pos">up</span>' : '<span class="neg">down</span>',
+        tp.up ? "load " + (tp.load || []).join(" ") + " · RAM " + tp.mem_used_gb + "/" + tp.mem_total_gb + " GB" + (tp.temp_c ? " · " + tp.temp_c.toFixed(0) + "°C" : "") : "last seen " + ago(tp.seen)) +
+    "</div>" + bar(dp);
+
+  if (!llm) {
+    $("llm").innerHTML = '<p class="sub">Starts as soon as qwen3:14b is on the ThinkPad. 1,704 signals from 2025-26, anonymised (no coin names, dates or prices); the model answers TAKE or SKIP for each.</p>';
+  } else {
+    var lp = 100 * llm.done / llm.total, o = S.llm_outcomes || {}, T = o.TAKE, K = o.SKIP;
+    var feed = (o.recent || []).map(function (r) {
+      return '<div><span class="tag ' + esc(r.decision) + '">' + esc(r.decision) + "</span>" + esc(r.reason) +
+        ' <span class="dim">· ' + (r.confidence == null ? "" : r.confidence + "% · ") + r.seconds + " s</span></div>";
+    }).join("");
+    $("llm").innerHTML = '<div class="grid">' +
+      kpi("Reviewed", llm.done + " / " + llm.total, lp.toFixed(1) + "% · model " + esc(llm.model)) +
+      kpi("Speed", llm.avg_seconds + " s each", "about " + (llm.eta_minutes / 60).toFixed(1) + " h left") +
+      kpi("TAKE so far", T ? T.n : (llm.counts || {}).TAKE || 0, T ? "won " + T.win_pct + "% · avg " + sgn(T.avg_r) + "R" : "") +
+      kpi("SKIP so far", K ? K.n : (llm.counts || {}).SKIP || 0, K ? "won " + K.win_pct + "% · avg " + sgn(K.avg_r) + "R" : "") +
+      kpi("Errors", (llm.counts || {}).errors || 0, "updated " + ago(llm.updated)) +
+      "</div>" + bar(lp) +
+      '<p class="note">If SKIP signals end worse than TAKE signals, the model is adding something. The full with / without comparison through the live simulator runs when it finishes.</p>' +
+      (feed ? '<div class="sub" style="margin-top:10px">Latest decisions</div><div class="feed">' + feed + "</div>" : "");
+  }
+
+  var sim = S.sim;
+  if (!sim || sim.error) {
+    var sp = S.sim_progress;
+    $("simmeta").innerHTML = sim && sim.error ? esc(sim.error) : sp ? "simulating " + sp.done + " / " + sp.total : "waiting";
+  } else {
+    var m = sim.meta;
+    $("simmeta").innerHTML = esc(m.data_from) + " → " + esc(m.data_to) + " · " + m.signals_after_filter + " signals after the BTC filter · " +
+      m.coins.length + " coins · " + sim.n_runs.toLocaleString() + " simulations";
+    var rows = sim.risks[period] || [];
+    $("risks").innerHTML = "<tr><th>Risk / trade</th><th class=n>Trades</th><th class=n>Won</th><th class=n>Lost</th><th class=n>Win %</th><th class=n>Avg R</th><th class=n>₹500 becomes</th><th class=n>Growth / yr</th><th class=n>Max drawdown</th><th class=n>Worst losing run</th></tr>" +
+      rows.map(function (r) {
+        return "<tr" + (r.risk === 0.03 || r.risk === 0.05 ? ' style="font-weight:700"' : "") + "><td>" + (r.risk * 100).toFixed(r.risk < 0.07 ? 0 : 1) + "%</td><td class=n>" + r.taken + "</td><td class=n>" + r.won + "</td><td class=n>" + r.lost +
+          "</td><td class=n>" + r.win_pct + "</td><td class=n>" + sgn(r.avg_r) + "</td><td class=n>" + inr(r.end_inr) + " <span class=dim>x" + r.x + "</span></td><td class=n>" + sgn(r.cagr_pct, 0, "%") +
+          "</td><td class=n><span class=neg>−" + r.max_dd_pct + "%</span></td><td class=n>" + r.losing_streak + "</td></tr>";
+      }).join("");
+    $("singles").innerHTML = "<tr><th>Strategy</th><th class=n>Trades</th><th class=n>Won / lost</th><th class=n>3%: ₹500 →</th><th class=n>DD</th><th class=n>5%: ₹500 →</th><th class=n>DD</th></tr>" +
+      sim.singles.map(function (s) {
+        return "<tr><td>" + esc(s.name) + "</td><td class=n>" + s.r3.taken + "</td><td class=n>" + s.r3.won + " / " + s.r3.lost + "</td><td class=n>" + inr(s.r3.end_inr) +
+          "</td><td class=n><span class=neg>−" + s.r3.max_dd_pct + "%</span></td><td class=n>" + inr(s.r5.end_inr) + "</td><td class=n><span class=neg>−" + s.r5.max_dd_pct + "%</span></td></tr>";
+      }).join("");
+    $("best").innerHTML = "<tr><th>Risk</th><th>Strategies</th><th class=n>2021-24</th><th class=n>2025-26 (unseen)</th></tr>" +
+      sim.best.map(function (b) {
+        return "<tr><td>" + (b.risk * 100) + "%</td><td style='white-space:normal;min-width:200px'>" + esc(b.combo) + "</td><td class=n>x" + b.train.x + " <span class=dim>DD " + b.train.max_dd_pct + "%</span></td><td class=n>x" +
+          b.after.x + " <span class=dim>" + b.after.won + "W/" + b.after.lost + "L</span></td></tr>";
+      }).join("");
+  }
+
+  var lv = S.live;
+  $("live").innerHTML = !lv ? '<p class="sub">reading production…</p>' :
+    '<div class="tw"><table><tr><th>Coin</th><th>Side</th><th>Strategy</th><th>Opened</th><th class=n>R now</th><th>Stop</th></tr>' +
+    lv.open.map(function (p) {
+      return "<tr><td><b>" + esc(String(p.symbol).toUpperCase().replace("USDT", "")) + "</b></td><td>" + esc(p.side) + "</td><td>" + esc(String(p.strategy).replace("swing_", "")) + "</td><td class=dim>" +
+        esc(String(p.opened_at).slice(5, 16).replace("T", " ")) + "</td><td class=n>" + sgn(p.r_now) + "</td><td class=dim>" + esc(p.state || "") + "</td></tr>";
+    }).join("") + "</table></div>" +
+    '<p class="note">All paper swing positions; the live Delta book holds the ones on ₹500-sized coins. Read ' + ago(lv.at) + ". Real-money detail: portal Book › Live.</p>";
+}
+
+document.getElementById("per").addEventListener("click", function (e) {
+  var b = e.target.closest("button"); if (!b) return;
+  period = b.dataset.p;
+  Array.prototype.forEach.call(this.children, function (x) { x.classList.toggle("on", x === b); });
+  render();
+});
+function poll() {
+  fetch("/status.json", {cache: "no-store"}).then(function (r) { return r.json(); }).then(function (d) { S = d; render(); })
+    .catch(function () { $("upd").textContent = "monitor not answering"; });
+}
+poll(); setInterval(poll, 5000);
+</script>
+</body>
+</html>

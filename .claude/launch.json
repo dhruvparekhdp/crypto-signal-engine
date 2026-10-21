@@ -1,6 +1,22 @@
 {
   "version": "0.0.1",
   "configurations": [
-    {"name": "dev", "runtimeExecutable": "sh", "runtimeArgs": ["scripts/dev_server.sh"], "port": 8090}
+    {
+      "name": "dev",
+      "runtimeExecutable": "sh",
+      "runtimeArgs": [
+        "scripts/dev_server.sh"
+      ],
+      "port": 8090
+    },
+    {
+      "name": "sim-monitor",
+      "runtimeExecutable": ".venv/bin/python",
+      "runtimeArgs": [
+        "-m",
+        "scripts.sim_monitor"
+      ],
+      "port": 8766
+    }
   ]
 }
