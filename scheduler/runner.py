@@ -1829,13 +1829,13 @@ class AppRunner:
         tmp.replace(path)
         return {"new": len(new), "open": len(still), "closed": len(closed)}
 
-    def _bracket_side_labels(self, side: int, st, ctx: dict) -> dict:
+    def _bracket_side_labels(self, side: int, st, ctx: dict, funding: float | None = None) -> dict:
         """News, sentiment, funding and event labels for one trade side (owner, 21 Oct 2026: "in this news will help
         us more as per my thinking"). Labels only - nothing here decides a trade."""
         def way(x, thr):
             return "none" if x is None else "with" if x * side > thr else "against" if x * side < -thr else "neutral"
         coin_news = getattr(st, "sentiment_score", None) if getattr(st, "sentiment_news_count", 0) else None
-        fr = getattr(st, "funding_rate_per_8h", None) if st is not None else None
+        fr = funding
         out = {"coin_news": way(coin_news, 0.1),
                "market_news_6h": way(ctx.get("market_news"), 0.05),
                "ai_briefing": way(ctx.get("briefing_tone"), 0.1),
@@ -1854,6 +1854,7 @@ class AppRunner:
         from analysis import level_signals as ls
         from analysis import swing_book as sb
         from analysis.lab import features as F
+        from collectors import v2_feed
         async with AsyncSessionFactory() as session:
             repo = Repository(session)
             news = await repo.news_sentiment_since(hours=6)
@@ -1891,11 +1892,16 @@ class AppRunner:
                     continue
                 last[sym] = int(b.t[i])
                 ema200, atr = F.ema(b.c, 200), F.atr(b.h, b.l, b.c)
+                # coin state only carries funding when the CoinDCX feed runs; otherwise the last Binance print
+                fr = getattr(states.get(sym), "funding_rate_per_8h", None)
+                if fr is None:
+                    f = await v2_feed.fetch_funding(sym.upper(), limit=1)
+                    fr = float(f.last_funding_rate.iloc[-1]) if f is not None and len(f) else None
                 for role, side in (("primary", setup["side"]), ("mirror", -setup["side"])):
                     labels = {"setup": setup["setup"], "level": "swept" if setup["swept"] else "touched",
                               "touches": str(min(setup["touches"], 5)) + ("+" if setup["touches"] >= 5 else ""),
                               **ls.price_labels(i, b.c, side, ema200, atr),
-                              **self._bracket_side_labels(side, states.get(sym), ctx)}
+                              **self._bracket_side_labels(side, states.get(sym), ctx, fr)}
                     book["open"].append(bb.open_trade(f"lv:{sym}:{int(b.t[i])}:{role}", sym, side,
                                                       "levels_" + setup["setup"].replace(" ", "_"), role, "levels",
                                                       now, float(b.c[i]), labels=labels))

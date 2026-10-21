@@ -189,7 +189,7 @@ async def test_the_hourly_scan_opens_a_labelled_pick_and_mirror_once_per_setup(t
 
     async def fetch(client, symbol, now_ms, tf="4h", limit=500):
         calls.append((symbol, tf))
-        return fake
+        return Bars(symbol, "1h", fake.t, fake.o, fake.h, fake.l, fake.c, fake.v, fake.tb)
     monkeypatch.setattr(swing_book, "fetch_bars", fetch)
     monkeypatch.setattr(level_signals, "setup_at", lambda *a: {"side": 1, "setup": "support reclaim", "level": 1990.0,
                                                                "touches": 3, "swept": True, "level_dist_pct": 0.5})
@@ -211,10 +211,21 @@ async def test_the_hourly_scan_opens_a_labelled_pick_and_mirror_once_per_setup(t
     assert pick["labels"]["coin_news"] == "with" and mirror["labels"]["coin_news"] == "against"
     assert pick["labels"]["funding"] == "our side pays" and mirror["labels"]["funding"] == "other side pays"
     assert pick["labels"]["fear_greed"] == "unknown" and pick["signal_type"] == "levels_support_reclaim"
+    import pandas as pd
+
+    from collectors import v2_feed
+
+    async def funding(symbol, limit=120):
+        return pd.DataFrame({"ts": [pd.Timestamp("2026-10-21")], "last_funding_rate": [-0.0002]})
+    monkeypatch.setattr(v2_feed, "fetch_funding", funding)
+    st2 = CryptoState(symbol="solusdt", base_asset="SOL")              # no funding on state (Delta-only mode)
+    r.crypto_store._states["solusdt"] = st2
     await r._bracket_paper_job(datetime(2026, 10, 21, 12, 30))          # same hour: no scan
     await r._bracket_paper_job(datetime(2026, 10, 21, 13, 5))           # same last bar: no second trade
     book = json.loads((tmp_path / "book.json").read_text())
-    assert len(calls) == 2 and sum(t["source"] == "levels" for t in book["open"]) == 2
+    sol = [t for t in book["open"] if t["symbol"] == "SOLUSDT"]
+    assert [t["labels"]["funding"] for t in sol] == ["other side pays", "our side pays"]   # shorts pay longs
+    assert sum(t["source"] == "levels" and t["symbol"] == "ETHUSDT" for t in book["open"]) == 2
 
 
 async def test_the_api_returns_wallet_views_per_source_and_trade_labels(tmp_path):
