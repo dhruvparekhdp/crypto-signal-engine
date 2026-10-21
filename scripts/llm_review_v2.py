@@ -256,6 +256,21 @@ def _chat(model: str, system: str, facts: dict, schema: dict, host: str) -> tupl
     return json.loads(msg[msg.find("{"): msg.rfind("}") + 1]), time.time() - t0
 
 
+def unload_all(host: str = "http://127.0.0.1:11434") -> list[str]:
+    """Unload every model Ollama holds in memory (keep_alive 0), so a paused ThinkPad has its RAM back."""
+    try:
+        with urllib.request.urlopen(f"{host}/api/ps", timeout=30) as r:
+            names = [m["name"] for m in json.loads(r.read()).get("models", [])]
+    except Exception:  # noqa: BLE001
+        return []
+    for name in names:
+        try:
+            _generate(host, {"model": name, "keep_alive": 0})
+        except Exception:  # noqa: BLE001
+            pass
+    return names
+
+
 def run(prompts: str, out_dir: str, model: str = "qwen3:14b", host: str = "http://127.0.0.1:11434") -> None:
     out = Path(out_dir)
     out.mkdir(parents=True, exist_ok=True)
@@ -274,8 +289,20 @@ def run(prompts: str, out_dir: str, model: str = "qwen3:14b", host: str = "http:
     items = [json.loads(ln) for ln in Path(prompts).read_text().splitlines() if ln.strip()]
     todo = [x for x in items if x["key"] not in done]
     started, times, counts = time.time(), [], {"TAKE": 0, "SKIP": 0, "errors": 0}
+    pause_flag = out / "PAUSE"
+
+    def state(name: str, n: int = 0) -> None:
+        (out / "state.json").write_text(json.dumps({"state": name, "at": time.time(), "this_run": n}))
+
+    state("running")
     with open(res_path, "a") as fh:
         for n, it in enumerate(todo, 1):
+            if pause_flag.exists():
+                # Pause (owner, 21 Oct 2026: "92 h is too much for one sitting"): stop between signals, then unload the
+                # model so the ThinkPad gets its RAM back and cools down; Resume starts a new run that skips done rows
+                unload_all(host)                      # owner: "with pause, offload everything from the ThinkPad"
+                state("paused", n - 1)
+                return
             t0 = time.time()
             rec = {"key": it["key"], "coin": it.get("coin"), "model": model, "version": 2, "post_version": POST_VERSION}
             prev = old_pre.get(it["key"])
@@ -308,6 +335,7 @@ def run(prompts: str, out_dir: str, model: str = "qwen3:14b", host: str = "http:
                 "model": f"{model} (v2: pre-trade with medium thinking + post-mortem)", "done": len(done) + n, "total": len(items),
                 "this_run": n, "avg_seconds": round(avg, 1), "eta_minutes": round(avg * (len(todo) - n) / 60, 1),
                 "counts": counts, "last": rec, "started": started, "updated": time.time()}))
+    state("finished", len(todo))
 
 
 if __name__ == "__main__":
@@ -315,5 +343,7 @@ if __name__ == "__main__":
         prepare()
     elif len(sys.argv) >= 4 and sys.argv[1] == "run":
         run(sys.argv[2], sys.argv[3], sys.argv[5] if len(sys.argv) > 5 and sys.argv[4] == "--model" else "qwen3:14b")
+    elif len(sys.argv) >= 2 and sys.argv[1] == "unload":
+        print("unloaded:", unload_all())
     else:
         print(__doc__)

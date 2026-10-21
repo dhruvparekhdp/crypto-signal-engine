@@ -19,7 +19,10 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 SCRATCH = Path("/private/tmp/claude-501/-Users-dhruv-personal-Tennis-bet-crypto-signal-engine/"
                "5fe50565-6e25-409a-bc23-c5b74f73cac9/scratchpad/qwen3-14b")
-TP = "dhruv@fe80::40c5:74aa:b07d:c11a%en5"
+# Tailscale (owner, 21 Oct 2026: "lan is giving issue, continue on tailscale"); the LAN cable address was
+# dhruv@fe80::40c5:74aa:b07d:c11a%en5 (scp form: dhruv@[fe80::...%en5])
+TP = "dhruv@100.71.216.94"
+TP_SCP = "dhruv@100.71.216.94"
 PROD = ["-i", str(Path.home() / ".ssh/crypto-ec2"), "ubuntu@52.62.37.4"]
 MODEL_BYTES = 9_276_184_896
 LLM_DIR = "~/lab/llm_review/out_v2"          # version 2 (21 Oct 2026); v1 had a biased prompt
@@ -158,6 +161,7 @@ def loop_thinkpad() -> None:
         out = _ssh([TP], f"echo up; cat /proc/loadavg; free -m | awk '/Mem/ {{print $3\" \"$2}}'; "
                          f"cat /sys/class/thermal/thermal_zone*/temp 2>/dev/null | sort -n | tail -1; "
                          f"ollama list 2>/dev/null | awk 'NR>1 {{print $1}}' | tr '\\n' ' '; echo; "
+                         f"bash ~/lab/llm_review/ctl.sh status; "
                          f"cat {LLM_DIR}/progress.json 2>/dev/null")
         if out and out.startswith("up"):
             lines = out.splitlines()
@@ -165,10 +169,13 @@ def loop_thinkpad() -> None:
             mem = lines[2].split() if len(lines) > 2 else []
             temp = int(lines[3]) / 1000 if len(lines) > 3 and lines[3].strip().isdigit() else None
             models = lines[4].split() if len(lines) > 4 else []
+            run_line = lines[5].split() if len(lines) > 5 else []
+            _set("run", {"state": run_line[0] if run_line else "unknown",
+                         "loaded": (run_line[1] if len(run_line) > 1 else "none"), "at": time.time()})
             prog = None
-            if len(lines) > 5:
+            if len(lines) > 6:
                 try:
-                    prog = json.loads("\n".join(lines[5:]))
+                    prog = json.loads("\n".join(lines[6:]))
                 except ValueError:
                     prog = None
             _set("thinkpad", {"up": True, "seen": time.time(), "load": load,
@@ -179,8 +186,8 @@ def loop_thinkpad() -> None:
                 _set("llm", prog)
                 local = ROOT / "data/lab/llm_review/results_v2_qwen3_14b.jsonl"
                 try:
-                    subprocess.run(["scp", "-q", "-6", "-o", "BatchMode=yes", "-o", "ConnectTimeout=6",
-                                    f"dhruv@[fe80::40c5:74aa:b07d:c11a%en5]:{LLM_DIR}/results_v2_qwen3_14b.jsonl",
+                    subprocess.run(["scp", "-q", "-o", "BatchMode=yes", "-o", "ConnectTimeout=6",
+                                    f"{TP_SCP}:{LLM_DIR}/results_v2_qwen3_14b.jsonl",
                                     str(local)], timeout=30, capture_output=True)
                     if local.exists():
                         _set("llm_outcomes", _llm_outcomes(local))
@@ -213,7 +220,29 @@ def loop_slow() -> None:
         time.sleep(60)
 
 
+def control(action: str) -> dict:
+    """Pause / resume the ThinkPad run (owner, 21 Oct 2026: "give me pause and resume button, 92 h is too much for one
+    sitting"; "with pause, offload everything from the ThinkPad"). Pause lets the current signal finish, then the run
+    stops and every model is unloaded; Resume starts again from the first signal without an answer."""
+    out = _ssh([TP], f"bash ~/lab/llm_review/ctl.sh {action}", timeout=40)
+    if out is None:
+        return {"ok": False, "error": "ThinkPad did not answer"}
+    with LOCK:
+        run = dict(STATE.get("run") or {})
+    run.update(state={"pause": "pausing", "resume": "running"}[action], at=time.time())
+    _set("run", run)
+    return {"ok": True, "reply": out.strip()}
+
+
 class H(BaseHTTPRequestHandler):
+    def do_POST(self):
+        action = {"/api/pause": "pause", "/api/resume": "resume"}.get(self.path)
+        body = json.dumps(control(action) if action else {"ok": False, "error": "unknown"}).encode()
+        self.send_response(200 if action else 404)
+        self.send_header("Content-Type", "application/json")
+        self.end_headers()
+        self.wfile.write(body)
+
     def log_message(self, *a):
         pass
 

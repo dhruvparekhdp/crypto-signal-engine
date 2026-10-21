@@ -28,11 +28,13 @@ table{width:100%;border-collapse:collapse;font-size:12.5px}
 th,td{padding:6px 7px;border-bottom:1px solid var(--line);text-align:left;white-space:nowrap}
 th{color:var(--mut);font-weight:600;font-size:11.5px}
 td.n,th.n{text-align:right;font-variant-numeric:tabular-nums}
-.pos{color:var(--ok)}.neg{color:var(--bad)}.dim{color:var(--mut)}
+.pos{color:var(--ok)}.neg{color:var(--bad)}.dim{color:var(--mut)}.warn{color:var(--warn)}
 .seg{display:inline-flex;border:1px solid var(--line);border-radius:8px;overflow:hidden}
 .seg button{all:unset;cursor:pointer;padding:4px 10px;font-size:12px;color:var(--mut)}
 .seg button.on{background:var(--acc);color:var(--bg);font-weight:700}
 .note{font-size:12.5px;color:var(--mut);margin:6px 0 0}
+.btn{all:unset;cursor:pointer;font-size:13px;font-weight:700;padding:7px 16px;border-radius:8px;background:var(--acc);color:var(--bg)}
+.btn:disabled{opacity:.4;cursor:default}.btn.alt{background:var(--soft);color:var(--fg);border:1px solid var(--line)}
 .feed div{padding:7px 0;border-bottom:1px solid var(--line);font-size:13px}
 .feed div:last-child{border-bottom:0}
 .tag{font-size:10.5px;font-weight:700;padding:1px 7px;border-radius:5px;margin-right:6px}
@@ -51,6 +53,10 @@ td.n,th.n{text-align:right;font-variant-numeric:tabular-nums}
   <div class="card" id="setup"></div>
 
   <h2>2 · Local LLM reviewer (ThinkPad, Qwen3-14B, medium thinking)</h2>
+  <div class="card">
+    <div class="row"><div id="runstate" class="sub">run state…</div>
+      <div class="pills"><button class="btn" id="bPause">Pause</button><button class="btn" id="bResume">Resume</button></div></div>
+  </div>
   <div class="card" id="llm"></div>
 
   <h2>3 · Live simulator results (₹500 start, live rules)</h2>
@@ -91,7 +97,7 @@ function render() {
   var eta = dl.mb_s > 0 ? ((dl.total - dl.bytes) / 1e6 / dl.mb_s / 60).toFixed(0) + " min left" : "";
   $("setup").innerHTML = '<div class="grid">' +
     kpi("Download to the Mac", installed ? "9.28 GB" : (dl.bytes / 1e9).toFixed(2) + " / " + (dl.total / 1e9).toFixed(2) + " GB", installed || dl.done ? '<span class="pos">complete</span>' : dl.mb_s + " MB/s · " + eta) +
-    kpi("Copy to the ThinkPad", tr.state ? esc(tr.state) : (installed ? "done" : "waiting"), tr.detail ? esc(tr.detail) : "over the LAN cable") +
+    kpi("Copy to the ThinkPad", tr.state ? esc(tr.state) : (installed ? "done" : "waiting"), tr.detail ? esc(tr.detail) : "done") +
     kpi("Model on the ThinkPad", installed ? '<span class="pos">ready</span>' : "not yet", (tp.models || []).join(", ")) +
     kpi("ThinkPad", tp.up ? '<span class="pos">up</span>' : '<span class="neg">down</span>',
         tp.up ? "load " + (tp.load || []).join(" ") + " · RAM " + tp.mem_used_gb + "/" + tp.mem_total_gb + " GB" + (tp.temp_c ? " · " + tp.temp_c.toFixed(0) + "°C" : "") : "last seen " + ago(tp.seen)) +
@@ -152,6 +158,16 @@ function render() {
       }).join("");
   }
 
+  var run = S.run || {}, st = run.state || "unknown";
+  var label = {running: '<span class="pos">● Running</span> — reviewing signals', pausing: '<span class="warn">● Pausing</span> — finishing the current signal (up to ~4 min), then unloading the model',
+               paused: '<span class="dim">● Paused</span> — model unloaded, ThinkPad free. Resume continues from the next signal',
+               stopped: '<span class="neg">● Stopped</span> — not running (e.g. after a reboot). Resume continues from the next signal',
+               finished: '<span class="pos">● Finished</span>'}[st] || "● state unknown (ThinkPad not answering?)";
+  $("runstate").innerHTML = label + ' <span class="dim">· models in memory: ' + esc(run.loaded || "?") + "</span>";
+  $("bPause").disabled = !(st === "running");
+  $("bResume").disabled = !(st === "paused" || st === "stopped");
+  $("bResume").className = "btn" + (st === "running" ? " alt" : "");
+
   var lv = S.live;
   $("live").innerHTML = !lv ? '<p class="sub">reading production…</p>' :
     '<div class="tw"><table><tr><th>Coin</th><th>Side</th><th>Strategy</th><th>Opened</th><th class=n>R now</th><th>Stop</th></tr>' +
@@ -168,6 +184,16 @@ document.getElementById("per").addEventListener("click", function (e) {
   Array.prototype.forEach.call(this.children, function (x) { x.classList.toggle("on", x === b); });
   render();
 });
+function act(which) {
+  var b = $(which === "pause" ? "bPause" : "bResume"); b.disabled = true; b.textContent = which === "pause" ? "Pausing…" : "Starting…";
+  fetch("/api/" + which, {method: "POST"}).then(function (r) { return r.json(); }).then(function (d) {
+    b.textContent = which === "pause" ? "Pause" : "Resume";
+    if (!d.ok) alert("Could not " + which + ": " + (d.error || "unknown"));
+    poll();
+  }).catch(function () { b.textContent = which === "pause" ? "Pause" : "Resume"; });
+}
+$("bPause").addEventListener("click", function () { act("pause"); });
+$("bResume").addEventListener("click", function () { act("resume"); });
 function poll() {
   fetch("/status.json", {cache: "no-store"}).then(function (r) { return r.json(); }).then(function (d) { S = d; render(); })
     .catch(function () { $("upd").textContent = "monitor not answering"; });
