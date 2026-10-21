@@ -290,7 +290,8 @@
       ctx.right((d.started ? "since " + U.stamp(d.started) + " · " : "") + d.open + " open");
       var intro = '<p class="mono small dim" style="margin:0 0 10px">Every signal gets a virtual trade with a Telegram channel\'s bracket: stop −' + pl.stop_pct + "%, targets " +
         (pl.targets_pct || []).map(function (t) { return "+" + t + "%"; }).join(" / ") + " (a quarter at each), stop to entry after the first, closed after " + pl.max_hold_hours +
-        " h. No orders, no wallet. Fees " + pl.cost_pct + "% round trip. Our pick vs its mirror (same setup, other side) shows whether the entries add anything to the bracket's built-in ~81% first-target rate.</p>";
+        " h. No orders, no real wallet. Fees " + pl.cost_pct + "% round trip. Our pick vs its mirror (same setup, other side) shows whether the entries add anything to the bracket's built-in ~81% first-target rate. " +
+        "S/R setups: every hour, every watchlist coin is checked for a retest or rejection at a support / resistance level; each one is traded with its mirror and labelled with news, AI briefing, funding, Fear &amp; Greed and trend, so the labels can be compared afterwards.</p>";
       if (!A) { el.innerHTML = intro + C.empty("No closed bracket trades yet: the first ones close as targets, stops or the 48 h limit are reached."); return; }
       var tiles = C.tiles([
         ["CLOSED", String(A.n), d.open + " still open"],
@@ -298,7 +299,12 @@
         ["ENDED IN PROFIT", A.profit_pct + "%", A.full_stops + " full −5% stops"],
         ["AVG AFTER FEES", (A.avg_net_pct > 0 ? "+" : "") + A.avg_net_pct + "%", "of price per trade", A.avg_net_pct >= 0 ? "up" : "dn"],
         ["AVG ROI AT " + pl.roi_leverage + "×", (A.avg_roi_5x > 0 ? "+" : "") + A.avg_roi_5x + "%", "on margin, per trade", A.avg_roi_5x >= 0 ? "up" : "dn"]]);
-      var groups = [["Our picks (intraday)", "role:primary"], ["Their mirrors (control)", "role:mirror"], ["Swing signals", "source:swing"], ["Intraday all", "source:intraday"]];
+      var groups = [["S/R setups: picks", "source_role:levels|primary"], ["S/R setups: mirrors (control)", "source_role:levels|mirror"],
+        ["Intraday: our picks", "source_role:intraday|primary"], ["Intraday: mirrors (control)", "source_role:intraday|mirror"], ["Swing signals", "source:swing"]];
+      // wallet limit, no risk rules (owner, 21 Oct 2026): fixed margin per trade at fixed leverage, skipped only when the wallet has no free margin
+      var W = d.wallets || {}, wl = [["S/R PICKS", "levels"], ["INTRADAY PICKS", "intraday"], ["SWING", "swing"]].filter(function (x) { return W[x[1]]; });
+      var wtiles = wl.length ? '<h4 class="mono small" style="margin:14px 0 6px">PAPER WALLET · ₹' + Math.round(W[wl[0][1]].start).toLocaleString("en-IN") + " START · ₹" + W[wl[0][1]].margin + " MARGIN PER TRADE AT " + W[wl[0][1]].leverage + "× · NO RISK RULES</h4>" +
+        C.tiles(wl.map(function (x) { var w = W[x[1]]; return [x[0], rs(w.wallet), w.taken + " taken · " + w.won + " won · " + w.lost + " lost · " + w.open + " open" + (w.skipped_no_margin ? " · " + w.skipped_no_margin + " skipped (no margin)" : "") + " · worst drop " + w.max_dd_pct + "%", w.wallet >= w.start ? "up" : "dn"]; })) : "";
       var coins = Object.keys(S).filter(function (k) { return k.indexOf("symbol:") === 0; }).sort(function (a, b) { return S[b].n - S[a].n; });
       var rows = groups.concat(coins.map(function (k) { return [k.replace("symbol:", "").replace("USDT", ""), k]; })).filter(function (g) { return S[g[1]]; });
       var table = C.table([
@@ -314,12 +320,29 @@
         { label: "CLOSED", w: "110px", cell: function (r) { return '<span class="dim">' + e(U.stamp(r.closed_ts)) + "</span>"; } },
         { label: "COIN", w: "70px", cell: function (r) { return "<b>" + e(String(r.symbol).replace("USDT", "")) + "</b>"; } },
         { label: "SIDE", w: "76px", cell: function (r) { return C.side(r.side > 0 ? "long" : "short"); } },
-        { label: "KIND", w: "90px", cell: function (r) { return '<span class="dim">' + e(r.source === "swing" ? "swing" : r.role) + "</span>"; } },
+        { label: "KIND", w: "130px", cell: function (r) { return '<span class="dim">' + e(r.source === "swing" ? "swing" : r.source === "levels" ? "S/R " + (r.role === "mirror" ? "mirror" : "pick") + (r.labels && r.labels.setup ? " · " + r.labels.setup : "") : r.role) + "</span>"; } },
         { label: "EXIT", w: "minmax(0,1fr)", cell: function (r) { return e(r.exit + (r.legs ? " · " + r.legs + "/4 targets" : "")); } },
         { label: "AFTER FEES", w: "100px", cell: function (r) { return C.signed(r.net_pct, function (x) { return (x > 0 ? "+" : "") + x.toFixed(2) + "%"; }); } },
         { label: "ROI 5×", w: "80px", cell: function (r) { return C.signed(r.roi_5x_pct, function (x) { return (x > 0 ? "+" : "") + x.toFixed(1) + "%"; }); } }
       ], d.recent || [], { minWidth: 640 });
-      el.innerHTML = intro + tiles + '<h4 class="mono small" style="margin:14px 0 6px">BY GROUP</h4>' + table +
+      // S/R labels: each label value, picks next to their mirrors (a label only matters if the picks beat the mirrors under it)
+      var lab = {};
+      Object.keys(S).forEach(function (k) {
+        if (k.indexOf("label:") !== 0) return;
+        var p = k.slice(6).split("|"), id = p[1] + "|" + p.slice(2).join("|");
+        (lab[id] = lab[id] || { k: p[1], v: p.slice(2).join("|") })[p[0]] = S[k];
+      });
+      var lrows = Object.keys(lab).sort().map(function (id) { return lab[id]; });
+      var nice = { setup: "setup", level: "level", touches: "touches", move_24h: "coin 24 h move", trend_1h_ema200: "1h trend (EMA200)", atr_1h: "1h volatility",
+        coin_news: "coin news", market_news_6h: "market news 6 h", ai_briefing: "AI briefing", btc_24h: "BTC 24 h", funding: "funding", fear_greed: "Fear & Greed", event_window: "event window" };
+      function av(x) { return x ? C.signed(x.avg_net_pct, function (y) { return (y > 0 ? "+" : "") + y.toFixed(2) + "%"; }) + ' <span class="dim tiny">n ' + x.n + " · 1st " + x.tp1_pct + "%</span>" : '<span class="dim">—</span>'; }
+      var ltable = lrows.length ? '<h4 class="mono small" style="margin:14px 0 6px">S/R SETUPS BY LABEL · PICKS VS MIRRORS</h4>' + C.table([
+        { label: "LABEL", w: "minmax(0,1fr)", cell: function (r) { return '<span class="dim">' + e(nice[r.k] || r.k) + ":</span> <b>" + e(r.v) + "</b>"; } },
+        { label: "PICKS · AVG AFTER FEES", w: "190px", cell: function (r) { return av(r.primary); } },
+        { label: "MIRRORS · AVG AFTER FEES", w: "190px", cell: function (r) { return av(r.mirror); } },
+        { label: "PICK − MIRROR", w: "110px", cell: function (r) { return r.primary && r.mirror ? C.signed(r.primary.avg_net_pct - r.mirror.avg_net_pct, function (y) { return (y > 0 ? "+" : "") + y.toFixed(2) + "%"; }) : "—"; } }
+      ], lrows, { minWidth: 700 }) + '<p class="mono tiny dim" style="margin:6px 0 0">With / against = the label points the same way as the trade, or the other way. Small groups move a lot: wait for 30+ trades before reading one.</p>' : "";
+      el.innerHTML = intro + tiles + wtiles + '<h4 class="mono small" style="margin:14px 0 6px">BY GROUP</h4>' + table + ltable +
         '<h4 class="mono small" style="margin:14px 0 6px">LATEST CLOSED</h4>' + recent;
     }
   });

@@ -341,6 +341,13 @@ class Settings(BaseSettings):
     # Channel-style bracket, paper research only (analysis/bracket_book.py, owner 21 Oct 2026): every logged signal
     # gets a virtual -5% stop / +1..+10.7% four-target trade, tracked on 1m bars; no orders, no paper wallet
     bracket_paper_enabled: bool = True
+    # support / resistance setups for the same bracket on every watchlist coin, labelled with news and sentiment
+    # (analysis/level_signals.py); and the wallet view: fixed margin per trade at fixed leverage, skipped only when
+    # the paper wallet has no free margin - no risk rules (owner, 21 Oct 2026: "keep wallet limit not risk")
+    bracket_levels_enabled: bool = True
+    bracket_wallet_inr: float = 10000.0
+    bracket_margin_inr: float = 500.0
+    bracket_leverage: float = 5.0
     delta_india_max_spread_pct: float = 0.5
     delta_india_max_slippage_r: float = 0.10
     # 14 Oct 2026 owner: strong-confidence intraday trades in paper too, with their own limits so they cannot crowd

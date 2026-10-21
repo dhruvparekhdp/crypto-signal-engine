@@ -1790,6 +1790,13 @@ class AppRunner:
                 "swing" if getattr(r, "trade_mode", "") == "swing" else "intraday",
                 r.timestamp, r.current_price, r.confidence or 0.0))
         states = {st.symbol: st for st in await self.crypto_store.get_all()}
+        hour = now.replace(minute=0, second=0, microsecond=0).isoformat()
+        if settings.bracket_levels_enabled and book.get("level_hour") != hour and now.minute >= 2:
+            book["level_hour"] = hour                       # once per closed 1h bar
+            try:
+                await self._bracket_level_scan(book, now, states)
+            except Exception as e:  # noqa: BLE001 - the scan must never stop the book
+                log.warning("bracket_level_scan_failed", error=str(e)[:160])
         fetched: dict[str, list] = {}
         still, closed = [], []
         for tr in book["open"]:
@@ -1821,6 +1828,80 @@ class AppRunner:
         tmp.write_text(json.dumps(book))
         tmp.replace(path)
         return {"new": len(new), "open": len(still), "closed": len(closed)}
+
+    def _bracket_side_labels(self, side: int, st, ctx: dict) -> dict:
+        """News, sentiment, funding and event labels for one trade side (owner, 21 Oct 2026: "in this news will help
+        us more as per my thinking"). Labels only - nothing here decides a trade."""
+        def way(x, thr):
+            return "none" if x is None else "with" if x * side > thr else "against" if x * side < -thr else "neutral"
+        coin_news = getattr(st, "sentiment_score", None) if getattr(st, "sentiment_news_count", 0) else None
+        fr = getattr(st, "funding_rate_per_8h", None) if st is not None else None
+        out = {"coin_news": way(coin_news, 0.1),
+               "market_news_6h": way(ctx.get("market_news"), 0.05),
+               "ai_briefing": way(ctx.get("briefing_tone"), 0.1),
+               "btc_24h": way(ctx.get("btc_24h"), 1.0),
+               "funding": "none" if fr is None else "our side pays" if fr * side > 0.00005
+               else "other side pays" if fr * side < -0.00005 else "flat",
+               "fear_greed": ctx.get("fear_greed", "unknown"), "event_window": ctx.get("event_window", "none")}
+        return out
+
+    async def _bracket_level_scan(self, book: dict, now: datetime, states: dict) -> int:
+        """Support / resistance setups on every watchlist coin (analysis/level_signals.py), each opened as a bracket
+        trade with its mirror and labelled with price context, news and sentiment. One per coin per 6 hours."""
+        import httpx
+
+        from analysis import bracket_book as bb
+        from analysis import level_signals as ls
+        from analysis import swing_book as sb
+        from analysis.lab import features as F
+        async with AsyncSessionFactory() as session:
+            repo = Repository(session)
+            news = await repo.news_sentiment_since(hours=6)
+            brief = await repo.latest_briefing()
+        mkt = [n for n in news if str(n.symbol).lower() in ("all", "btc", "btcusdt", "crypto")]
+        w = sum(n.confidence or 0.5 for n in mkt)
+        fg = getattr(self, "fear_greed", None)
+        fgv = getattr(fg, "value", None)
+        btc = states.get("btcusdt")
+        b_ts = getattr(brief, "created_at", None) if brief is not None else None
+        ctx = {"market_news": (sum(n.score * (n.confidence or 0.5) for n in mkt) / w) if w else None,
+               "briefing_tone": brief.risk_tone if brief is not None and b_ts is not None
+               and now - (b_ts.replace(tzinfo=None) if b_ts.tzinfo else b_ts) < timedelta(hours=4) else None,
+               "btc_24h": getattr(btc, "price_change_24h_pct", None) if btc is not None else None,
+               "fear_greed": "unknown" if fgv is None else "extreme fear" if fgv < 25 else "fear" if fgv < 45
+               else "neutral" if fgv <= 55 else "greed" if fgv <= 75 else "extreme greed",
+               "event_window": "event window" if self._blackout(now) is not None else "none"}
+        last = book.setdefault("level_last", {})
+        now_ms = int(now.replace(tzinfo=UTC).timestamp() * 1000)
+        added = 0
+        async with httpx.AsyncClient() as client:
+            for sym in sorted(states):
+                try:
+                    b = await sb.fetch_bars(client, sym.upper(), now_ms, "1h", limit=400)
+                except Exception:  # noqa: BLE001 - one coin failing must not stop the rest
+                    continue
+                if b is None or len(b.c) < 210:
+                    continue
+                i = len(b.c) - 1
+                if last.get(sym) and int(b.t[i]) - int(last[sym]) < 6 * 3_600_000:
+                    continue
+                ph, pl = ls.pivots(b.h, b.l)
+                setup = ls.setup_at(i, b.o, b.h, b.l, b.c, ph, pl)
+                if setup is None:
+                    continue
+                last[sym] = int(b.t[i])
+                ema200, atr = F.ema(b.c, 200), F.atr(b.h, b.l, b.c)
+                for role, side in (("primary", setup["side"]), ("mirror", -setup["side"])):
+                    labels = {"setup": setup["setup"], "level": "swept" if setup["swept"] else "touched",
+                              "touches": str(min(setup["touches"], 5)) + ("+" if setup["touches"] >= 5 else ""),
+                              **ls.price_labels(i, b.c, side, ema200, atr),
+                              **self._bracket_side_labels(side, states.get(sym), ctx)}
+                    book["open"].append(bb.open_trade(f"lv:{sym}:{int(b.t[i])}:{role}", sym, side,
+                                                      "levels_" + setup["setup"].replace(" ", "_"), role, "levels",
+                                                      now, float(b.c[i]), labels=labels))
+                    added += 1
+        log.info("bracket_level_scan", added=added, coins=len(states))
+        return added
 
     _PARITY_FILE = "data/parity_report.json"
 

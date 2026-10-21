@@ -26,13 +26,15 @@ def _naive(ts: datetime) -> datetime:
     return ts.astimezone(UTC).replace(tzinfo=None) if ts.tzinfo else ts
 
 
-def open_trade(sig_id: int, symbol: str, side: int, signal_type: str, role: str, source: str, signal_ts: datetime,
-               signal_price: float, confidence: float = 0.0) -> dict:
-    """A virtual trade for one logged signal; it enters at the open of the first 1m bar after the signal."""
+def open_trade(sig_id, symbol: str, side: int, signal_type: str, role: str, source: str, signal_ts: datetime,
+               signal_price: float, confidence: float = 0.0, labels: dict | None = None) -> dict:
+    """A virtual trade for one signal; it enters at the open of the first 1m bar after the signal. `labels` (setup,
+    news, sentiment, ...) are kept on the trade so results can be split by them afterwards."""
     return {"id": sig_id, "symbol": symbol.upper(), "side": side, "signal_type": signal_type, "role": role,
             "source": source, "signal_ts": _naive(signal_ts).isoformat(), "signal_price": signal_price,
-            "confidence": confidence, "entry": None, "entry_ts": None, "stop": None, "legs": 0, "pnl": 0.0,
-            "status": "waiting", "last_ts": _naive(signal_ts).isoformat(), "best": 0.0, "worst": 0.0}
+            "confidence": confidence, "labels": labels or {}, "entry": None, "entry_ts": None, "stop": None,
+            "legs": 0, "pnl": 0.0, "status": "waiting", "last_ts": _naive(signal_ts).isoformat(), "best": 0.0,
+            "worst": 0.0}
 
 
 def advance(tr: dict, bars) -> dict:
@@ -95,4 +97,45 @@ def summary(closed: list[dict]) -> dict:
     for key in ("source", "role", "symbol"):
         for r in closed:
             groups.setdefault(f"{key}:{r[key]}", []).append(r)
+    for r in closed:
+        groups.setdefault(f"source_role:{r['source']}|{r['role']}", []).append(r)
+        if r["source"] == "levels":                  # S/R trades: every label, picks and mirrors apart
+            for k, v in (r.get("labels") or {}).items():
+                groups.setdefault(f"label:{r['role']}|{k}|{v}", []).append(r)
     return {k: stats(v) for k, v in groups.items()}
+
+
+def wallet_view(trades: list[dict], start: float, margin: float, leverage: float, now: datetime) -> dict:
+    """The owner's wallet limit without risk rules (21 Oct 2026: "keep wallet limit not risk"): take the trades in
+    the order they entered, each with a fixed margin at a fixed leverage, and skip one only when there is not that
+    much free margin. P&L = margin x leverage x the trade's result after fees."""
+    now = _naive(now)
+    ev = sorted((t for t in trades if t.get("entry_ts")), key=lambda t: t["entry_ts"])
+    wallet, open_, taken, skipped, wins, losses, peak, mdd = start, [], 0, 0, 0, 0, start, 0.0
+    for t in ev:
+        et = datetime.fromisoformat(t["entry_ts"])
+        for o in sorted([o for o in open_ if o["closed_ts"] and datetime.fromisoformat(o["closed_ts"]) <= et],
+                        key=lambda o: o["closed_ts"]):
+            wallet += margin * leverage * o["net_pct"] / 100
+            wins += o["net_pct"] > 0
+            losses += o["net_pct"] <= 0
+            peak = max(peak, wallet)
+            mdd = max(mdd, 1 - wallet / peak if peak > 0 else 0.0)
+            open_.remove(o)
+        if wallet - margin * len(open_) < margin:
+            skipped += 1
+            continue
+        taken += 1
+        open_.append({"closed_ts": t.get("closed_ts") if t.get("status") == "closed" else None,
+                      "net_pct": t.get("net_pct", 0.0)})
+    for o in sorted([o for o in open_ if o["closed_ts"] and datetime.fromisoformat(o["closed_ts"]) <= now],
+                    key=lambda o: o["closed_ts"]):
+        wallet += margin * leverage * o["net_pct"] / 100
+        wins += o["net_pct"] > 0
+        losses += o["net_pct"] <= 0
+        peak = max(peak, wallet)
+        mdd = max(mdd, 1 - wallet / peak if peak > 0 else 0.0)
+        open_.remove(o)
+    return {"start": start, "margin": margin, "leverage": leverage, "wallet": round(wallet, 2), "taken": taken,
+            "skipped_no_margin": skipped, "open": len(open_), "won": int(wins), "lost": int(losses),
+            "max_dd_pct": round(100 * mdd, 1)}
