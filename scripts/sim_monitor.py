@@ -71,22 +71,36 @@ def _sim_summary() -> dict | None:
 
 
 def _llm_outcomes(path: Path) -> dict | None:
-    """Version 2 records carry their own result: TAKE / SKIP against how the signal ended, the model's probability in
-    bands, and the post-mortem's 'why' categories for wins and for losses."""
+    """Everything the page shows about the review run, from the results file alone (21 Oct 2026: the run's own counter
+    counted only rows since its last restart, its speed came from quick post-mortem redos, and the 'why' table mixed
+    old model-chosen labels with the new rule-based ones, so the numbers on the page disagreed)."""
     try:
-        rows = [json.loads(ln) for ln in path.read_text().splitlines() if ln.strip()]
-        rows = list({r["key"]: r for r in rows if r.get("key")}.values())      # a redone post-mortem replaces the old row
-        rows = [r for r in rows if r.get("pre") and "r" in r]
-        if not rows:
+        raw = [json.loads(ln) for ln in path.read_text().splitlines() if ln.strip()]
+        latest = {}
+        for r in raw:                                    # a redone post-mortem replaces the older row for that signal
+            if r.get("key"):
+                latest[r["key"]] = r
+        reviewed = [r for r in latest.values() if r.get("pre") and "r" in r]
+        if not reviewed:
             return None
-        out = {}
+        current = [r for r in reviewed if r.get("post_version") == 2]
+        total = sum(1 for ln in (ROOT / "data/lab/llm_review/prompts_v2.jsonl").read_text().splitlines() if ln.strip())
+        pre_s = sorted(r["pre_seconds"] for r in reviewed if r.get("pre_seconds"))
+        post_s = sorted(r["post_seconds"] for r in current if r.get("post_seconds"))
+        med = (lambda v: v[len(v) // 2] if v else None)
+        per_signal = (med(pre_s) or 200) + (med(post_s) or 55)
+        redo_left = len(reviewed) - len(current)
+        left_new = max(0, total - len(reviewed))
+        out = {"progress": {"total": total, "reviewed": len(reviewed), "complete": len(current), "redo_left": redo_left,
+                            "per_signal_min": round(per_signal / 60, 1),
+                            "eta_hours": round((left_new * per_signal + redo_left * (med(post_s) or 55)) / 3600, 1)}}
         for dec in ("TAKE", "SKIP"):
-            rs = [r["r"] for r in rows if r["pre"].get("decision") == dec]
+            rs = [r["r"] for r in reviewed if r["pre"].get("decision") == dec]
             if rs:
                 out[dec] = {"n": len(rs), "win_pct": round(100 * sum(v > 0 for v in rs) / len(rs), 1),
                             "avg_r": round(sum(rs) / len(rs), 3)}
         bands = {}
-        for r in rows:
+        for r in reviewed:
             p = r["pre"].get("p_profit")
             if p is None:
                 continue
@@ -95,19 +109,26 @@ def _llm_outcomes(path: Path) -> dict | None:
         out["bands"] = [{"band": b, "n": len(v), "win_pct": round(100 * sum(x > 0 for x in v) / len(v), 1),
                          "avg_r": round(sum(v) / len(v), 3)} for b, v in sorted(bands.items(), key=lambda kv: kv[0])]
         why = {}
-        for r in rows:
+        for r in current:                                # rule-based categories only
             c = (r.get("post") or {}).get("category")
             if c:
                 w = why.setdefault(c, {"won": 0, "lost": 0})
                 w["won" if r["outcome"] == "WON" else "lost"] += 1
-        out["why"] = why
-        out["all"] = {"n": len(rows), "win_pct": round(100 * sum(r["r"] > 0 for r in rows) / len(rows), 1),
-                      "avg_r": round(sum(r["r"] for r in rows) / len(rows), 3)}
-        out["recent"] = [{"coin": r.get("coin"), "decision": r["pre"].get("decision"), "p": r["pre"].get("p_profit"),
-                          "reason": r["pre"].get("reason"), "outcome": r.get("outcome"), "r": r.get("r"),
-                          "category": (r.get("post") or {}).get("category"), "why": (r.get("post") or {}).get("why"),
-                          "seconds": round((r.get("pre_seconds") or 0) + (r.get("post_seconds") or 0))}
-                         for r in rows[-8:]][::-1]
+        out["why"], out["why_n"] = why, len(current)
+        out["all"] = {"n": len(reviewed), "win_pct": round(100 * sum(r["r"] > 0 for r in reviewed) / len(reviewed), 1),
+                      "avg_r": round(sum(r["r"] for r in reviewed) / len(reviewed), 3)}
+        seen, recent = set(), []
+        for r in reversed(raw):                          # newest written first
+            if r.get("key") in seen or not r.get("pre") or r.get("post_version") != 2:
+                continue
+            seen.add(r["key"])
+            recent.append({"coin": r.get("coin"), "decision": r["pre"].get("decision"), "p": r["pre"].get("p_profit"),
+                           "reason": r["pre"].get("reason"), "outcome": r.get("outcome"), "r": r.get("r"),
+                           "category": (r.get("post") or {}).get("category"), "why": (r.get("post") or {}).get("why"),
+                           "seconds": round((r.get("pre_seconds") or 0) + (r.get("post_seconds") or 0))})
+            if len(recent) == 8:
+                break
+        out["recent"] = recent
         return out
     except Exception as e:  # noqa: BLE001
         return {"error": str(e)[:120]}

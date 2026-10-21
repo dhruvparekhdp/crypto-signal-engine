@@ -82,38 +82,40 @@ function render() {
   $("upd").textContent = "updated " + new Date(S.now * 1000).toLocaleTimeString() + " · refreshes every 5 s";
   var tp = S.thinkpad || {}, dl = S.download || {}, llm = S.llm, tr = S.transfer || {};
   var installed = (tp.models || []).indexOf("qwen3:14b") >= 0;
+  var PG = (S.llm_outcomes || {}).progress;
   $("pills").innerHTML = '<span class="pill ' + (tp.up ? "ok" : "bad") + '">ThinkPad ' + (tp.up ? "connected" : "not answering") + "</span>" +
     '<span class="pill ' + (installed ? "ok" : "run") + '">qwen3:14b ' + (installed ? "installed" : "being set up") + "</span>" +
-    '<span class="pill ' + (llm && llm.done < llm.total ? "run" : llm ? "ok" : "") + '">reviewer ' + (llm ? llm.done + " / " + llm.total : "not started") + "</span>";
+    '<span class="pill ' + (PG ? (PG.complete < PG.total ? "run" : "ok") : "") + '">reviewer ' + (PG ? PG.complete + " / " + PG.total : "not started") + "</span>";
 
   var dp = dl.total ? 100 * dl.bytes / dl.total : 0;
   var eta = dl.mb_s > 0 ? ((dl.total - dl.bytes) / 1e6 / dl.mb_s / 60).toFixed(0) + " min left" : "";
   $("setup").innerHTML = '<div class="grid">' +
-    kpi("Download to the Mac", (dl.bytes / 1e9).toFixed(2) + " / " + (dl.total / 1e9).toFixed(2) + " GB", dl.done ? '<span class="pos">complete</span>' : dl.mb_s + " MB/s · " + eta) +
+    kpi("Download to the Mac", installed ? "9.28 GB" : (dl.bytes / 1e9).toFixed(2) + " / " + (dl.total / 1e9).toFixed(2) + " GB", installed || dl.done ? '<span class="pos">complete</span>' : dl.mb_s + " MB/s · " + eta) +
     kpi("Copy to the ThinkPad", tr.state ? esc(tr.state) : (installed ? "done" : "waiting"), tr.detail ? esc(tr.detail) : "over the LAN cable") +
     kpi("Model on the ThinkPad", installed ? '<span class="pos">ready</span>' : "not yet", (tp.models || []).join(", ")) +
     kpi("ThinkPad", tp.up ? '<span class="pos">up</span>' : '<span class="neg">down</span>',
         tp.up ? "load " + (tp.load || []).join(" ") + " · RAM " + tp.mem_used_gb + "/" + tp.mem_total_gb + " GB" + (tp.temp_c ? " · " + tp.temp_c.toFixed(0) + "°C" : "") : "last seen " + ago(tp.seen)) +
-    "</div>" + bar(dp);
+    "</div>" + bar(installed ? 100 : dp);
 
   if (!llm) {
     $("llm").innerHTML = '<p class="sub">Waiting for the first answer. Version 2: Qwen3-14B with medium thinking reviews each 2025-26 signal blind (probability of profit, TAKE/SKIP), then explains why it won or lost once the result is known.</p>';
   } else {
-    var lp = 100 * llm.done / llm.total, o = S.llm_outcomes || {}, T = o.TAKE, K = o.SKIP, A = o.all;
+    var o = S.llm_outcomes || {}, T = o.TAKE, K = o.SKIP, A = o.all, pg = o.progress || {total: llm.total, complete: 0, reviewed: 0, redo_left: 0};
+    var lp = pg.total ? 100 * pg.complete / pg.total : 0;
     var feed = (o.recent || []).map(function (r) {
       return '<div><span class="tag ' + esc(r.decision) + '">' + esc(r.decision) + " " + (r.p == null ? "" : r.p + "%") + "</span><b>" + esc(r.coin) + "</b> " +
         '<span class="' + (r.outcome === "WON" ? "pos" : "neg") + '">' + esc(r.outcome) + " " + (r.r > 0 ? "+" : "") + r.r + "R</span> · " + esc(r.reason) +
         '<br><span class="dim">why: <b>' + esc(r.category) + "</b> — " + esc(r.why) + " · " + r.seconds + " s</span></div>";
     }).join("");
     var why = o.why || {}, cats = Object.keys(why).sort(function (a, b) { return (why[b].won + why[b].lost) - (why[a].won + why[a].lost); });
-    var whyT = cats.length ? '<div class="tw"><table><tr><th>Why (post-mortem)</th><th class=n>Won</th><th class=n>Lost</th></tr>' + cats.map(function (c) {
+    var whyT = cats.length ? '<div class="tw"><table><tr><th>Why (rule-based, ' + (o.why_n || 0) + ' signals)</th><th class=n>Won</th><th class=n>Lost</th></tr>' + cats.map(function (c) {
       return "<tr><td>" + esc(c) + "</td><td class=n>" + why[c].won + "</td><td class=n>" + why[c].lost + "</td></tr>"; }).join("") + "</table></div>" : "";
     var bands = (o.bands || []).length ? '<div class="tw"><table><tr><th>Model said profit chance</th><th class=n>Signals</th><th class=n>Won %</th><th class=n>Avg R</th></tr>' + o.bands.map(function (b) {
       return "<tr><td>" + esc(b.band) + "%</td><td class=n>" + b.n + "</td><td class=n>" + b.win_pct + "</td><td class=n>" + sgn(b.avg_r) + "</td></tr>"; }).join("") + "</table></div>" : "";
     $("llm").innerHTML = '<div class="grid">' +
-      kpi("Reviewed", llm.done + " / " + llm.total, lp.toFixed(1) + "% · " + esc(llm.model)) +
-      kpi("Speed", (llm.avg_seconds / 60).toFixed(1) + " min each", "about " + (llm.eta_minutes / 60).toFixed(0) + " h left") +
-      kpi("All reviewed", A ? A.n : 0, A ? "won " + A.win_pct + "% · avg " + sgn(A.avg_r) + "R" : "") +
+      kpi("Reviewed", pg.complete + " / " + pg.total, lp.toFixed(1) + "% done" + (pg.redo_left ? " · " + pg.redo_left + " older post-mortems being redone" : "")) +
+      kpi("Speed", (pg.per_signal_min || 0) + " min / signal", "about " + (pg.eta_hours || 0).toFixed(0) + " h left") +
+      kpi("Pre-trade answers", A ? A.n : 0, A ? "these signals won " + A.win_pct + "% · avg " + sgn(A.avg_r) + "R" : "") +
       kpi("TAKE", T ? T.n : 0, T ? "won " + T.win_pct + "% · avg " + sgn(T.avg_r) + "R" : "") +
       kpi("SKIP", K ? K.n : 0, K ? "won " + K.win_pct + "% · avg " + sgn(K.avg_r) + "R" : "") +
       kpi("Errors", (llm.counts || {}).errors || 0, "updated " + ago(llm.updated)) +
