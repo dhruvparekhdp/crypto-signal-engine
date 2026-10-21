@@ -61,6 +61,11 @@ EXITS = {
                        ("slow", ((1.5, 0.0), (2.0, 0.5), (2.5, 1.0))),
                        ("fast", ((0.75, 0.0), (1.25, 0.5), (1.75, 1.0), (2.25, 1.5))))
        for cf in (None, 60, 240) for bf in (0.0, 0.25)},
+    # 21 Oct 2026 edge research: 31% of live-exit trades close at the 7-day limit, averaging +0.56R with 71% in profit -
+    # does a longer hold (or a farther target) keep more of those? Same ladder, confirmation and buffer as the live exit
+    **{name: ExitModel(stop_atr=3.0, rr=rr, max_hold_min=hold, lock_confirm_min=60, lock_buffer_r=0.25,
+                       ladder=((1.0, 0.0), (1.5, 0.5), (2.0, 1.0), (2.5, 1.5)))
+       for name, hold, rr in (("live_h10d", 14400, 3.0), ("live_h14d", 20160, 3.0), ("live_h14d_rr5", 20160, 5.0))},
     # 18 Oct 2026 owner: "at 1.28R the lock should be 0.75-1R" - a tight trail from 1R, lock = best - gap, stepped
     # every 0.25R, with the live 1h-close confirmation (compare with rb_std_c60_b25, the live ladder)
     **{f"own_gap{int(g * 100):02d}_c60": ExitModel(stop_atr=3.0, rr=3.0, max_hold_min=10080, lock_confirm_min=60,
