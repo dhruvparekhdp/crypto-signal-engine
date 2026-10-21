@@ -113,6 +113,7 @@ async def snapshot() -> dict:
             "live": mode == "live" and bool(settings.delta_india_live_orders),
             "kill_switch": bool(settings.delta_india_kill_switch), "risk_pct": settings.delta_india_risk_pct,
             "max_open": settings.delta_india_max_open, "min_leverage": settings.delta_india_min_leverage,
+            "round_up_pct": settings.delta_india_round_up_risk_pct,
             "daily_loss_pct": settings.delta_india_daily_loss_pct, "floor_inr": settings.delta_india_min_wallet_inr,
             "generated_ms": int(time.time() * 1000), "positions": [], "orders": [], "journal": [], "error": ""}
     try:

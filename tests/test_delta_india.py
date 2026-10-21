@@ -62,3 +62,19 @@ class RoundUpTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+def test_round_up_limit_lets_doge_and_avax_trade_on_a_small_wallet():
+    """21 Oct 2026 (owner): one contract may risk up to 10% of the wallet, so a Rs475 wallet trades the Rs1,000 coins."""
+    from config.settings import Settings
+    from execution.delta_book import size_contracts
+    from execution.delta_india import Product
+    cap = Settings.model_fields["delta_india_round_up_risk_pct"].default
+    assert cap == 0.10
+    doge, avax, link = (Product(1, "DOGEUSD", 100, 1e-5, 1.0, "DOGE"), Product(2, "AVAXUSD", 1, 1e-3, 1.0, "AVAX"),
+                        Product(3, "LINKUSD", 1, 1e-3, 1.0, "LINK"))
+    # DOGE 0.08, 6% stop: one contract (100 DOGE) risks Rs40.8, 8.6% of Rs475
+    assert size_contracts(doge, 0.08, 0.08 * 1.06, 475, 0.03, 85.0, round_up_risk_pct=cap)[0] == 1
+    assert size_contracts(avax, 9.8, 9.8 * 1.05, 475, 0.03, 85.0, round_up_risk_pct=cap)[0] == 1      # Rs41.7, 8.8%
+    assert size_contracts(link, 12.0, 12.0 * 1.066, 475, 0.03, 85.0, round_up_risk_pct=cap)[0] == 0   # Rs67, 14%
+    assert size_contracts(doge, 0.08, 0.08 * 1.06, 475, 0.03, 85.0, round_up_risk_pct=0.05)[0] == 0   # the old 5%

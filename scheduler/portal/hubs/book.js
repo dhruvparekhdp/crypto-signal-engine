@@ -296,7 +296,8 @@
       ctx.right("updated " + U.hms(new Date(d.generated_ms)) + " UTC · refreshes every 5 s");
       var w = d.wallet || {}, day = d.day || {};
       var state = d.kill_switch ? ["red", "KILL SWITCH ON: no new orders", "Open positions keep their exchange stops."] :
-        d.live ? ["ok", "LIVE: real orders are ON", "Swing signals are copied to Delta India with real money. Risk " + Math.round(d.risk_pct * 1000) / 10 + "% per trade, max " + d.max_open + " open, leverage ≥ " + d.min_leverage + "x."] :
+        d.live ? ["ok", "LIVE: real orders are ON", "Swing signals are copied to Delta India with real money. Risk " + Math.round(d.risk_pct * 1000) / 10 + "% per trade, max " + d.max_open + " open, leverage ≥ " + d.min_leverage + "x" +
+          (d.round_up_pct ? "; when 3% buys less than one contract, one contract is taken if it risks at most " + Math.round(d.round_up_pct * 100) + "% of the wallet" : "") + "."] :
         ["amber", "Not live: no real orders (mode " + String(d.mode).toUpperCase() + (d.live_orders ? "" : ", live orders OFF") + ")", "Turn on 'Delta book mode = live' and 'Allow live Delta orders' on Settings to start."];
       var dayLeft = day.limit_inr != null && day.pnl_inr != null ? day.limit_inr + Math.min(0, day.pnl_inr) : null;
       el.innerHTML = C.flag(state[0], state[1], state[2], d.error || "") +

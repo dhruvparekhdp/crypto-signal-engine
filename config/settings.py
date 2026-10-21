@@ -331,7 +331,11 @@ class Settings(BaseSettings):
     delta_india_min_leverage: int = 5
     # 18 Oct 2026, owner: "i know amount 3% risk, but try to fit some more coins". When 3% buys less than one contract,
     # take ONE contract if that risks at most this share of the wallet (0 = never round up). Same rule on paper.
-    delta_india_round_up_risk_pct: float = 0.05
+    # one Delta contract may be taken when 3% buys less than one, if that contract risks at most this share of the wallet.
+    # 5% -> 10% (owner, 21 Oct 2026: "try ... on this Rs500, if this becomes zero also no issue"): DOGE and AVAX
+    # (one contract ~Rs43, ~9% of Rs475) join ADA/XRP/SUI/TIA/gold - the Rs1,000 coin set; ~45% more live trades in
+    # the simulator (scripts/live_sim.py), worst 3-month window Rs300, the Rs250 floor never hit
+    delta_india_round_up_risk_pct: float = 0.10
     # Spread / depth guard before a real-money market entry (execution/entry_guard.py, 19 Oct 2026). Normal spreads on
     # the live coins are 0.00-0.09%; the guard is for abnormal books, not a filter on ordinary trades.
     delta_india_max_spread_pct: float = 0.5
