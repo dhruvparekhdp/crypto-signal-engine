@@ -48,9 +48,12 @@ def spec_digest(strategy_id: str, timeframe: str, params: dict) -> str:
 
 
 def trade_r(t) -> float:
-    """A closed paper trade in R, net of fees and funding: the same yardstick as the backtest."""
+    """A closed paper trade in R, net of fees and funding: the same yardstick as the backtest. 1R is the distance to the
+    ORIGINAL stop - the profit ladder moves stop_price toward the entry, and dividing by that turned +0.23R into +0.99R
+    (21 Oct 2026). Rows from before initial_stop_price existed fall back to stop_price."""
     side = 1 if t.side == "long" else -1
-    risk = abs(t.entry_price - t.stop_price) / t.entry_price if t.entry_price else 0
+    stop = getattr(t, "initial_stop_price", 0.0) or t.stop_price
+    risk = abs(t.entry_price - stop) / t.entry_price if t.entry_price else 0
     move = side * (t.exit_price - t.entry_price) / t.entry_price if t.entry_price else 0
     cost = (t.trading_fees + t.funding_paid) / (t.margin * t.leverage) if t.margin and t.leverage else 0
     return (move - cost) / risk if risk > 0 else 0.0

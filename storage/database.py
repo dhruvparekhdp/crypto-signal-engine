@@ -179,6 +179,7 @@ _COLUMN_MIGRATIONS: list[str] = [
         "ALTER TABLE crypto_signal_log ADD COLUMN IF NOT EXISTS suppressed_by VARCHAR DEFAULT ''",
         "ALTER TABLE crypto_signal_log ADD COLUMN IF NOT EXISTS skip_reason VARCHAR DEFAULT ''",
         "ALTER TABLE news_sentiment ADD COLUMN IF NOT EXISTS duplicate_of VARCHAR DEFAULT ''",
+        "ALTER TABLE paper_trades ADD COLUMN IF NOT EXISTS initial_stop_price FLOAT DEFAULT 0",
         "CREATE INDEX IF NOT EXISTS ix_csl_suppressed ON crypto_signal_log (suppressed_by)",
         # Mirror review (27 Sep): primary vs mirror candidate, review-round
         # lineage, and why a tracked candidate stopped without a trade.

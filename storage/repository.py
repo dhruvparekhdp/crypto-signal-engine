@@ -573,6 +573,7 @@ class Repository:
             leverage=pos.leverage,
             usdt_inr=pos.usdt_inr,
             stop_price=pos.stop_price,
+            initial_stop_price=getattr(pos, "initial_stop_price", 0.0) or pos.stop_price,
             target_price=pos.target_price,
             exit_reason=trade.reason.value,
             gross_pnl=trade.gross_pnl,

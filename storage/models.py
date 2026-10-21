@@ -762,6 +762,8 @@ class PaperTrade(Base):
     usdt_inr: Mapped[float] = mapped_column(Float, default=102.0)
 
     stop_price: Mapped[float] = mapped_column(Float, default=0.0)
+    # the stop the trade opened with: the ladder moves stop_price, so R is measured against this (21 Oct 2026)
+    initial_stop_price: Mapped[float] = mapped_column(Float, default=0.0)
     target_price: Mapped[float] = mapped_column(Float, default=0.0)
     exit_reason: Mapped[str] = mapped_column(String, index=True)
 
