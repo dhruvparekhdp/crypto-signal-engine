@@ -75,6 +75,7 @@ def _llm_outcomes(path: Path) -> dict | None:
     bands, and the post-mortem's 'why' categories for wins and for losses."""
     try:
         rows = [json.loads(ln) for ln in path.read_text().splitlines() if ln.strip()]
+        rows = list({r["key"]: r for r in rows if r.get("key")}.values())      # a redone post-mortem replaces the old row
         rows = [r for r in rows if r.get("pre") and "r" in r]
         if not rows:
             return None

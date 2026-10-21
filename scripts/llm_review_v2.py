@@ -49,22 +49,48 @@ PRE_SCHEMA = {"type": "object", "properties": {
     "reason": {"type": "string"}}, "required": ["p_profit", "decision", "factors", "reason"]}
 
 CATEGORIES = ["trend continued", "reversal", "no follow-through", "market-wide move", "volatility spike",
-              "late entry", "gave back gains"]
+              "gave back gains"]
+
+
+def rule_category(res: dict) -> str:
+    """Why a trade won or lost, decided from its numbers (21 Oct 2026: left to the model, it called a short that lost
+    while BTC rose 6.6% a 'reversal', and never used 'gave back gains' for trades that reached +1.7R to +3R and the
+    ladder closed for +0.04R to +1.09R). The model then explains within this category."""
+    r, best = res["r_after_costs"], res["best_point_r"]
+    btc = res.get("btc_move_with_trade_pct") or 0.0          # + = BTC moved the trade's way
+    after, ex = res.get("price_1_day_after_exit_r"), res.get("exit_kind")
+    if ex == "trail" and best - r >= 1.0:
+        return "gave back gains"
+    if r > 0:
+        if ex == "time" and r < 0.5:
+            return "no follow-through"
+        return "market-wide move" if btc >= 3.0 else "trend continued"
+    if btc <= -3.0:
+        return "market-wide move"
+    if ex == "stop" and after is not None and after >= 0:
+        return "volatility spike"                              # stopped out, and a day later price was back past entry
+    if ex == "time" and r > -0.5:
+        return "no follow-through"
+    return "reversal"
+
+
 POST_SYSTEM = (
     "You are reviewing a FINISHED trade from a trend-following breakout system on crypto perpetual futures, to explain "
-    "WHY it won or lost. You get the facts at entry and what happened after. Choose the one category that explains "
-    "the result best: 'trend continued' (moved our way and kept going), 'reversal' (turned against the trade soon "
-    "after entry), 'no follow-through' (went nowhere; small result or time exit), 'market-wide move' (BTC moved hard "
-    "and carried the coin with it, for or against us), 'volatility spike' (a sharp swing hit the stop or the target), "
-    "'late entry' (most of the move had happened before entry), 'gave back gains' (was at +1R or more, then the "
-    "profit ladder closed it for less). Explain in at most two sentences that cite the numbers. Say whether the "
-    "result was predictable from the entry facts (yes, partly, no) and give one lesson of at most 15 words. "
-    "Numbers are anonymised. Answer in JSON.")
+    "WHY it won or lost. You get the facts at entry and what happened after. The main cause ('category') has already "
+    "been decided from the numbers by fixed rules: 'trend continued' (moved the trade's way and kept going), "
+    "'reversal' (turned against the trade), 'no follow-through' (went nowhere; small result at the time limit), "
+    "'market-wide move' (BTC moved 3% or more with or against the trade and carried the coin), 'volatility spike' "
+    "(the stop was hit, yet a day later price was back past the entry), 'gave back gains' (reached a good profit, "
+    "then the profit ladder closed it at least 1R lower). Explain the result in at most two sentences that cite the "
+    "numbers and are consistent with that category; name one other factor that contributed, if any. Judge only from "
+    "the entry facts whether the result was predictable (yes, partly, no) - a win is not predictable just because it "
+    "won. Give one lesson of at most 15 words. Numbers are anonymised. Answer in JSON.")
 POST_SCHEMA = {"type": "object", "properties": {
-    "category": {"type": "string", "enum": CATEGORIES},
     "why": {"type": "string"},
+    "other_factor": {"type": "string"},
     "predictable": {"type": "string", "enum": ["yes", "partly", "no"]},
-    "lesson": {"type": "string"}}, "required": ["category", "why", "predictable", "lesson"]}
+    "lesson": {"type": "string"}}, "required": ["why", "other_factor", "predictable", "lesson"]}
+POST_VERSION = 2
 
 # Qwen3's own advice for non-thinking mode, plus a penalty against the templated answers v1 produced
 OPTIONS = {"temperature": 0.7, "top_p": 0.8, "top_k": 20, "min_p": 0.0, "presence_penalty": 1.0, "seed": 42,
@@ -158,15 +184,21 @@ def prepare(since: str = "2025-01-01") -> None:
                 return btc_h.c[j] if 0 <= j < len(btc_h.c) else None
 
             b0, b1 = btc_at(row.entry_t), btc_at(row.exit_t)
-            post = {**pre, "result": {
+            btc_move = pct(b1, b0) if b0 and b1 else None
+            best_r = round(float(row.mfe / row.stop_frac), 2)
+            result = {
                 "outcome": "WON" if row.r_net > 0 else "LOST", "r_after_costs": round(float(row.r_net), 2),
                 "exit": {"target": "hit the 3R target", "stop": "hit the stop", "trail": "closed by the profit ladder",
-                         "time": "closed at the 7-day limit"}.get(row.reason, row.reason),
+                         "time": "closed at the 7-day limit"}.get(row.reason, row.reason), "exit_kind": row.reason,
                 "hours_held": hours,
-                "best_point_r": round(float(row.mfe / row.stop_frac), 2), "worst_point_r": round(float(-row.mae / row.stop_frac), 2),
+                "best_point_r": best_r, "worst_point_r": round(float(-row.mae / row.stop_frac), 2),
+                "gave_back_from_best_r": round(best_r - float(row.r_net), 2),
                 "path_r_at_25_50_75_100_pct_of_hold": [r_at(row.entry_t + int(f * (row.exit_t - row.entry_t))) for f in (0.25, 0.5, 0.75, 1.0)],
-                "btc_move_during_trade_pct": pct(b1, b0) if b0 and b1 else None,
-                "price_1_day_after_exit_r": r_at(row.exit_t + 24 * H)}}
+                "btc_move_during_trade_pct": btc_move,
+                "btc_move_with_trade_pct": round(btc_move * side, 2) if btc_move is not None else None,
+                "price_1_day_after_exit_r": r_at(row.exit_t + 24 * H)}
+            result["category"] = rule_category(result)
+            post = {**pre, "result": result}
             fh.write(json.dumps({"key": f"{row.spec}|{row.coin}|{int(row.entry_t)}", "coin": row.coin,
                                  "pre": pre, "post": post}) + "\n")
             n += 1
@@ -228,31 +260,43 @@ def run(prompts: str, out_dir: str, model: str = "qwen3:14b", host: str = "http:
     out = Path(out_dir)
     out.mkdir(parents=True, exist_ok=True)
     res_path = out / f"results_v2_{model.replace(':', '_')}.jsonl"
-    done = set()
+    done, old_pre = set(), {}
     if res_path.exists():
         for ln in res_path.read_text().splitlines():
             try:
-                done.add(json.loads(ln)["key"])
-            except (ValueError, KeyError):
-                pass
+                rec = json.loads(ln)
+            except ValueError:
+                continue
+            if rec.get("post_version") == POST_VERSION and rec.get("pre"):
+                done.add(rec["key"])
+            elif rec.get("pre"):
+                old_pre[rec["key"]] = rec          # pre-trade answer kept; only the post-mortem is redone
     items = [json.loads(ln) for ln in Path(prompts).read_text().splitlines() if ln.strip()]
     todo = [x for x in items if x["key"] not in done]
     started, times, counts = time.time(), [], {"TAKE": 0, "SKIP": 0, "errors": 0}
     with open(res_path, "a") as fh:
         for n, it in enumerate(todo, 1):
             t0 = time.time()
-            rec = {"key": it["key"], "coin": it.get("coin"), "model": model, "version": 2}
+            rec = {"key": it["key"], "coin": it.get("coin"), "model": model, "version": 2, "post_version": POST_VERSION}
+            prev = old_pre.get(it["key"])
+            if prev is not None:                    # answered before the post-mortem changed: keep its pre-trade review
+                rec.update({k: prev[k] for k in ("pre", "pre_seconds", "thinking") if k in prev})
+            else:
+                try:
+                    pre, s1, thought = _chat_thinking(model, PRE_SYSTEM, it["pre"], PRE_SCHEMA, host)
+                    rec.update(pre=pre, pre_seconds=round(s1, 1), thinking=thought[-1500:])
+                except Exception as e:  # noqa: BLE001 - one bad answer must not stop the batch
+                    counts["errors"] += 1
+                    rec["pre_error"] = str(e)[:160]
+            if rec.get("pre"):
+                d = rec["pre"].get("decision", "TAKE")
+                counts[d] = counts.get(d, 0) + 1
             try:
-                pre, s1, thought = _chat_thinking(model, PRE_SYSTEM, it["pre"], PRE_SCHEMA, host)
-                rec.update(pre=pre, pre_seconds=round(s1, 1), thinking=thought[-1500:])
-                counts[pre.get("decision", "TAKE")] = counts.get(pre.get("decision", "TAKE"), 0) + 1
-            except Exception as e:  # noqa: BLE001 - one bad answer must not stop the batch
-                counts["errors"] += 1
-                rec["pre_error"] = str(e)[:160]
-            try:
+                res = it["post"]["result"]
                 post, s2 = _chat(model, POST_SYSTEM, it["post"], POST_SCHEMA, host)
-                rec.update(post=post, post_seconds=round(s2, 1), outcome=it["post"]["result"]["outcome"],
-                           r=it["post"]["result"]["r_after_costs"])
+                post["category"] = res["category"]
+                rec.update(post=post, post_seconds=round(s2, 1), outcome=res["outcome"], r=res["r_after_costs"],
+                           best_r=res["best_point_r"], btc_with_trade=res["btc_move_with_trade_pct"])
             except Exception as e:  # noqa: BLE001
                 counts["errors"] += 1
                 rec["post_error"] = str(e)[:160]
