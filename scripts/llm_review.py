@@ -33,7 +33,7 @@ def prepare(since: str = "2025-01-01") -> None:
     import pandas as pd
 
     from analysis.lab import features as F
-    from analysis.lab.data import load_bars
+    from analysis.lab.data import INTERVAL_MS, load_bars
     t = pd.read_pickle("data/lab/live_sim_trades.pkl")
     t = t[(t.entry_t >= pd.Timestamp(since, tz="UTC").value // 10**6) & t.filter_ok].reset_index(drop=True)
     btc = load_bars("BTCUSDT", "1d")
@@ -49,7 +49,9 @@ def prepare(since: str = "2025-01-01") -> None:
                 b = load_bars(sym, row.tf)
                 bars[key] = (b, F.ema(b.c, 50), F.ema(b.c, 200), F.atr(b.h, b.l, b.c), F.rsi(b.c, 14))
             b, e50, e200, atr, rsi = bars[key]
-            i = int(np.searchsorted(b.t, row.sig_t, side="left"))     # the signal bar (it closed at sig_t + tf)
+            # sig_t is the signal bar's CLOSE time: the bar opening then is the entry bar, i.e. the future. This line
+            # read that bar until 21 Oct 2026, so the 37 version-1 answers saw 4-8 h after the signal (superseded by v2)
+            i = int(np.searchsorted(b.t, row.sig_t - INTERVAL_MS[row.tf], side="left"))
             if i < 210 or i >= len(b.t):
                 continue
             c = b.c[i - 30:i + 1]
@@ -121,10 +123,11 @@ def apply() -> None:
 
 
 # ----------------------------------------------------------------------------------- ThinkPad: run (standard library)
-def _ask(model: str, facts: dict, host: str, think: bool = False) -> dict:
+def _ask(model: str, facts: dict, host: str, think: bool = False, num_gpu: int = 0, threads: int = 10) -> dict:
     body = {"model": model, "stream": False, "format": "json", "think": think,
-            # num_gpu 0: the ThinkPad's Intel iGPU (Vulkan) runs out of memory for a 14B model's KV cache; CPU + RAM fits
-            "options": {"temperature": 0, "num_ctx": 8192 if think else 4096, "num_gpu": 0},
+            # the ThinkPad's Intel iGPU (Vulkan) cannot hold all of a 14B model and its KV cache; part of the layers
+            # there plus all 10 CPU cores was 3x faster than CPU alone (21 Oct 2026: 45 s vs 145 s a review)
+            "options": {"temperature": 0, "num_ctx": 8192 if think else 4096, "num_gpu": num_gpu, "num_thread": threads},
             "messages": [{"role": "system", "content": SYSTEM},
                          {"role": "user", "content": json.dumps(facts, separators=(",", ":"))}]}
     req = urllib.request.Request(f"{host}/api/chat", data=json.dumps(body).encode(),
@@ -138,7 +141,7 @@ def _ask(model: str, facts: dict, host: str, think: bool = False) -> dict:
 
 
 def run(prompts: str, out_dir: str, model: str = "qwen3:8b", host: str = "http://127.0.0.1:11434",
-        think: bool = False) -> None:
+        think: bool = False, num_gpu: int = 0, threads: int = 10) -> None:
     out = Path(out_dir)
     out.mkdir(parents=True, exist_ok=True)
     res_path = out / f"results_{model.replace(':', '_')}.jsonl"
@@ -156,7 +159,7 @@ def run(prompts: str, out_dir: str, model: str = "qwen3:8b", host: str = "http:/
         for n, it in enumerate(todo, 1):
             t0 = time.time()
             try:
-                r = _ask(model, it["facts"], host, think)
+                r = _ask(model, it["facts"], host, think, num_gpu, threads)
             except Exception as e:  # noqa: BLE001 - one bad answer must not stop the batch
                 counts["errors"] += 1
                 r = {"decision": "TAKE", "confidence": None, "reason": f"error: {str(e)[:120]}", "parsed": False}
@@ -183,8 +186,10 @@ if __name__ == "__main__":
         ap.add_argument("out_dir")
         ap.add_argument("--model", default="qwen3:8b")
         ap.add_argument("--think", action="store_true")
+        ap.add_argument("--num-gpu", type=int, default=0)
+        ap.add_argument("--threads", type=int, default=10)
         a = ap.parse_args()
-        run(a.prompts, a.out_dir, a.model, think=a.think)
+        run(a.prompts, a.out_dir, a.model, think=a.think, num_gpu=a.num_gpu, threads=a.threads)
     elif len(sys.argv) >= 2 and sys.argv[1] == "apply":
         apply()
     else:

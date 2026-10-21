@@ -50,7 +50,7 @@ td.n,th.n{text-align:right;font-variant-numeric:tabular-nums}
   <h2>1 · Setup: qwen3:14b to the ThinkPad</h2>
   <div class="card" id="setup"></div>
 
-  <h2>2 · Local LLM reviewer (ThinkPad)</h2>
+  <h2>2 · Local LLM reviewer (ThinkPad, Qwen3-14B, medium thinking)</h2>
   <div class="card" id="llm"></div>
 
   <h2>3 · Live simulator results (₹500 start, live rules)</h2>
@@ -97,22 +97,30 @@ function render() {
     "</div>" + bar(dp);
 
   if (!llm) {
-    $("llm").innerHTML = '<p class="sub">Starts as soon as qwen3:14b is on the ThinkPad. 1,704 signals from 2025-26, anonymised (no coin names, dates or prices); the model answers TAKE or SKIP for each.</p>';
+    $("llm").innerHTML = '<p class="sub">Waiting for the first answer. Version 2: Qwen3-14B with medium thinking reviews each 2025-26 signal blind (probability of profit, TAKE/SKIP), then explains why it won or lost once the result is known.</p>';
   } else {
-    var lp = 100 * llm.done / llm.total, o = S.llm_outcomes || {}, T = o.TAKE, K = o.SKIP;
+    var lp = 100 * llm.done / llm.total, o = S.llm_outcomes || {}, T = o.TAKE, K = o.SKIP, A = o.all;
     var feed = (o.recent || []).map(function (r) {
-      return '<div><span class="tag ' + esc(r.decision) + '">' + esc(r.decision) + "</span>" + esc(r.reason) +
-        ' <span class="dim">· ' + (r.confidence == null ? "" : r.confidence + "% · ") + r.seconds + " s</span></div>";
+      return '<div><span class="tag ' + esc(r.decision) + '">' + esc(r.decision) + " " + (r.p == null ? "" : r.p + "%") + "</span><b>" + esc(r.coin) + "</b> " +
+        '<span class="' + (r.outcome === "WON" ? "pos" : "neg") + '">' + esc(r.outcome) + " " + (r.r > 0 ? "+" : "") + r.r + "R</span> · " + esc(r.reason) +
+        '<br><span class="dim">why: <b>' + esc(r.category) + "</b> — " + esc(r.why) + " · " + r.seconds + " s</span></div>";
     }).join("");
+    var why = o.why || {}, cats = Object.keys(why).sort(function (a, b) { return (why[b].won + why[b].lost) - (why[a].won + why[a].lost); });
+    var whyT = cats.length ? '<div class="tw"><table><tr><th>Why (post-mortem)</th><th class=n>Won</th><th class=n>Lost</th></tr>' + cats.map(function (c) {
+      return "<tr><td>" + esc(c) + "</td><td class=n>" + why[c].won + "</td><td class=n>" + why[c].lost + "</td></tr>"; }).join("") + "</table></div>" : "";
+    var bands = (o.bands || []).length ? '<div class="tw"><table><tr><th>Model said profit chance</th><th class=n>Signals</th><th class=n>Won %</th><th class=n>Avg R</th></tr>' + o.bands.map(function (b) {
+      return "<tr><td>" + esc(b.band) + "%</td><td class=n>" + b.n + "</td><td class=n>" + b.win_pct + "</td><td class=n>" + sgn(b.avg_r) + "</td></tr>"; }).join("") + "</table></div>" : "";
     $("llm").innerHTML = '<div class="grid">' +
-      kpi("Reviewed", llm.done + " / " + llm.total, lp.toFixed(1) + "% · model " + esc(llm.model)) +
-      kpi("Speed", llm.avg_seconds + " s each", "about " + (llm.eta_minutes / 60).toFixed(1) + " h left") +
-      kpi("TAKE so far", T ? T.n : (llm.counts || {}).TAKE || 0, T ? "won " + T.win_pct + "% · avg " + sgn(T.avg_r) + "R" : "") +
-      kpi("SKIP so far", K ? K.n : (llm.counts || {}).SKIP || 0, K ? "won " + K.win_pct + "% · avg " + sgn(K.avg_r) + "R" : "") +
+      kpi("Reviewed", llm.done + " / " + llm.total, lp.toFixed(1) + "% · " + esc(llm.model)) +
+      kpi("Speed", (llm.avg_seconds / 60).toFixed(1) + " min each", "about " + (llm.eta_minutes / 60).toFixed(0) + " h left") +
+      kpi("All reviewed", A ? A.n : 0, A ? "won " + A.win_pct + "% · avg " + sgn(A.avg_r) + "R" : "") +
+      kpi("TAKE", T ? T.n : 0, T ? "won " + T.win_pct + "% · avg " + sgn(T.avg_r) + "R" : "") +
+      kpi("SKIP", K ? K.n : 0, K ? "won " + K.win_pct + "% · avg " + sgn(K.avg_r) + "R" : "") +
       kpi("Errors", (llm.counts || {}).errors || 0, "updated " + ago(llm.updated)) +
       "</div>" + bar(lp) +
-      '<p class="note">If SKIP signals end worse than TAKE signals, the model is adding something. The full with / without comparison through the live simulator runs when it finishes.</p>' +
-      (feed ? '<div class="sub" style="margin-top:10px">Latest decisions</div><div class="feed">' + feed + "</div>" : "");
+      '<p class="note">The model helps only if SKIP signals end worse than TAKE signals, and higher stated chances go with better results. Order: ₹500 coins, then DOGE and AVAX, then ETH, BTC, SOL.</p>' +
+      '<div class="cols">' + (bands ? '<div>' + bands + "</div>" : "") + (whyT ? '<div>' + whyT + "</div>" : "") + "</div>" +
+      (feed ? '<div class="sub" style="margin-top:10px">Latest reviews</div><div class="feed">' + feed + "</div>" : "");
   }
 
   var sim = S.sim;

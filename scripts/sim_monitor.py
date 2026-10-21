@@ -22,7 +22,7 @@ SCRATCH = Path("/private/tmp/claude-501/-Users-dhruv-personal-Tennis-bet-crypto-
 TP = "dhruv@fe80::40c5:74aa:b07d:c11a%en5"
 PROD = ["-i", str(Path.home() / ".ssh/crypto-ec2"), "ubuntu@52.62.37.4"]
 MODEL_BYTES = 9_276_184_896
-LLM_DIR = "~/lab/llm_review/out"
+LLM_DIR = "~/lab/llm_review/out_v2"          # version 2 (21 Oct 2026); v1 had a biased prompt
 STATE: dict = {"started": time.time()}
 LOCK = threading.Lock()
 
@@ -71,22 +71,42 @@ def _sim_summary() -> dict | None:
 
 
 def _llm_outcomes(path: Path) -> dict | None:
-    """TAKE / SKIP so far against how those signals actually ended (the lab's replay)."""
+    """Version 2 records carry their own result: TAKE / SKIP against how the signal ended, the model's probability in
+    bands, and the post-mortem's 'why' categories for wins and for losses."""
     try:
-        import pandas as pd
         rows = [json.loads(ln) for ln in path.read_text().splitlines() if ln.strip()]
+        rows = [r for r in rows if r.get("pre") and "r" in r]
         if not rows:
             return None
-        t = pd.read_pickle(ROOT / "data/lab/live_sim_trades.pkl")
-        t["key"] = [f"{s}|{c}|{int(e)}" for s, c, e in zip(t.spec, t.coin, t.entry_t)]
-        r = t.set_index("key").r_net
         out = {}
         for dec in ("TAKE", "SKIP"):
-            rs = [r[x["key"]] for x in rows if x["decision"] == dec and x["key"] in r.index]
+            rs = [r["r"] for r in rows if r["pre"].get("decision") == dec]
             if rs:
-                out[dec] = {"n": len(rs), "win_pct": round(100 * sum(1 for v in rs if v > 0) / len(rs), 1),
+                out[dec] = {"n": len(rs), "win_pct": round(100 * sum(v > 0 for v in rs) / len(rs), 1),
                             "avg_r": round(sum(rs) / len(rs), 3)}
-        out["recent"] = [{k: x.get(k) for k in ("decision", "confidence", "reason", "seconds", "key")} for x in rows[-8:]][::-1]
+        bands = {}
+        for r in rows:
+            p = r["pre"].get("p_profit")
+            if p is None:
+                continue
+            b = "<40" if p < 40 else "40-47" if p < 48 else "48-55" if p <= 55 else ">55"
+            bands.setdefault(b, []).append(r["r"])
+        out["bands"] = [{"band": b, "n": len(v), "win_pct": round(100 * sum(x > 0 for x in v) / len(v), 1),
+                         "avg_r": round(sum(v) / len(v), 3)} for b, v in sorted(bands.items(), key=lambda kv: kv[0])]
+        why = {}
+        for r in rows:
+            c = (r.get("post") or {}).get("category")
+            if c:
+                w = why.setdefault(c, {"won": 0, "lost": 0})
+                w["won" if r["outcome"] == "WON" else "lost"] += 1
+        out["why"] = why
+        out["all"] = {"n": len(rows), "win_pct": round(100 * sum(r["r"] > 0 for r in rows) / len(rows), 1),
+                      "avg_r": round(sum(r["r"] for r in rows) / len(rows), 3)}
+        out["recent"] = [{"coin": r.get("coin"), "decision": r["pre"].get("decision"), "p": r["pre"].get("p_profit"),
+                          "reason": r["pre"].get("reason"), "outcome": r.get("outcome"), "r": r.get("r"),
+                          "category": (r.get("post") or {}).get("category"), "why": (r.get("post") or {}).get("why"),
+                          "seconds": round((r.get("pre_seconds") or 0) + (r.get("post_seconds") or 0))}
+                         for r in rows[-8:]][::-1]
         return out
     except Exception as e:  # noqa: BLE001
         return {"error": str(e)[:120]}
@@ -135,10 +155,10 @@ def loop_thinkpad() -> None:
                               "temp_c": temp, "models": models})
             if prog:
                 _set("llm", prog)
-                local = ROOT / "data/lab/llm_review/results_qwen3_14b.jsonl"
+                local = ROOT / "data/lab/llm_review/results_v2_qwen3_14b.jsonl"
                 try:
                     subprocess.run(["scp", "-q", "-6", "-o", "BatchMode=yes", "-o", "ConnectTimeout=6",
-                                    f"dhruv@[fe80::40c5:74aa:b07d:c11a%en5]:{LLM_DIR}/results_qwen3_14b.jsonl",
+                                    f"dhruv@[fe80::40c5:74aa:b07d:c11a%en5]:{LLM_DIR}/results_v2_qwen3_14b.jsonl",
                                     str(local)], timeout=30, capture_output=True)
                     if local.exists():
                         _set("llm_outcomes", _llm_outcomes(local))
