@@ -248,3 +248,114 @@ async def test_the_api_returns_wallet_views_per_source_and_trade_labels(tmp_path
     assert body["wallets"]["levels"]["taken"] == 1 and body["wallets"]["levels"]["margin"] == 500
     assert body["wallets"]["intraday"]["taken"] == 0
     assert body["recent"][0]["labels"] == {"setup": "support reclaim"}
+
+
+# ---------------------------------------------------------------- roles, pairs, marking (22 Oct 2026 review)
+
+def test_mirror_shadow_is_the_engines_held_back_short_not_a_mirror():
+    from analysis.bracket_book import role_of
+    assert [role_of(x) for x in ("primary", "mirror", "mirror_shadow", "", None)] == \
+        ["primary", "mirror", "counter_trend", "primary", "primary"]
+
+
+def test_each_pick_is_compared_with_its_own_mirror_and_open_trades_can_be_marked():
+    from analysis.bracket_book import mark, pairs
+    pick = open_trade(10, "ethusdt", -1, "confluence", "primary", "intraday", T0, 100.0)
+    mirror = open_trade(11, "ethusdt", 1, "confluence", "mirror", "intraday", T0, 100.0, pair=10)
+    other = open_trade(12, "ethusdt", 1, "confluence", "mirror", "intraday", T0, 100.0, pair=99)   # pick not in book
+    for t in (pick, mirror, other):
+        advance(t, bars([(100, 100.2, 99.8, 100.0)]))
+    assert mark(open_trade(1, "x", 1, "c", "primary", "intraday", T0, 1.0), 2.0) is None    # not entered yet
+    m = [mark(t, 98.0) for t in (pick, mirror, other)]
+    assert m[0]["net_pct"] == pytest.approx(2 - 0.15) and m[1]["net_pct"] == pytest.approx(-2 - 0.15)
+    sr_p = dict(m[0], id="lv:ETHUSDT:1:primary", source="levels", role="primary", pair=None)
+    sr_m = dict(m[1], id="lv:ETHUSDT:1:mirror", source="levels", role="mirror", pair=None)
+    out = pairs(m + [sr_p, sr_m])
+    assert out["intraday|primary"] == {"n": 1, "pick_avg": 1.85, "mirror_avg": -2.15, "pick_better": 1}
+    assert out["levels|primary"]["n"] == 1 and len(out) == 2
+
+
+def test_the_wallet_takes_one_trade_per_coin_at_a_time():
+    def t(sym, entry_min, close_min):
+        return {"symbol": sym, "entry_ts": (T0 + timedelta(minutes=entry_min)).isoformat(), "status": "closed",
+                "closed_ts": (T0 + timedelta(minutes=close_min)).isoformat(), "net_pct": 1.0}
+    w = wallet_view([t("AVAX", 0, 60), t("AVAX", 10, 70), t("ADA", 20, 80), t("AVAX", 90, 100)], 10000, 500, 5,
+                    T0 + timedelta(hours=3))
+    assert w["taken"] == 3 and w["skipped_same_coin"] == 1 and w["skipped_no_margin"] == 0
+
+
+async def test_the_job_labels_roles_from_the_log_pairs_mirrors_and_relabels_old_trades(tmp_path, monkeypatch):
+    import json
+
+    from sqlalchemy import update
+    from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+
+    from config.settings import settings
+    from scheduler.runner import AppRunner
+    from storage.models import Base, CryptoSignalLog
+    from storage.repository import Repository
+    monkeypatch.setattr(settings, "bracket_levels_enabled", False)
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+    sm = async_sessionmaker(engine, expire_on_commit=False)
+    monkeypatch.setattr("scheduler.runner.AsyncSessionFactory", sm)
+    log = dict(signal_type="confluence", trigger_description="x", confidence=0.6, current_price=100.0, target_price=99,
+               stop_loss=101, edge_pct=0, stake_pct=0, timeframe="1h")
+    now = datetime(2026, 10, 21, 12, 30)
+    async with sm() as s:
+        repo = Repository(s)
+        for _ in range(6):
+            await repo.log_crypto_signal(symbol="ethusdt", direction="short", **log)
+        # 1-2: an old-style book's counter-trend short and its mirror; 3 an old re-review row
+        # 5 a new counter-trend short, 6 its mirror; 4 a re-review that must not open a second trade
+        for i, kw in {1: dict(candidate_role="mirror_shadow"), 2: dict(candidate_role="mirror", mirror_of_log_id=1),
+                      3: dict(review_round=1), 4: dict(review_round=1), 5: dict(candidate_role="mirror_shadow"),
+                      6: dict(candidate_role="mirror", mirror_of_log_id=5, direction="long")}.items():
+            await s.execute(update(CryptoSignalLog).where(CryptoSignalLog.id == i).values(timestamp=now, **kw))
+        await s.commit()
+    r = AppRunner()
+    r._BRACKET_OPEN, r._BRACKET_CLOSED = str(tmp_path / "book.json"), str(tmp_path / "closed.jsonl")
+
+    async def no_bars(*a):
+        return []
+    r._signal_bars = no_bars
+    old = [open_trade(i, "ethusdt", -1, "confluence", "mirror" if i < 3 else "primary", "intraday", now, 100.0)
+           for i in (1, 2, 3)]
+    closed = dict(old[0], status="closed", exit="stop", net_pct=-5.15, tp1=False)
+    (tmp_path / "book.json").write_text(json.dumps({"last_id": 3, "open": old[1:], "started": now.isoformat()}))
+    (tmp_path / "closed.jsonl").write_text(json.dumps(closed) + "\n")
+    await r._bracket_paper_job(now + timedelta(minutes=1))
+    book = json.loads((tmp_path / "book.json").read_text())
+    got = {t["id"]: (t["role"], t["pair"]) for t in book["open"]}
+    assert got == {2: ("mirror", 1), 5: ("counter_trend", None), 6: ("mirror", 5)} and book["roles_v"] == 2
+    fixed = [json.loads(ln) for ln in open(tmp_path / "closed.jsonl")]
+    assert [(t["id"], t["role"]) for t in fixed] == [(1, "counter_trend")]
+    assert (tmp_path / "closed.jsonl.bak-roles").read_text().count('"role": "mirror"') == 1
+
+
+async def test_the_api_marks_open_trades_at_the_current_price_and_pairs_them(tmp_path):
+    import json
+    from types import SimpleNamespace
+
+    from aiohttp import web
+    from aiohttp.test_utils import TestClient, TestServer
+
+    from scheduler import bracket_api
+    pick = advance(open_trade(10, "ethusdt", -1, "confluence", "primary", "intraday", T0, 100.0),
+                   bars([(100, 100.2, 99.8, 100.0)]))
+    mirror = advance(open_trade(11, "ethusdt", 1, "confluence", "mirror", "intraday", T0, 100.0, pair=10),
+                     bars([(100, 100.2, 99.8, 100.0)]))
+    (tmp_path / "closed.jsonl").write_text("")
+    (tmp_path / "book.json").write_text(json.dumps({"open": [pick, mirror], "started": T0.isoformat()}))
+
+    class Store:
+        async def get_all(self):
+            return [SimpleNamespace(symbol="ethusdt", current_price=97.0)]
+    app = web.Application()
+    bracket_api.register(app, SimpleNamespace(_BRACKET_CLOSED=str(tmp_path / "closed.jsonl"),
+                                              _BRACKET_OPEN=str(tmp_path / "book.json"), crypto_store=Store()))
+    async with TestClient(TestServer(app)) as client:
+        body = await (await client.get("/api/bracket")).json()
+    assert body["summary"]["all"] is None and body["marked"]["side:short"]["avg_net_pct"] == pytest.approx(2.85)
+    assert body["pairs"]["intraday|primary"]["pick_better"] == 1 and body["pairs_closed"] == {}

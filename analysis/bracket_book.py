@@ -26,15 +26,36 @@ def _naive(ts: datetime) -> datetime:
     return ts.astimezone(UTC).replace(tzinfo=None) if ts.tzinfo else ts
 
 
+# the signal log's candidate_role -> the bracket book's role. "mirror_shadow" is NOT a mirror: it is the engine's own
+# short pick held back because it runs against the higher-timeframe trend (analysis/crypto_engine.py), and it has a
+# real mirror of its own (22 Oct 2026: 23 of them had been counted as mirrors)
+ROLE_OF = {"primary": "primary", "mirror": "mirror", "mirror_shadow": "counter_trend"}
+
+
+def role_of(candidate_role) -> str:
+    return ROLE_OF.get(str(candidate_role or "primary"), "primary")
+
+
 def open_trade(sig_id, symbol: str, side: int, signal_type: str, role: str, source: str, signal_ts: datetime,
-               signal_price: float, confidence: float = 0.0, labels: dict | None = None) -> dict:
+               signal_price: float, confidence: float = 0.0, labels: dict | None = None, pair=None) -> dict:
     """A virtual trade for one signal; it enters at the open of the first 1m bar after the signal. `labels` (setup,
-    news, sentiment, ...) are kept on the trade so results can be split by them afterwards."""
+    news, sentiment, ...) are kept on the trade so results can be split by them afterwards; `pair` is a mirror's
+    pick (its signal id), so each pick can be compared with its own mirror."""
     return {"id": sig_id, "symbol": symbol.upper(), "side": side, "signal_type": signal_type, "role": role,
             "source": source, "signal_ts": _naive(signal_ts).isoformat(), "signal_price": signal_price,
-            "confidence": confidence, "labels": labels or {}, "entry": None, "entry_ts": None, "stop": None,
-            "legs": 0, "pnl": 0.0, "status": "waiting", "last_ts": _naive(signal_ts).isoformat(), "best": 0.0,
-            "worst": 0.0}
+            "confidence": confidence, "labels": labels or {}, "pair": pair, "entry": None, "entry_ts": None,
+            "stop": None, "legs": 0, "pnl": 0.0, "status": "waiting", "last_ts": _naive(signal_ts).isoformat(),
+            "best": 0.0, "worst": 0.0}
+
+
+def mark(tr: dict, price: float) -> dict | None:
+    """An open trade as if closed at `price` now (targets already taken stay taken), or None before its entry."""
+    if not tr.get("entry") or not price:
+        return None
+    n = len(TARGETS)
+    net = round((tr["pnl"] + (n - tr["legs"]) / n * tr["side"] * (price / tr["entry"] - 1) - COST) * 100, 4)
+    return {**tr, "net_pct": net, "roi_5x_pct": round(net * LEVERAGE_SHOWN, 2), "tp1": tr["legs"] >= 1,
+            "exit": "open", "marked": True}
 
 
 def advance(tr: dict, bars) -> dict:
@@ -99,19 +120,42 @@ def summary(closed: list[dict]) -> dict:
             groups.setdefault(f"{key}:{r[key]}", []).append(r)
     for r in closed:
         groups.setdefault(f"source_role:{r['source']}|{r['role']}", []).append(r)
+        groups.setdefault(f"side:{'long' if r['side'] > 0 else 'short'}", []).append(r)
         if r["source"] == "levels":                  # S/R trades: every label, picks and mirrors apart
             for k, v in (r.get("labels") or {}).items():
                 groups.setdefault(f"label:{r['role']}|{k}|{v}", []).append(r)
     return {k: stats(v) for k, v in groups.items()}
 
 
+def pairs(trades: list[dict]) -> dict:
+    """Each pick next to its own mirror (same coin, same moment, other side): the one comparison a market-wide move
+    cannot fake. Grouped by the pick's source and role; a pair counts once both sides have a result."""
+    by_id = {str(t["id"]): t for t in trades}
+    groups: dict[str, list] = {}
+    for m in trades:
+        if m.get("role") != "mirror":
+            continue
+        pid = (str(m["id"]).rsplit(":", 1)[0] + ":primary") if m.get("source") == "levels" else \
+            (str(m["pair"]) if m.get("pair") else None)
+        p = by_id.get(pid) if pid else None
+        if p is None or "net_pct" not in p or "net_pct" not in m:
+            continue
+        groups.setdefault(f"{p['source']}|{p['role']}", []).append((p["net_pct"], m["net_pct"]))
+    return {k: {"n": len(v), "pick_avg": round(sum(a for a, _ in v) / len(v), 3),
+                "mirror_avg": round(sum(b for _, b in v) / len(v), 3), "pick_better": sum(a > b for a, b in v)}
+            for k, v in groups.items()}
+
+
 def wallet_view(trades: list[dict], start: float, margin: float, leverage: float, now: datetime) -> dict:
     """The owner's wallet limit without risk rules (21 Oct 2026: "keep wallet limit not risk"): take the trades in
     the order they entered, each with a fixed margin at a fixed leverage, and skip one only when there is not that
-    much free margin. P&L = margin x leverage x the trade's result after fees."""
+    much free margin - or when the coin is already open, since Delta holds one position per contract (22 Oct: the
+    engine had logged 10 AVAX shorts in a few hours, one move counted 10 times). P&L = margin x leverage x the
+    trade's result after fees."""
     now = _naive(now)
     ev = sorted((t for t in trades if t.get("entry_ts")), key=lambda t: t["entry_ts"])
     wallet, open_, taken, skipped, wins, losses, peak, mdd = start, [], 0, 0, 0, 0, start, 0.0
+    same_coin = 0
     for t in ev:
         et = datetime.fromisoformat(t["entry_ts"])
         for o in sorted([o for o in open_ if o["closed_ts"] and datetime.fromisoformat(o["closed_ts"]) <= et],
@@ -122,12 +166,15 @@ def wallet_view(trades: list[dict], start: float, margin: float, leverage: float
             peak = max(peak, wallet)
             mdd = max(mdd, 1 - wallet / peak if peak > 0 else 0.0)
             open_.remove(o)
+        if t.get("symbol") and any(o["symbol"] == t["symbol"] for o in open_):
+            same_coin += 1
+            continue
         if wallet - margin * len(open_) < margin:
             skipped += 1
             continue
         taken += 1
         open_.append({"closed_ts": t.get("closed_ts") if t.get("status") == "closed" else None,
-                      "net_pct": t.get("net_pct", 0.0)})
+                      "net_pct": t.get("net_pct", 0.0), "symbol": t.get("symbol")})
     for o in sorted([o for o in open_ if o["closed_ts"] and datetime.fromisoformat(o["closed_ts"]) <= now],
                     key=lambda o: o["closed_ts"]):
         wallet += margin * leverage * o["net_pct"] / 100
@@ -137,5 +184,6 @@ def wallet_view(trades: list[dict], start: float, margin: float, leverage: float
         mdd = max(mdd, 1 - wallet / peak if peak > 0 else 0.0)
         open_.remove(o)
     return {"start": start, "margin": margin, "leverage": leverage, "wallet": round(wallet, 2), "taken": taken,
-            "skipped_no_margin": skipped, "open": len(open_), "won": int(wins), "lost": int(losses),
+            "skipped_no_margin": skipped, "skipped_same_coin": same_coin, "open": len(open_), "won": int(wins),
+            "lost": int(losses),
             "max_dd_pct": round(100 * mdd, 1)}

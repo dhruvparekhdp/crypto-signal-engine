@@ -1771,7 +1771,7 @@ class AppRunner:
         try:
             book = json.loads(path.read_text())
         except (OSError, ValueError):
-            book = {"last_id": None, "open": [], "started": now.isoformat()}
+            book = {"last_id": None, "open": [], "started": now.isoformat(), "roles_v": 2}
         async with AsyncSessionFactory() as session:
             repo = Repository(session)
             if book["last_id"] is None:                  # first run: start from the newest signal, not history
@@ -1780,15 +1780,20 @@ class AppRunner:
                 new = []
             else:
                 new = await repo.crypto_signals_after(book["last_id"])
+            if book.get("roles_v", 1) < 2:
+                await self._bracket_fix_roles(book, repo)
         for r in new:
             book["last_id"] = max(book["last_id"], r.id)
             if r.suppressed_by or not r.current_price or r.current_price <= 0:
                 continue
+            if (getattr(r, "review_round", 0) or 0) > 0:      # a re-review of a candidate already in the book
+                continue
+            role = bb.role_of(getattr(r, "candidate_role", ""))
             book["open"].append(bb.open_trade(
-                r.id, r.symbol, 1 if r.direction == "long" else -1, r.signal_type,
-                "mirror" if str(getattr(r, "candidate_role", "") or "").startswith("mirror") else "primary",
+                r.id, r.symbol, 1 if r.direction == "long" else -1, r.signal_type, role,
                 "swing" if getattr(r, "trade_mode", "") == "swing" else "intraday",
-                r.timestamp, r.current_price, r.confidence or 0.0))
+                r.timestamp, r.current_price, r.confidence or 0.0,
+                pair=(getattr(r, "mirror_of_log_id", 0) or None) if role == "mirror" else None))
         states = {st.symbol: st for st in await self.crypto_store.get_all()}
         hour = now.replace(minute=0, second=0, microsecond=0).isoformat()
         if settings.bracket_levels_enabled and book.get("level_hour") != hour and now.minute >= 2:
@@ -1828,6 +1833,41 @@ class AppRunner:
         tmp.write_text(json.dumps(book))
         tmp.replace(path)
         return {"new": len(new), "open": len(still), "closed": len(closed)}
+
+    async def _bracket_fix_roles(self, book: dict, repo) -> None:
+        """One-off (22 Oct 2026): trades opened before roles came from bracket_book.role_of called the engine's
+        held-back counter-trend shorts ("mirror_shadow") mirrors, had no link from a mirror to its pick, and took a
+        re-review row as a second trade. Relabel the open book and the closed file from the signal log; the old closed
+        file is kept next to it as .bak-roles."""
+        from analysis import bracket_book as bb
+        closed_path = Path(self._BRACKET_CLOSED)
+        try:
+            closed = [json.loads(ln) for ln in closed_path.read_text().splitlines() if ln.strip()]
+        except (OSError, ValueError):
+            closed = []
+        rows = book["open"] + closed
+        roles = await repo.crypto_signal_roles([int(t["id"]) for t in rows if t.get("source") != "levels"
+                                                and str(t.get("id", "")).isdigit()])
+
+        def fix(t) -> bool:
+            info = roles.get(int(t["id"])) if str(t.get("id", "")).isdigit() else None
+            if info is None:
+                return True
+            cand, mirror_of, rnd = info
+            if rnd > 0:
+                return False
+            t["role"] = bb.role_of(cand)
+            t["pair"] = (mirror_of or None) if t["role"] == "mirror" else None
+            return True
+        book["open"] = [t for t in book["open"] if fix(t)]
+        kept = [t for t in closed if fix(t)]
+        if closed:
+            closed_path.with_name(closed_path.name + ".bak-roles").write_text(closed_path.read_text())
+            tmp = closed_path.with_suffix(".tmp")
+            tmp.write_text("".join(json.dumps(t) + "\n" for t in kept))
+            tmp.replace(closed_path)
+        book["roles_v"] = 2
+        log.info("bracket_roles_fixed", open=len(book["open"]), closed=len(kept), dropped=len(closed) - len(kept))
 
     def _bracket_side_labels(self, side: int, st, ctx: dict, funding: float | None = None) -> dict:
         """News, sentiment, funding and event labels for one trade side (owner, 21 Oct 2026: "in this news will help

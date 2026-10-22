@@ -1114,6 +1114,15 @@ class Repository:
                                          .order_by(CryptoSignalLog.id).limit(limit))
         return list(res.scalars().all())
 
+    async def crypto_signal_roles(self, ids: list[int]) -> dict[int, tuple[str, int, int]]:
+        """id -> (candidate_role, mirror_of_log_id, review_round) for the given signal log ids."""
+        if not ids:
+            return {}
+        res = await self.session.execute(select(CryptoSignalLog.id, CryptoSignalLog.candidate_role,
+                                                CryptoSignalLog.mirror_of_log_id, CryptoSignalLog.review_round)
+                                         .where(CryptoSignalLog.id.in_(ids)))
+        return {r.id: (r.candidate_role or "primary", r.mirror_of_log_id or 0, r.review_round or 0) for r in res}
+
     async def crypto_signals_between(self, newer_than_days: int,
                                      older_than_days: int = 0,
                                      limit: int = 400,
