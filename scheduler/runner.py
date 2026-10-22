@@ -1869,6 +1869,78 @@ class AppRunner:
         book["roles_v"] = 2
         log.info("bracket_roles_fixed", open=len(book["open"]), closed=len(kept), dropped=len(closed) - len(kept))
 
+    _VOL_OPEN = "data/vol_book.json"
+    _VOL_CLOSED = "data/vol_trades.jsonl"
+
+    async def _vol_chain(self) -> tuple[list, dict]:
+        """Delta India's option tickers and the BTC / ETH perpetual prices (public endpoints)."""
+        import httpx
+
+        from execution.delta_india import INDIA_URL, USER_AGENT
+        base = (getattr(settings, "delta_india_base_url", None) or INDIA_URL).rstrip("/")
+        hdr = {"User-Agent": USER_AGENT, "Accept": "application/json"}
+        async with httpx.AsyncClient(timeout=15) as c:
+            opts = (await c.get(f"{base}/v2/tickers", params={"contract_types": "call_options,put_options"},
+                                headers=hdr)).json().get("result") or []
+            perps = (await c.get(f"{base}/v2/tickers", params={"contract_types": "perpetual_futures"},
+                                 headers=hdr)).json().get("result") or []
+        return opts, {str(r["symbol"])[:-3]: float(r["mark_price"]) for r in perps
+                      if str(r.get("symbol", "")).endswith("USD") and r.get("mark_price")}
+
+    async def _vol_paper_job(self, now: datetime | None = None) -> dict:
+        """Delta-hedged straddles, paper research (analysis/vol_book.py): for BTC and ETH, a daily and a weekly
+        at-the-money straddle, one book selling it and one buying it, each kept delta-neutral with the perpetual.
+        Every 5 minutes: mark, re-hedge, close 20 minutes before expiry, open the next. No orders."""
+        if not settings.vol_paper_enabled:
+            return {}
+        from analysis import vol_book as vb
+        now = (now or datetime.now(UTC)).replace(tzinfo=None)
+        path = Path(self._VOL_OPEN)
+        try:
+            book = json.loads(path.read_text())
+        except (OSError, ValueError):
+            book = {"open": {}, "started": now.isoformat()}
+        try:
+            rows, perps = await self._vol_chain()
+        except Exception as e:  # noqa: BLE001 - try again next time
+            log.warning("vol_chain_failed", error=str(e)[:160])
+            return {}
+        chain = vb.parse_chain(rows)
+        closed, opened = [], 0
+        band = settings.vol_hedge_band
+        for u in [x.strip().upper() for x in settings.vol_paper_underlyings.split(",") if x.strip()]:
+            price = perps.get(u)
+            if not price:
+                continue
+            for tenor in vb.TENORS:
+                for side_name, side in (("sell", -1), ("buy", 1)):
+                    key = f"{u}|{tenor}|{side_name}"
+                    pos = book["open"].get(key)
+                    if pos is not None:
+                        legs = chain.get(u, {}).get(pos["expiry"], {}).get(float(pos["strike"]))
+                        exp = datetime.fromisoformat(pos["expiry"])
+                        if now >= exp or (now >= exp - vb.CLOSE_BEFORE and vb.tradable(legs)):
+                            closed.append(vb.close(pos, legs if now < exp else None, price, now))
+                            del book["open"][key]
+                        else:
+                            vb.step(pos, legs, price, now, band)
+                    if key not in book["open"]:
+                        pk = vb.pick(chain.get(u, {}), price, now, tenor)
+                        if pk:
+                            legs = chain[u][pk[0]][pk[1]]
+                            book["open"][key] = vb.open_pos(key, u, tenor, side, pk[0], pk[1], legs, price, now,
+                                                            settings.vol_notional_usd, band)
+                            opened += 1
+        if closed:
+            with open(self._VOL_CLOSED, "a") as fh:
+                for pos in closed:
+                    fh.write(json.dumps(pos) + "\n")
+        book["checked"] = now.isoformat()
+        tmp = path.with_suffix(".tmp")
+        tmp.write_text(json.dumps(book))
+        tmp.replace(path)
+        return {"open": len(book["open"]), "opened": opened, "closed": len(closed)}
+
     def _bracket_side_labels(self, side: int, st, ctx: dict, funding: float | None = None) -> dict:
         """News, sentiment, funding and event labels for one trade side (owner, 21 Oct 2026: "in this news will help
         us more as per my thinking"). Labels only - nothing here decides a trade."""
@@ -4248,6 +4320,9 @@ class AppRunner:
         self.scheduler.add_job(
             self._bracket_paper_job, "interval", minutes=2, id="bracket_paper", max_instances=1,
             next_run_time=datetime.now(UTC) + timedelta(seconds=75))
+        self.scheduler.add_job(
+            self._vol_paper_job, "interval", minutes=5, id="vol_paper", max_instances=1,
+            next_run_time=datetime.now(UTC) + timedelta(seconds=95))
         self.scheduler.add_job(
             self._weekly_forward_report_job,
             "cron",

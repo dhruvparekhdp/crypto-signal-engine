@@ -359,7 +359,45 @@
         '<h4 class="mono small" style="margin:14px 0 6px">LATEST CLOSED</h4>' + recent;
     }
   });
-  UI.view("book/paper", [["paper-strip"], ["paper-open"], ["paper-bracket"], ["paper-demo"], ["paper-history"]]);
+  // delta-hedged straddles (owner, 22 Oct 2026: "delta trading and hedging ... paper trade"; chose sell vs buy volatility)
+  UI.widget("paper-vol", {
+    title: "DELTA-HEDGED OPTIONS · SELL VS BUY VOLATILITY · PAPER RESEARCH", uses: ["vol"],
+    render: function (el, D, ctx) {
+      var d = D.vol; if (!d) { el.innerHTML = C.state(D, "vol"); return; }
+      var pl = d.plan || {}, S = d.summary || {}, open = d.open || [];
+      ctx.right((d.started ? "since " + U.stamp(d.started) : "") + (d.checked ? " · checked " + U.stamp(d.checked) : ""));
+      function usd(x) { return C.signed(x, function (y) { return (y < 0 ? "−$" : "+$") + Math.abs(y).toFixed(2); }); }
+      function pct(x, k) { return x == null ? "—" : C.signed(x, function (y) { return (y > 0 ? "+" : "") + y.toFixed(k == null ? 2 : k) + "%"; }); }
+      function vol(x) { return x == null ? "—" : (x * 100).toFixed(1) + "%"; }
+      var intro = '<p class="mono small dim" style="margin:0 0 10px">Delta hedging, as options desks do it: buy or sell an at-the-money call + put (a straddle) on Delta India, then keep the position\'s delta near zero by trading the perpetual future whenever it drifts more than ' + pl.hedge_band + ' per coin. With direction hedged away, a straddle is one bet: will the coin move <b>more</b> (buyer wins) or <b>less</b> (seller wins) than the options\' implied volatility priced in? ' +
+        "Two mirror books for BTC and ETH, on the next-day and the weekly expiry: SELL (at the bid) and BUY (at the ask). $" + pl.notional_usd + " of coin per straddle, closed " + pl.close_before_min + " min before expiry; fees " + pl.option_fee_pct + "% per option leg and " + pl.perp_fee_pct + "% per hedge, + GST. No orders, paper only.</p>";
+      var openT = C.table([
+        { label: "BOOK", w: "minmax(0,1.2fr)", cell: function (r) { return "<b>" + e(r.underlying) + " " + e(r.tenor) + "</b> · " + (r.side < 0 ? '<b class="dn">SELL</b>' : '<b class="up">BUY</b>') + '<br><span class="dim tiny">strike ' + e(r.strike) + " · expires " + e(U.stamp(r.expiry)) + "</span>"; } },
+        { label: "VOL PRICED IN → NOW", w: "130px", cell: function (r) { return e(vol(r.entry_iv)) + " → " + e(vol(r.iv_now)) + '<br><span class="dim tiny">moved so far ' + e(vol(r.realized_vol)) + "</span>"; } },
+        { label: "OPTIONS", w: "90px", cell: function (r) { return usd(r.opt_pnl); } },
+        { label: "HEDGE", w: "90px", cell: function (r) { return usd(r.hedge_pnl) + '<br><span class="dim tiny">' + e(r.hedges) + " trades</span>"; } },
+        { label: "FEES", w: "70px", cell: function (r) { return '<span class="dim">$' + (r.fees || 0).toFixed(2) + "</span>"; } },
+        { label: "TOTAL NOW", w: "100px", cell: function (r) { return usd(r.total_usd) + '<br><span class="dim tiny">' + pct(r.total_pct) + " of $" + e(r.notional) + "</span>"; } },
+        { label: "DELTA", w: "70px", cell: function (r) { return e(r.delta_now == null ? "—" : r.delta_now.toFixed(2)); } }
+      ], open, { minWidth: 760, empty: "Waiting for the first check: positions open within 5 minutes." });
+      var groups = [["Selling volatility", "side:sell"], ["Buying volatility", "side:buy"], ["Sell · daily", "side_tenor:sell|daily"], ["Buy · daily", "side_tenor:buy|daily"], ["Sell · weekly", "side_tenor:sell|weekly"], ["Buy · weekly", "side_tenor:buy|weekly"]]
+        .concat(Object.keys(S).filter(function (k) { return k.indexOf("book:") === 0; }).sort().map(function (k) { return [k.slice(5).replace(/\|/g, " · "), k]; }))
+        .filter(function (g) { return S[g[1]]; });
+      var res = groups.length ? C.table([
+        { label: "GROUP", w: "minmax(0,1fr)", cell: function (g) { return "<b>" + e(g[0]) + "</b>"; } },
+        { label: "CLOSED", w: "70px", cell: function (g) { return e(S[g[1]].n); } },
+        { label: "IN PROFIT", w: "80px", cell: function (g) { return e(S[g[1]].win_pct + "%"); } },
+        { label: "AVG", w: "80px", cell: function (g) { return pct(S[g[1]].avg_pct, 3); } },
+        { label: "TOTAL", w: "90px", cell: function (g) { return usd(S[g[1]].total_usd); } },
+        { label: "PRICED IN VS MOVED", w: "140px", cell: function (g) { return e(S[g[1]].avg_entry_iv + "% vs " + (S[g[1]].avg_realized_vol == null ? "—" : S[g[1]].avg_realized_vol + "%")); } },
+        { label: "HEDGES / FEES", w: "110px", cell: function (g) { return '<span class="dim">' + e(S[g[1]].avg_hedges) + " · $" + e(S[g[1]].avg_fees_usd) + "</span>"; } }
+      ], groups, { minWidth: 680 }) : C.empty("No closed straddles yet: the first next-day ones close 20 minutes before 12:00 UTC.");
+      el.innerHTML = intro + '<h4 class="mono small" style="margin:4px 0 6px">OPEN NOW · MARKED AT DELTA\'S OPTION PRICES</h4>' + openT +
+        '<h4 class="mono small" style="margin:14px 0 6px">CLOSED · BY BOOK</h4>' + res +
+        '<p class="mono tiny dim" style="margin:6px 0 0">Seller wins when "moved" ends below "priced in". One day is one draw: read it after 2-3 weeks of daily expiries.</p>';
+    }
+  });
+  UI.view("book/paper", [["paper-strip"], ["paper-open"], ["paper-bracket"], ["paper-vol"], ["paper-demo"], ["paper-history"]]);
 
   // ------------------------------------------------------------- live, real money (owner, 18 Oct 2026)
   // paise, like the Delta app: a ₹500 wallet rounded to ₹500 hid the ₹0.21 that was really gone (19 Oct 2026)

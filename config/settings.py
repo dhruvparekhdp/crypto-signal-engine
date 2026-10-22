@@ -348,6 +348,12 @@ class Settings(BaseSettings):
     bracket_wallet_inr: float = 10000.0
     bracket_margin_inr: float = 500.0
     bracket_leverage: float = 5.0
+    # delta-hedged straddles on Delta India options, paper research only (analysis/vol_book.py; owner 22 Oct 2026:
+    # "delta trading and hedging ... implement it in system and paper trade", chose sell vs buy volatility)
+    vol_paper_enabled: bool = True
+    vol_paper_underlyings: str = "BTC,ETH"
+    vol_notional_usd: float = 1000.0
+    vol_hedge_band: float = 0.10
     delta_india_max_spread_pct: float = 0.5
     delta_india_max_slippage_r: float = 0.10
     # 14 Oct 2026 owner: strong-confidence intraday trades in paper too, with their own limits so they cannot crowd
