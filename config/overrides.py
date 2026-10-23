@@ -245,6 +245,10 @@ FIELDS: tuple[Field, ...] = (
           "Deploy, crash and trade alerts. Get one from @BotFather.", kind="secret"),
     Field("telegram_chat_id", "keys", "Telegram chat ID",
           "Where alerts go (your chat with the bot). Not secret.", kind="str"),
+    Field("telegram_channel_id", "keys", "Telegram channel for live trades",
+          "Friends' channel: every live trade's coin, direction, setup and how it ended - no prices or amounts. "
+          "Add the bot as a channel admin, then '@channelname' (public) or the -100... id (private). Empty = off.",
+          kind="str"),
     Field("twelvedata_api_key", "keys", "Twelve Data API key",
           "Gold, silver, oil prices. Ignored when Binance only is on. twelvedata.com",
           kind="secret", depends_on={"binance_only_mode": False}),

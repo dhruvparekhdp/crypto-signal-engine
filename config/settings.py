@@ -45,6 +45,9 @@ class Settings(BaseSettings):
     # Telegram Notifications (optional in dev, required in prod)
     telegram_bot_token: SecretStr | None = None
     telegram_chat_id: str | None = None
+    # a Telegram channel that gets every LIVE trade, without prices or amounts (notifications/channel_feed.py;
+    # owner 23 Oct 2026). '@name' for a public channel, '-100...' for a private one. Empty = off
+    telegram_channel_id: str | None = None
 
     # Groq AI Sentinel (Key in env; Model chosen via Admin UI in DB)
     groq_api_key: SecretStr | None = None

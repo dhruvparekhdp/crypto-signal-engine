@@ -671,7 +671,9 @@ class AppRunner:
                         wallet = trade.wallet_after
                         await repo.close_position_atomic(cycle.id, row.id, trade, wallet)
                         if getattr(pos, "trade_mode", "") == "swing":
-                            await self._delta_call("on_paper_close", pos.symbol, trade.reason.value)
+                            dres = await self._delta_call("on_paper_close", pos.symbol, trade.reason.value)
+                            if not dres or dres.get("ok") or dres.get("reason") == "not_open_on_delta":
+                                await self._channel_post("close", pos.symbol, trade.reason.value, trade.net_pnl > 0)
                         events = [_event(
                             pos, cycle.id, now, "closed", "exit", new=f"{trade.exit_price:.6g}",
                             note=(f"{trade.reason.value} · net ₹{trade.net_pnl:+.2f} "
@@ -807,7 +809,9 @@ class AppRunner:
                     wallet = trade.wallet_after
                     await repo.close_position_atomic(cycle.id, row.id, trade, wallet)
                     if getattr(pos, "trade_mode", "") == "swing":
-                        await self._delta_call("on_paper_close", pos.symbol, trade.reason.value)
+                        dres = await self._delta_call("on_paper_close", pos.symbol, trade.reason.value)
+                        if not dres or dres.get("ok") or dres.get("reason") == "not_open_on_delta":
+                            await self._channel_post("close", pos.symbol, trade.reason.value, trade.net_pnl > 0)
                     events.append(_event(
                         pos, cycle.id, now, "closed", "exit", new=f"{trade.exit_price:.6g}",
                         note=(f"{trade.reason.value} · net ₹{trade.net_pnl:+.2f} "
@@ -1648,7 +1652,8 @@ class AppRunner:
             live_ok = False
             try:
                 live_ok = await self._mirror_delta_india(pos.symbol, pos.side.value, price, stop, target,
-                                                         sig.signal_type, usdt_inr=pcfg.usdt_inr)
+                                                         sig.signal_type, usdt_inr=pcfg.usdt_inr,
+                                                         timeframe=getattr(sig, "timeframe", "") or "")
             except Exception as e:  # noqa: BLE001
                 log.warning("delta_india_mirror_failed", symbol=pos.symbol, error=str(e)[:160])
             if settings.trade_notes_enabled:           # AI plan step 7: written after the order, in its own task
@@ -2123,7 +2128,7 @@ class AppRunner:
         return g.reason
 
     async def _mirror_delta_india(self, symbol: str, side_word: str, entry: float, stop: float,
-                                  target: float, signal_type: str, usdt_inr: float = 83.0) -> bool:
+                                  target: float, signal_type: str, usdt_inr: float = 83.0, timeframe: str = "") -> bool:
         """Copy a paper swing open to every active Delta book (live first, then the demo). True when the live book
         took it."""
         live_ok = False
@@ -2143,7 +2148,24 @@ class AppRunner:
                         await self.notifier.send_text(text, parse_mode=ParseMode.HTML)
                 except Exception as e:  # noqa: BLE001
                     log.warning("live_order_alert_failed", error=str(e)[:120])
+                if live_ok and settings.delta_india_live_orders:      # real orders placed: tell the channel
+                    await self._channel_post("open", symbol, side_word, signal_type, timeframe)
         return live_ok
+
+    async def _channel_post(self, kind: str, symbol: str, *args) -> None:
+        """Friends' channel of live trades (notifications/channel_feed.py): coin, direction, setup and how it ended,
+        never a price or amount. kind 'open' (side_word, signal_type, timeframe) or 'close' (reason, in_profit).
+        A close is posted only for a trade whose open was posted. Never raises: a post must not touch trading."""
+        if not (settings.telegram_channel_id or "").strip():
+            return
+        try:
+            from notifications.channel_feed import ChannelFeed
+            feed = ChannelFeed()
+            text = feed.opened(symbol, *args) if kind == "open" else feed.closed(symbol, *args)
+            if text:
+                await self.notifier.send_channel(text, parse_mode=ParseMode.HTML)
+        except Exception as e:  # noqa: BLE001
+            log.warning("channel_post_failed", kind=kind, symbol=symbol, error=str(e)[:120])
 
     async def _log_signal(self, sig, suppressed_by: str = "", **extra) -> int:
         """

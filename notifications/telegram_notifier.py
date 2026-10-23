@@ -47,12 +47,23 @@ class TelegramNotifier:
                 log.warning("telegram_message_dropped_not_configured", has_token=self._bot is not None,
                             has_chat_id=bool(settings.telegram_chat_id))
             return False
+        return await self._send(settings.telegram_chat_id, text, parse_mode)
+
+    async def send_channel(self, text: str, parse_mode: str | None = None) -> bool:
+        """Post to the shared channel of live trades (owner, 23 Oct 2026), through the same bot. Off (False) while
+        telegram_channel_id is empty; the bot must be an admin of the channel with permission to post."""
+        channel = (getattr(settings, "telegram_channel_id", None) or "").strip()
+        if self._bot is None or not channel:
+            return False
+        return await self._send(channel, text, parse_mode)
+
+    async def _send(self, chat_id: str, text: str, parse_mode: str | None) -> bool:
         try:
             # a timeout or network blip retries twice (18 Oct 2026: two alerts lost to 'Timed out' at 01:16 UTC); a
             # live-order alert sent twice beats one never sent
             for attempt in range(3):
                 try:
-                    await self._bot.send_message(chat_id=settings.telegram_chat_id, text=text, parse_mode=parse_mode)
+                    await self._bot.send_message(chat_id=chat_id, text=text, parse_mode=parse_mode)
                     return True
                 except RetryAfter as e:
                     if attempt == 2:
@@ -71,11 +82,11 @@ class TelegramNotifier:
         except Forbidden as e:
             log.error("telegram_forbidden",
                       hint="Chat ID wrong, or you haven't sent /start to your bot yet",
-                      chat_id=settings.telegram_chat_id,
+                      chat_id=chat_id,
                       error=str(e))
         except TelegramError as e:
             log.error("telegram_text_send_failed", error=str(e), error_type=type(e).__name__,
-                      chat_id=settings.telegram_chat_id)
+                      chat_id=chat_id)
         return False
 
     async def verify(self) -> bool:
