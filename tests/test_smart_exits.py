@@ -64,3 +64,23 @@ def test_confirmed_lock_ignores_a_wick_but_exits_on_a_close():
     assert r[16] == "target"
     plain = ExitModel(stop_atr=3.0, rr=3.0, max_hold_min=100_000, min_stop_pct=0, ladder=((1.5, 0.5),))
     assert sim(sig, s, sig, plain, ZERO)[0][16] == "trail"          # without confirmation the wick stops it out
+
+
+def test_target_step_moves_the_target_out_once_the_trade_gets_close():
+    # long 100, 1R = 3 -> target 109 (3R). Step: at 2.8R (108.4) the target moves to 3.25R (109.75), stop locks 2.3R
+    exm = ExitModel(stop_atr=3.0, rr=3.0, max_hold_min=10_000, min_stop_pct=0, ladder=((2.8, 2.3),),
+                    target_steps=((2.8, 3.25),))
+    # (these bars open at their price, so a jump through a level fills at the open - a gap)
+    r = _one([100, 104, 108.5, 109.2, 110.0], exm)            # passes 109 (old target) after the step, then 109.75
+    assert r[16] == "target" and r[5] == pytest.approx(110.0)
+    r = _one([100, 104, 108.5, 109.2, 107.5, 106.0], exm)     # turns back: under the 2.3R lock (106.9) it closes
+    assert r[16] == "trail" and r[5] == pytest.approx(106.0)
+    plain = ExitModel(stop_atr=3.0, rr=3.0, max_hold_min=10_000, min_stop_pct=0)
+    assert _one([100, 104, 108.5, 109.2, 106.0], plain)[16] == "target"   # without the step: the 3R target at 109
+
+
+def test_a_target_step_never_moves_the_target_closer_and_changes_the_key():
+    exm = ExitModel(stop_atr=3.0, rr=3.0, max_hold_min=10_000, min_stop_pct=0, target_steps=((1.0, 2.0),))
+    r = _one([100, 104, 106.5, 106.5], exm)                    # a 2R target would have closed it at 106.5
+    assert r[16] == "time"
+    assert exm.key().endswith("_ts1:2")

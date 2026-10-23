@@ -72,6 +72,21 @@ EXITS = {
                                                     ladder=tuple((1.0 + 0.25 * i, round(1.0 + 0.25 * i - g, 2))
                                                                  for i in range(8)))
        for g in (0.5, 0.3)},
+    # 23 Oct 2026 owner: "trade reached 2.8R then profit order trail to 3.25 and 2.3 to 2.5R for sl profit" - on top of
+    # the live exit (rb_std_c60_b25). Ladder locks are written +0.25 because the live 0.25R buffer is subtracted, so
+    # the stop really sits at 2.3R / 2.5R. "ratchet": the same step every 0.25R up to 6R (target always 0.45R above the
+    # trigger, stop 0.5R / 0.3R under it); lock_only / ext_only split the idea into its two halves
+    **{name: ExitModel(stop_atr=3.0, rr=3.0, max_hold_min=10080, lock_confirm_min=60, lock_buffer_r=0.25,
+                       ladder=((1.0, 0.0), (1.5, 0.5), (2.0, 1.0), (2.5, 1.5)) + lad, target_steps=ts)
+       for name, lad, ts in (
+           ("x_own_l23", ((2.8, 2.55),), ((2.8, 3.25),)),
+           ("x_own_l25", ((2.8, 2.75),), ((2.8, 3.25),)),
+           ("x_lock_only_l25", ((2.8, 2.75),), ()),
+           ("x_ext_only", (), ((2.8, 3.25),)),
+           ("x_ratchet_g05", tuple((round(2.8 + 0.25 * i, 2), round(2.55 + 0.25 * i, 2)) for i in range(14)),
+            tuple((round(2.8 + 0.25 * i, 2), round(3.25 + 0.25 * i, 2)) for i in range(14))),
+           ("x_ratchet_g03", tuple((round(2.8 + 0.25 * i, 2), round(2.75 + 0.25 * i, 2)) for i in range(14)),
+            tuple((round(2.8 + 0.25 * i, 2), round(3.25 + 0.25 * i, 2)) for i in range(14))))},
     # 18 Oct 2026 smart switch on top of the live ladder (1/1.5/2/2.5R, 0.25R buffer, 1h-close confirmation)
     **{name: ExitModel(stop_atr=3.0, rr=3.0, max_hold_min=10080, lock_confirm_min=60, lock_buffer_r=0.25,
                        ladder=((1.0, 0.0), (1.5, 0.5), (2.0, 1.0), (2.5, 1.5)), **extra)

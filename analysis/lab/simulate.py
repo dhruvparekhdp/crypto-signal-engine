@@ -61,6 +61,9 @@ class ExitModel:
     # 18 Oct 2026 scalping research: a resting limit entry instead of a market entry at the next open
     entry_limit_bps: float | None = None   # limit at the signal close, this many bps better (None = market entry)
     entry_window_min: int = 15             # the limit is cancelled after this long unfilled
+    # 23 Oct 2026 owner: "trade reached 2.8R then profit order trail to 3.25" - once the best price reaches trigger R
+    # the target moves out to new_rr (never back in); pair it with a ladder step to lock the stop at the same time
+    target_steps: tuple = ()               # ((trigger_r, new_rr), ...)
 
     def key(self) -> str:
         k = (f"sl{self.stop_atr}_rr{self.rr}_h{self.max_hold_min}_be{self.be_trigger_r}"
@@ -83,6 +86,8 @@ class ExitModel:
             k += f"_decay{self.decay_after_min}x{self.decay_frac:g}"
         if self.entry_limit_bps is not None:
             k += f"_lim{self.entry_limit_bps:g}w{self.entry_window_min}"
+        if self.target_steps:
+            k += "_ts" + "-".join(f"{a:g}:{b:g}" for a, b in self.target_steps)
         return k
 
 
@@ -239,6 +244,11 @@ def simulate_symbol(sig_bars: Bars, signals: np.ndarray, ex: Bars, exit: ExitMod
                     if (side > 0 and cand > stop) or (side < 0 and cand < stop):
                         stop = cand
                         armed_trail = True
+            for trig, new_rr in exit.target_steps:
+                if best_r >= trig:
+                    cand = entry + side * new_rr * r_unit
+                    if (side > 0 and cand > tp) or (side < 0 and cand < tp):
+                        tp = cand
             if exit.flip_ema and bar_end % 3_600_000 == 0:
                 cc = float(ex.c[j])
                 ema = cc if ema is None else ema + (cc - ema) * (2 / (exit.flip_ema + 1))
