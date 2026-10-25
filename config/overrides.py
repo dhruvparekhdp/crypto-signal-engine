@@ -347,6 +347,12 @@ FIELDS: tuple[Field, ...] = (
     Field("delta_india_floor_frac", "delta", "Floor as a share of money deposited",
           "The floor follows deposits and withdrawals on Delta (not wins or losses): 0.5 = no new orders once the "
           "wallet is below half of what you put in. 0 = use the fixed floor above.", kind="float", lo=0.0, hi=0.9),
+    Field("delta_india_capital_base_inr", "delta", "Money put in before the deposit history (Rs)",
+          "Opening capital Delta's transaction history does not show. Added to the deposits counted from the date below.",
+          kind="float", lo=0.0, hi=10_000_000.0),
+    Field("delta_india_capital_since", "delta", "Count deposits from (YYYY-MM-DD)",
+          "Deposits and withdrawals before this date are inside the opening capital above and are not counted again.",
+          kind="str"),
     Field("delta_india_live_orders", "delta", "Allow live Delta orders (second gate)",
           "Even when mode is live, orders are blocked until this is ON. Keep OFF until you "
           "explicitly want real INR futures fills.", kind="bool"),
@@ -457,7 +463,7 @@ MAIN_SECTIONS: dict[str, tuple[str, ...]] = {
                   "move_attribution_enabled", "groq_postmortem_enabled"),
 }
 ADVANCED = frozenset({
-    "delta_india_floor_frac", "delta_india_base_url", "delta_only_mode", "delta_india_data_enabled", "delta_klines_seconds",
+    "delta_india_floor_frac", "delta_india_capital_base_inr", "delta_india_capital_since", "delta_india_base_url", "delta_only_mode", "delta_india_data_enabled", "delta_klines_seconds",
     "binance_only_mode", "binance_klines_enabled", "binance_klines_seconds", "binance_ws_enabled",
     "binance_oi_enabled", "coindcx_enabled", "coingecko_enabled", "twelvedata_enabled", "db_retention_days",
     "intraday_min_confidence", "intraday_min_timeframe_minutes", "intraday_max_open", "intraday_margin_cap_frac",

@@ -1725,6 +1725,8 @@ class AppRunner:
                                  max_spread_pct=float(settings.delta_india_max_spread_pct),
                                  max_slip_r=float(settings.delta_india_max_slippage_r),
                                  floor_frac=0.0 if testnet else float(settings.delta_india_floor_frac),
+                                 capital_base_inr=0.0 if testnet else float(settings.delta_india_capital_base_inr or 0),
+                                 capital_since="" if testnet else (settings.delta_india_capital_since or ""),
                                  shadow_path=Path("data/delta_testnet.jsonl") if testnet else SHADOW_PATH,
                                  state_path=Path("data/delta_testnet_state.json") if testnet else STATE_PATH)
                 out = await getattr(book, method)(*args)

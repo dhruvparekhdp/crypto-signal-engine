@@ -119,13 +119,16 @@ class DeltaIndia:
         withdrawals only). From /v2/wallet/transactions: deposit, external_deposit and withdrawal_cancellation count
         +, withdrawal counts -; P&L, fees, funding and everything else is ignored. Amounts are in the row's asset
         (USD on Delta India). Read-only."""
-        out, after = [], None
+        out, after, seen, oldest = [], None, {}, None
         for _ in range(max_pages):
             data = await self._request("GET", "/v2/wallet/transactions",
                                        params={"page_size": 100, "after": after, "start_time": since_us}, raw=True)
             page = (data.get("result") if isinstance(data, dict) else data) or []
             for r in page:
                 typ = str(r.get("transaction_type") or "")
+                seen[typ] = seen.get(typ, 0) + 1
+                t = _epoch_us(r.get("created_at"))
+                oldest = t if oldest is None or (t and t < oldest) else oldest
                 if typ not in CAPITAL_IN and typ not in CAPITAL_OUT:
                     continue
                 try:
@@ -137,6 +140,8 @@ class DeltaIndia:
             after = (data.get("meta") or {}).get("after") if isinstance(data, dict) else None
             if not after or not page:
                 break
+        # what the history held (26 Oct 2026: the opening deposit was missing) - types and how far back it went
+        self.last_flow_scan = {"types": seen, "oldest_us": oldest, "since_us": since_us}
         return out
 
     async def ping(self) -> dict:

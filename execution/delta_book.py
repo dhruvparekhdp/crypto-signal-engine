@@ -96,6 +96,15 @@ def size_contracts(product: Product, entry: float, stop: float, equity_inr: floa
     return contracts, notional_usd, risk_inr
 
 
+def _day_us(day: str) -> int:
+    """'YYYY-MM-DD' (UTC midnight) as epoch microseconds; 0 when empty or unreadable."""
+    import calendar
+    try:
+        return calendar.timegm(time.strptime(day.strip(), "%Y-%m-%d")) * 1_000_000 if day else 0
+    except ValueError:
+        return 0
+
+
 class DeltaBook:
     def __init__(self, client: DeltaIndia, *, mode: str = "shadow",
                  live_orders: bool = False, risk_pct: float = 0.01,
@@ -104,7 +113,8 @@ class DeltaBook:
                  kill_switch: bool = False, backstop_r: float = 0.5,
                  daily_loss_pct: float = 0.0, min_wallet_inr: float = 0.0, min_leverage: int = MIN_LEVERAGE,
                  round_up_risk_pct: float = 0.0, entry_guard: bool = False,
-                 max_spread_pct: float = 0.5, max_slip_r: float = 0.10, floor_frac: float = 0.0):
+                 max_spread_pct: float = 0.5, max_slip_r: float = 0.10, floor_frac: float = 0.0,
+                 capital_base_inr: float = 0.0, capital_since: str = ""):
         self.client = client
         self.mode = mode
         self.live_orders = live_orders
@@ -127,6 +137,8 @@ class DeltaBook:
         # floor = this share of the money deposited (deposits - withdrawals, read from Delta), never moved by wins or
         # losses (owner, 26 Oct 2026: "flat 50%"); min_wallet_inr stays the floor until deposits have been read
         self.floor_frac = float(floor_frac)
+        self.capital_base_inr = float(capital_base_inr or 0)   # put in before the history Delta shows
+        self.capital_since_us = _day_us(capital_since)         # flows before this are inside the base
 
     @property
     def live(self) -> bool:
@@ -250,7 +262,7 @@ class DeltaBook:
             return None
         state = self._load_state()
         cap = state.setdefault("capital", {"flows": {}, "net_inr": 0.0, "floor_inr": 0.0})
-        since = int(cap["checked_us"]) - 2 * 86_400_000_000 if cap.get("checked_us") else None
+        since = int(cap["checked_us"]) - 2 * 86_400_000_000 if cap.get("checked_us") else (self.capital_since_us or None)
         try:
             flows = await self.client.capital_flows(since)
         except DeltaError:
@@ -258,7 +270,7 @@ class DeltaBook:
         rate = self.usd_inr
         new = []
         for f in flows:
-            if f["id"] in cap["flows"]:
+            if f["id"] in cap["flows"] or (self.capital_since_us and f["t_us"] < self.capital_since_us):
                 continue
             inr = f["amount"] if f["asset"] == "INR" else f["amount"] * rate
             cap["flows"][f["id"]] = {"t_us": f["t_us"], "type": f["type"], "inr": round(inr, 2)}
@@ -267,11 +279,15 @@ class DeltaBook:
             if day.get("start_inr") and day.get("date") == time.strftime("%Y-%m-%d", time.gmtime(f["t_us"] / 1e6)):
                 day["start_inr"] = float(day["start_inr"]) + inr
         cap["checked_us"] = int(time.time() * 1_000_000)
-        if not cap["flows"]:
+        cap["last_scan"] = getattr(self.client, "last_flow_scan", None)   # which types / how far back Delta showed
+        counted = {k: v for k, v in cap["flows"].items()
+                   if not (self.capital_since_us and int(v.get("t_us") or 0) < self.capital_since_us)}
+        if not counted and self.capital_base_inr <= 0:
             self._save_state(state)
             return None
         old = float(cap.get("floor_inr") or 0)
-        cap["net_inr"] = round(sum(v["inr"] for v in cap["flows"].values()), 2)
+        cap["base_inr"] = self.capital_base_inr
+        cap["net_inr"] = round(self.capital_base_inr + sum(v["inr"] for v in counted.values()), 2)
         cap["floor_inr"] = round(self.floor_frac * cap["net_inr"], 2)
         self._save_state(state)
         if not new and abs(cap["floor_inr"] - old) < 0.005:

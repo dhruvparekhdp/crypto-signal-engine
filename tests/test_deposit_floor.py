@@ -120,3 +120,22 @@ async def test_the_reconcile_job_sends_a_plain_floor_alert(monkeypatch):
     await r._delta_reconcile_job()
     text = r.notifier.send_text.call_args.args[0]
     assert "floor now ₹400.00" in text and "₹800.00 put in" in text and "deposit ₹+300.00" in text
+
+
+async def test_opening_capital_counts_once_with_deposits_after_the_count_from_date(tmp_path):
+    # 26 Oct 2026 on production: Delta listed the Rs300 deposit of 25 Oct but not the opening Rs500 of 17 Oct
+    opening = _flow(1, "deposit", 500 / 85, 1792231200000000)                 # 17 Oct - inside the base
+    later = _flow(2, "deposit", 300 / 85, 1792900000000000)                   # 25 Oct
+    b = DeltaBook(_Client([opening, later]), mode="live", live_orders=True, usd_inr=85.0,
+                  state_path=tmp_path / "s.json", shadow_path=tmp_path / "sh.jsonl", min_wallet_inr=250.0,
+                  floor_frac=0.5, capital_base_inr=500.0, capital_since="2026-10-18")
+    ev = await b.refresh_capital()
+    assert ev["net_deposits_inr"] == pytest.approx(800.0) and ev["floor_inr"] == pytest.approx(400.0)
+    only_base = DeltaBook(_Client([]), mode="live", live_orders=True, usd_inr=85.0, state_path=tmp_path / "t.json",
+                          shadow_path=tmp_path / "th.jsonl", floor_frac=0.5, capital_base_inr=500.0)
+    assert (await only_base.refresh_capital())["floor_inr"] == pytest.approx(250.0)
+
+
+def test_count_from_date_is_utc_midnight():
+    from execution.delta_book import _day_us
+    assert _day_us("2026-10-18") == 1792281600 * 1_000_000 and _day_us("") == 0 and _day_us("18/10") == 0

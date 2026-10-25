@@ -332,6 +332,11 @@ class Settings(BaseSettings):
     # the floor follows the money put in: this share of deposits minus withdrawals (read from Delta); wins and
     # losses never move it (owner, 26 Oct 2026). 0 = use the fixed delta_india_min_wallet_inr
     delta_india_floor_frac: float = 0.5
+    # money put in before Delta's deposit history starts (26 Oct 2026: the API listed the Rs300 deposit of 25 Oct but
+    # not the opening Rs500 of 17 Oct). Deposits / withdrawals dated before delta_india_capital_since are taken to
+    # be inside this base and ignored, so nothing is counted twice
+    delta_india_capital_base_inr: float = 0.0
+    delta_india_capital_since: str = ""
     # Leverage set on Delta before every live entry: the highest that keeps liquidation >= 2x the stop distance away,
     # never below this (owner, 17 Oct 2026) and never above 10x. Swing stops <= 8% -> 6-10x in practice.
     delta_india_min_leverage: int = 5
