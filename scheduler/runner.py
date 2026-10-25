@@ -1724,6 +1724,7 @@ class AppRunner:
                                  entry_guard=not testnet,      # the demo book's prices drift; real money only
                                  max_spread_pct=float(settings.delta_india_max_spread_pct),
                                  max_slip_r=float(settings.delta_india_max_slippage_r),
+                                 floor_frac=0.0 if testnet else float(settings.delta_india_floor_frac),
                                  shadow_path=Path("data/delta_testnet.jsonl") if testnet else SHADOW_PATH,
                                  state_path=Path("data/delta_testnet_state.json") if testnet else STATE_PATH)
                 out = await getattr(book, method)(*args)
@@ -1751,6 +1752,16 @@ class AppRunner:
                 if e.get("event") == "reconcile_error" and seen.get((target, e.get("delta_symbol")), 0) < 2:
                     continue
                 label = "Delta India LIVE ₹" if target == "live" else "Delta DEMO" if target == "testnet" else "Delta shadow"
+                if e.get("event") == "floor_updated":
+                    flows = ", ".join(f"{f['type']} ₹{f['inr']:+,.2f}" for f in e.get("new_flows") or [])
+                    try:
+                        await self.notifier.send_text(
+                            f"🧱 Delta LIVE floor now ₹{e['floor_inr']:,.2f} ({settings.delta_india_floor_frac:.0%} of "
+                            f"₹{e['net_deposits_inr']:,.2f} put in{'; ' + flows if flows else ''}). Was ₹{e['was_inr']:,.2f}. "
+                            "No new orders below it; open trades keep their stops.")
+                    except Exception:  # noqa: BLE001
+                        pass
+                    continue
                 try:
                     await self.notifier.send_text(f"⚖️ {label} reconcile: {e.get('event')} {e.get('delta_symbol')} "
                                                   + ", ".join(f"{k}={v}" for k, v in e.items()

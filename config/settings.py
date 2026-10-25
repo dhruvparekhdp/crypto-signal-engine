@@ -329,6 +329,9 @@ class Settings(BaseSettings):
     # the day's start (UTC), or below the floor. Open positions keep their stops. Rs500 trial: Rs50/day, stop at Rs350.
     delta_india_daily_loss_pct: float = 0.10
     delta_india_min_wallet_inr: float = 350.0
+    # the floor follows the money put in: this share of deposits minus withdrawals (read from Delta); wins and
+    # losses never move it (owner, 26 Oct 2026). 0 = use the fixed delta_india_min_wallet_inr
+    delta_india_floor_frac: float = 0.5
     # Leverage set on Delta before every live entry: the highest that keeps liquidation >= 2x the stop distance away,
     # never below this (owner, 17 Oct 2026) and never above 10x. Swing stops <= 8% -> 6-10x in practice.
     delta_india_min_leverage: int = 5

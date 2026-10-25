@@ -57,6 +57,21 @@ class Product:
     underlying: str
 
 
+CAPITAL_IN = ("deposit", "external_deposit", "withdrawal_cancellation")
+CAPITAL_OUT = ("withdrawal",)
+
+
+def _epoch_us(v) -> int:
+    """created_at as epoch microseconds: Delta sends ISO 8601 text or a number of microseconds."""
+    if isinstance(v, (int, float)):
+        return int(v)
+    try:
+        from datetime import datetime
+        return int(datetime.fromisoformat(str(v).replace("Z", "+00:00")).timestamp() * 1_000_000)
+    except ValueError:
+        return 0
+
+
 class DeltaIndia:
     def __init__(self, api_key: str, api_secret: str, base_url: str = INDIA_URL, client=None):
         self._key = api_key
@@ -67,7 +82,7 @@ class DeltaIndia:
         self._products_at = 0.0
 
     async def _request(self, method: str, path: str, *, params: dict | None = None,
-                       body: dict | None = None, signed: bool = True) -> Any:
+                       body: dict | None = None, signed: bool = True, raw: bool = False) -> Any:
         params = {k: v for k, v in (params or {}).items() if v is not None}
         payload = json.dumps(body, separators=(",", ":")) if body is not None else ""
         query_string = ("?" + urlencode(params)) if params else ""
@@ -95,7 +110,34 @@ class DeltaIndia:
             data = {"error": r.text[:200]}
         if r.status_code >= 400 or (isinstance(data, dict) and data.get("success") is False):
             raise DeltaError(r.status_code, data)
+        if raw:
+            return data                                  # with "meta" (pagination cursors)
         return data.get("result", data) if isinstance(data, dict) else data
+
+    async def capital_flows(self, since_us: int | None = None, max_pages: int = 50) -> list[dict]:
+        """Money moved into or out of the account - not trading (owner, 26 Oct 2026: the floor follows deposits and
+        withdrawals only). From /v2/wallet/transactions: deposit, external_deposit and withdrawal_cancellation count
+        +, withdrawal counts -; P&L, fees, funding and everything else is ignored. Amounts are in the row's asset
+        (USD on Delta India). Read-only."""
+        out, after = [], None
+        for _ in range(max_pages):
+            data = await self._request("GET", "/v2/wallet/transactions",
+                                       params={"page_size": 100, "after": after, "start_time": since_us}, raw=True)
+            page = (data.get("result") if isinstance(data, dict) else data) or []
+            for r in page:
+                typ = str(r.get("transaction_type") or "")
+                if typ not in CAPITAL_IN and typ not in CAPITAL_OUT:
+                    continue
+                try:
+                    amt = abs(float(r.get("amount") or 0))
+                except (TypeError, ValueError):
+                    continue
+                out.append({"id": str(r.get("id")), "type": typ, "asset": str(r.get("asset_symbol") or "").upper(),
+                            "amount": -amt if typ in CAPITAL_OUT else amt, "t_us": _epoch_us(r.get("created_at"))})
+            after = (data.get("meta") or {}).get("after") if isinstance(data, dict) else None
+            if not after or not page:
+                break
+        return out
 
     async def ping(self) -> dict:
         """Read-only auth check: wallet balances. Proves key + IP whitelist."""

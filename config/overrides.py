@@ -344,6 +344,9 @@ FIELDS: tuple[Field, ...] = (
           hi=0.10),
     Field("delta_india_min_wallet_inr", "delta", "Delta wallet floor (Rs)",
           "No new Delta orders at all once the wallet is below this. 0 = off.", kind="float", lo=0.0, hi=1e7),
+    Field("delta_india_floor_frac", "delta", "Floor as a share of money deposited",
+          "The floor follows deposits and withdrawals on Delta (not wins or losses): 0.5 = no new orders once the "
+          "wallet is below half of what you put in. 0 = use the fixed floor above.", kind="float", lo=0.0, hi=0.9),
     Field("delta_india_live_orders", "delta", "Allow live Delta orders (second gate)",
           "Even when mode is live, orders are blocked until this is ON. Keep OFF until you "
           "explicitly want real INR futures fills.", kind="bool"),
@@ -454,7 +457,7 @@ MAIN_SECTIONS: dict[str, tuple[str, ...]] = {
                   "move_attribution_enabled", "groq_postmortem_enabled"),
 }
 ADVANCED = frozenset({
-    "delta_india_base_url", "delta_only_mode", "delta_india_data_enabled", "delta_klines_seconds",
+    "delta_india_floor_frac", "delta_india_base_url", "delta_only_mode", "delta_india_data_enabled", "delta_klines_seconds",
     "binance_only_mode", "binance_klines_enabled", "binance_klines_seconds", "binance_ws_enabled",
     "binance_oi_enabled", "coindcx_enabled", "coingecko_enabled", "twelvedata_enabled", "db_retention_days",
     "intraday_min_confidence", "intraday_min_timeframe_minutes", "intraday_max_open", "intraday_margin_cap_frac",

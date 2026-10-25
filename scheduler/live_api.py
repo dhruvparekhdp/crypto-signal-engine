@@ -122,6 +122,10 @@ async def snapshot() -> dict:
         state = {}
     records = state.get("positions") or {}
     day = state.get("day") or {}
+    cap = state.get("capital") or {}                     # floor = share of money deposited, once deposits are read
+    if float(settings.delta_india_floor_frac or 0) > 0 and float(cap.get("floor_inr") or 0) > 0:
+        body.update(floor_inr=float(cap["floor_inr"]), deposited_inr=float(cap.get("net_inr") or 0),
+                    floor_frac=float(settings.delta_india_floor_frac))
     body["journal"] = [r for r in _tail(SHADOW_PATH, 60) if r.get("mode") == "live" or r.get("event")][-25:]
     if not (settings.delta_india_api_key and settings.delta_india_api_secret):
         body["error"] = "no live Delta key saved"

@@ -104,7 +104,7 @@ class DeltaBook:
                  kill_switch: bool = False, backstop_r: float = 0.5,
                  daily_loss_pct: float = 0.0, min_wallet_inr: float = 0.0, min_leverage: int = MIN_LEVERAGE,
                  round_up_risk_pct: float = 0.0, entry_guard: bool = False,
-                 max_spread_pct: float = 0.5, max_slip_r: float = 0.10):
+                 max_spread_pct: float = 0.5, max_slip_r: float = 0.10, floor_frac: float = 0.0):
         self.client = client
         self.mode = mode
         self.live_orders = live_orders
@@ -124,6 +124,9 @@ class DeltaBook:
         self.entry_guard = bool(entry_guard)      # spread / depth check before a real-money entry (entry_guard.py)
         self.max_spread_pct = float(max_spread_pct)
         self.max_slip_r = float(max_slip_r)
+        # floor = this share of the money deposited (deposits - withdrawals, read from Delta), never moved by wins or
+        # losses (owner, 26 Oct 2026: "flat 50%"); min_wallet_inr stays the floor until deposits have been read
+        self.floor_frac = float(floor_frac)
 
     @property
     def live(self) -> bool:
@@ -207,7 +210,8 @@ class DeltaBook:
     async def _loss_guard(self) -> str:
         """'' when new orders may go out, else the reason they may not. The day's starting wallet (UTC) is stored
         in the state file; an unreadable wallet blocks new orders (fail closed) but never touches open ones."""
-        if self.daily_loss_pct <= 0 and self.min_wallet_inr <= 0:
+        floor = self.floor_inr()
+        if self.daily_loss_pct <= 0 and floor <= 0:
             return ""
         try:
             if hasattr(self.client, "wallet_total_inr"):
@@ -216,7 +220,7 @@ class DeltaBook:
                 wallet = await self.client.inr_available()
         except DeltaError:
             return "wallet_unreadable"
-        if self.min_wallet_inr > 0 and wallet < self.min_wallet_inr:
+        if floor > 0 and wallet < floor:
             return "wallet_floor"
         if self.daily_loss_pct > 0:
             today = time.strftime("%Y-%m-%d", time.gmtime())
@@ -228,6 +232,52 @@ class DeltaBook:
             if wallet < float(day["start_inr"]) * (1 - self.daily_loss_pct):
                 return "daily_loss_limit"
         return ""
+
+    def floor_inr(self) -> float:
+        """The wallet floor in force: floor_frac x money deposited once deposits have been read, else the fixed one."""
+        if self.floor_frac > 0:
+            cap = self._load_state().get("capital") or {}
+            if float(cap.get("floor_inr") or 0) > 0:
+                return float(cap["floor_inr"])
+        return self.min_wallet_inr
+
+    async def refresh_capital(self) -> dict | None:
+        """Read new deposits / withdrawals and reset the floor to floor_frac of the money put in. Each flow is valued
+        in rupees once, at Delta's rate when it is first seen, so the floor does not drift with the rate. A flow on
+        today's date moves the daily-loss baseline by the same amount (a withdrawal is not a trading loss). Returns
+        the change, or None. An unreadable history keeps the old floor (never lowers protection on an error)."""
+        if not self.live or self.floor_frac <= 0 or not hasattr(self.client, "capital_flows"):
+            return None
+        state = self._load_state()
+        cap = state.setdefault("capital", {"flows": {}, "net_inr": 0.0, "floor_inr": 0.0})
+        since = int(cap["checked_us"]) - 2 * 86_400_000_000 if cap.get("checked_us") else None
+        try:
+            flows = await self.client.capital_flows(since)
+        except DeltaError:
+            return None
+        rate = self.usd_inr
+        new = []
+        for f in flows:
+            if f["id"] in cap["flows"]:
+                continue
+            inr = f["amount"] if f["asset"] == "INR" else f["amount"] * rate
+            cap["flows"][f["id"]] = {"t_us": f["t_us"], "type": f["type"], "inr": round(inr, 2)}
+            new.append(cap["flows"][f["id"]])
+            day = state.get("day") or {}
+            if day.get("start_inr") and day.get("date") == time.strftime("%Y-%m-%d", time.gmtime(f["t_us"] / 1e6)):
+                day["start_inr"] = float(day["start_inr"]) + inr
+        cap["checked_us"] = int(time.time() * 1_000_000)
+        if not cap["flows"]:
+            self._save_state(state)
+            return None
+        old = float(cap.get("floor_inr") or 0)
+        cap["net_inr"] = round(sum(v["inr"] for v in cap["flows"].values()), 2)
+        cap["floor_inr"] = round(self.floor_frac * cap["net_inr"], 2)
+        self._save_state(state)
+        if not new and abs(cap["floor_inr"] - old) < 0.005:
+            return None
+        return {"event": "floor_updated", "floor_inr": cap["floor_inr"], "was_inr": old, "net_deposits_inr": cap["net_inr"],
+                "new_flows": [{"type": v["type"], "inr": v["inr"]} for v in new]}
 
     async def on_paper_open(self, binance_symbol: str, side_word: str, entry: float,
                             stop: float, target: float, signal_type: str = "") -> MirrorPlan:
@@ -493,8 +543,9 @@ class DeltaBook:
                     self.usd_inr, self.rate_seen = rate, True
             except DeltaError:
                 pass
+        floor_event = await self.refresh_capital()          # deposits / withdrawals -> the floor (after the rate)
         state = self._load_state()
-        events = []
+        events = [floor_event] if floor_event else []
         for delta_sym, pos in list((state.get("positions") or {}).items()):
             if pos.get("pending") and time.time() * 1000 - int(pos.get("opened_ms") or 0) < 120_000:
                 continue                                    # an entry in flight right now: leave it to on_paper_open

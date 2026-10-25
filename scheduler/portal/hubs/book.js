@@ -423,7 +423,7 @@
                  ["AVAILABLE MARGIN", rs(w.free_inr), "free for a new trade, after open losses"],
                  ["TODAY · CLOSED TRADES", rs(day.pnl_inr, true), day.start_inr != null ? "from " + rs(day.start_inr) + " at 05:30 IST" : "day starts at first check", day.pnl_inr < 0 ? "dn" : ""],
                  ["DAILY LIMIT LEFT", dayLeft != null ? rs(dayLeft) : "—", "stops new orders at −" + Math.round(d.daily_loss_pct * 100) + "%"],
-                 ["FLOOR", rs(d.floor_inr), "no new orders below"],
+                 ["FLOOR", rs(d.floor_inr), d.deposited_inr ? Math.round(d.floor_frac * 100) + "% of " + rs(d.deposited_inr) + " put in · no new orders below" : "no new orders below"],
                  ["OPEN", (d.positions || []).length + " / " + d.max_open, ""]]);
     }
   });
