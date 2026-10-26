@@ -309,7 +309,9 @@ class Settings(BaseSettings):
     delta_testnet_max_open: int = 10
     # Keep the demo copying paper swing trades even while the real-money book is live (owner, 18 Oct 2026: paper,
     # demo and live run side by side; test data is analysed from all three). The kill switch never stops the demo.
-    delta_testnet_mirror: bool = True
+    # demo (testnet) copy of every swing trade: off (owner, 26 Oct 2026: "stop this trading, no use, demo doesn't
+    # run with proper live market rate")
+    delta_testnet_mirror: bool = False
     # Real-time prices over Delta India's WebSocket (mark price ~2 s + every trade); the 15 s candle poll stays as the
     # history source and the backup when the socket is quiet (owner, 18 Oct 2026)
     delta_ws_enabled: bool = True
@@ -352,6 +354,9 @@ class Settings(BaseSettings):
     # Channel-style bracket, paper research only (analysis/bracket_book.py, owner 21 Oct 2026): every logged signal
     # gets a virtual -5% stop / +1..+10.7% four-target trade, tracked on 1m bars; no orders, no paper wallet
     bracket_paper_enabled: bool = True
+    # candidates: every non-live strategy paper-traded with live-style exits and a promotion scorecard
+    # (analysis/candidate_book.py; owner 26 Oct 2026: "only paper, no changes for live")
+    candidate_book_enabled: bool = True
     # support / resistance setups for the same bracket on every watchlist coin, labelled with news and sentiment
     # (analysis/level_signals.py); and the wallet view: fixed margin per trade at fixed leverage, skipped only when
     # the paper wallet has no free margin - no risk rules (owner, 21 Oct 2026: "keep wallet limit not risk")

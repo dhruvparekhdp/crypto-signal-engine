@@ -57,6 +57,7 @@ ENDPOINTS: tuple[tuple[str, str, str, str, dict], ...] = (
     ("Portal", "GET", "/api/portal/signals", "Swing signals, newest first: traded / not traded / filter block, with the BTC vol rank.", {"days": "14", "limit": "40"}),
     ("Portal", "GET", "/api/portal/meta", "Paper or live, swing book on/off, market filter mode and threshold.", {}),
     ("Delta India", "GET", "/api/delta", "Delta India mirror status: mode, key set?, shadow log tail, state.", {}),
+    ("Paper", "GET", "/api/candidates", "Candidates, paper only: every non-live strategy (swing signals with the live and the ratchet exit, intraday picks, counter-trend shorts, their mirrors as controls) with a promotion scorecard - 28+ days, 100+ trades, profitable after fees, beats its control, profitable in rising and falling BTC weeks.", {}),
     ("Paper", "GET", "/api/vol", "Delta-hedged options, paper research: BTC / ETH at-the-money straddles on the next-day and weekly expiry, one book selling and one buying, each kept delta-neutral with the perpetual - open positions marked at Delta's option prices, results by book.", {}),
     ("Paper", "GET", "/api/bracket", "Channel-style bracket, paper research: every signal with a -5% stop, four targets (+1..+10.7%), stop to entry after the first, 48 h limit - results by our picks / mirrors / swing / coin.", {}),
     ("Delta India", "GET", "/api/parity", "Backtest = live check (admin): swing signals logged vs re-run on the same Delta bars, warm-up and venue gaps, and every live position vs its paper copy. ?run=1 starts a fresh run.", {}),

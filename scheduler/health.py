@@ -7844,6 +7844,8 @@ async def make_app(runner) -> web.Application:
     _register_bracket(app, runner)
     from scheduler.vol_api import register as _register_vol
     _register_vol(app, runner)
+    from scheduler.candidates_api import register as _register_candidates
+    _register_candidates(app, runner)
     from scheduler.ai_quality_api import register as _register_ai_quality
     _register_ai_quality(app, runner)
     from scheduler.api_docs import register as _register_api_docs

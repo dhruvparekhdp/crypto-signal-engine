@@ -257,30 +257,6 @@
     }
   });
   // Delta demo (testnet) positions with the real-market gap (owner, 15 Oct 2026)
-  UI.widget("paper-demo", {
-    title: "DELTA DEMO · FAKE MONEY", uses: ["delta_demo", "paper"],
-    render: function (el, D) {
-      var d = D.delta_demo; if (!d) { el.innerHTML = C.state(D, "delta_demo"); return; }
-      var rows = d.positions || [];
-      if (!rows.length) { el.innerHTML = C.empty(d.mode === "testnet" ? "No open demo positions." : "Demo mode is off (mode: " + e(d.mode) + ")."); return; }
-      var paper = {}; ((D.paper && D.paper.positions) || []).forEach(function (p) { paper[String(p.symbol).toUpperCase()] = p; });
-      el.innerHTML = '<p class="mono small dim" style="margin:0 0 10px">The demo exchange has its own price, which drifts away from the real market. ' +
-        "Demo profit and loss shows that orders, stops and targets work, not how the strategy is doing; the paper column is the real-price result.</p>" +
-        C.table([
-          { label: "COIN", w: "80px", cell: function (r) { return "<b>" + e(r.symbol.replace(/USD$/, "")) + "</b>"; } },
-          { label: "SIDE", w: "80px", cell: function (r) { return C.side(r.side); } },
-          { label: "CONTRACTS", w: "90px", cell: function (r) { return e(r.contracts); } },
-          { label: "DEMO ENTRY", w: "110px", cell: function (r) { return e(U.px(r.entry)); } },
-          { label: "DEMO PRICE", w: "110px", cell: function (r) { return e(U.px(r.demo_mark)); } },
-          { label: "REAL PRICE", w: "110px", cell: function (r) { return "<b>" + e(U.px(r.real_mark)) + "</b>"; } },
-          { label: "GAP", w: "80px", cell: function (r) { var g = r.gap_pct; return g == null ? "—" : '<span class="' + (Math.abs(g) >= 1 ? "dn" : "dim") + '">' + (g > 0 ? "+" : "") + g.toFixed(2) + "%</span>"; } },
-          { label: "DEMO P&L", w: "100px", cell: function (r) { return r.demo_pnl_usd == null ? "—" : C.signed(r.demo_pnl_usd, function (x) { return (x >= 0 ? "+$" : "−$") + Math.abs(x).toFixed(2); }); } },
-          { label: "PAPER (REAL PRICE)", w: "130px", cell: function (r) { var p = paper[String(r.binance_symbol || "").toUpperCase()];
-              return p ? C.signed(p.unrealised, function (x) { return U.inr(x, true); }) : '<span class="dim">closed in paper</span>'; } },
-          { label: "EXCHANGE STOP", w: "120px", cell: function (r) { return e(U.px(r.exchange_stop)); } }
-        ], rows, { minWidth: 1100 });
-    }
-  });
   // channel-style bracket, paper research only (owner, 21 Oct 2026): does a +1% first target / -5% stop make money on our signals?
   UI.widget("paper-bracket", {
     title: "CHANNEL-STYLE BRACKET · PAPER RESEARCH", uses: ["bracket"],
@@ -397,7 +373,42 @@
         '<p class="mono tiny dim" style="margin:6px 0 0">Seller wins when "moved" ends below "priced in". One day is one draw: read it after 2-3 weeks of daily expiries.</p>';
     }
   });
-  UI.view("book/paper", [["paper-strip"], ["paper-open"], ["paper-bracket"], ["paper-vol"], ["paper-demo"], ["paper-history"]]);
+  // candidates (owner, 26 Oct 2026: "only we get some confidence from paper, so we can pick those strategies in live")
+  UI.widget("paper-candidates", {
+    title: "CANDIDATES · PAPER ONLY · WHICH STRATEGIES COULD GO LIVE", uses: ["candidates"],
+    render: function (el, D, ctx) {
+      var d = D.candidates; if (!d) { el.innerHTML = C.state(D, "candidates"); return; }
+      var T = d.tracks || {}, g = d.gate || {};
+      ctx.right((d.started ? "since " + U.stamp(d.started) + " · " : "") + d.days + " days · " + d.open + " open");
+      function r(x) { return x == null ? "—" : C.signed(x, function (y) { return (y > 0 ? "+" : "") + y.toFixed(2) + "R"; }); }
+      function pair(p) { return p && p[1] ? r(p[0]) + ' <span class="dim tiny">n ' + p[1] + "</span>" : '<span class="dim">—</span>'; }
+      var intro = '<p class="mono small dim" style="margin:0 0 10px">Every strategy that is not live gets its own virtual trades with live-style exits: no slot limit, no one-per-coin rule, never sent to Delta, never in the paper wallet. ' +
+        "One can qualify for live only when it has run " + g.days + "+ days, closed " + g.n + "+ trades, is profitable after fees, beats its control (the same signal on the other side), and is profitable in both rising and falling BTC weeks. You decide what goes live.</p>";
+      var order = ["swing", "swing_ratchet", "swing_mirror", "intraday_pick", "intraday_mirror", "counter_trend", "counter_trend_mirror"];
+      var rows = order.filter(function (k) { return T[k]; }).map(function (k) { return [k, T[k]]; });
+      var chip = function (s) { var c = s.indexOf("qualifies") === 0 ? "up" : s === "not qualifying" ? "dn" : "dim"; return '<b class="' + c + '">' + e(s) + "</b>"; };
+      var table = rows.length ? C.table([
+        { label: "STRATEGY", w: "minmax(0,1.4fr)", cell: function (x) { return "<b>" + e(x[1].name) + "</b><br>" + chip(x[1].status); } },
+        { label: "CLOSED", w: "70px", cell: function (x) { return e(x[1].closed ? x[1].closed.n : 0); } },
+        { label: "AVG AFTER FEES", w: "110px", cell: function (x) { return x[1].closed ? r(x[1].closed.avg_r) + '<br><span class="dim tiny">win ' + x[1].closed.win_pct + "%</span>" : "—"; } },
+        { label: "LONGS / SHORTS", w: "150px", cell: function (x) { return x[1].closed ? pair(x[1].closed.long) + "<br>" + pair(x[1].closed.short) : "—"; } },
+        { label: "BTC UP / DOWN WEEKS", w: "150px", cell: function (x) { return x[1].closed ? pair(x[1].closed.rising_weeks) + "<br>" + pair(x[1].closed.falling_weeks) : "—"; } },
+        { label: "OPEN NOW", w: "110px", cell: function (x) { return x[1].open_now ? r(x[1].open_now.avg_r) + ' <span class="dim tiny">n ' + x[1].open_now.n + "</span>" : "—"; } },
+        { label: "GATE", w: "minmax(0,1fr)", cell: function (x) { return (x[1].gate || []).map(function (c) { return (c.ok ? "✅ " : "⬜ ") + e(c.check) + ' <span class="dim tiny">' + e(c.detail) + "</span>"; }).join("<br>"); } }
+      ], rows, { minWidth: 980 }) : C.empty("Collecting: the first trades open a few minutes after the next signals.");
+      var L = (T.swing && T.swing.labels) || {};
+      var labs = Object.keys(L).filter(function (k) { return L[k]; });
+      var why = labs.length ? '<h4 class="mono small" style="margin:14px 0 6px">SWING SIGNALS BY WHAT THE REAL PAPER BOOK DID WITH THEM</h4>' + C.table([
+        { label: "PAPER BOOK", w: "minmax(0,1fr)", cell: function (k) { return "<b>" + e(k === "taken" ? "taken" : "skipped: " + k.replace(/_/g, " ")) + "</b>"; } },
+        { label: "CLOSED", w: "70px", cell: function (k) { return e(L[k].n); } },
+        { label: "AVG AFTER FEES", w: "120px", cell: function (k) { return r(L[k].avg_r); } },
+        { label: "WIN", w: "70px", cell: function (k) { return e(L[k].win_pct + "%"); } }
+      ], labs, { minWidth: 420 }) + '<p class="mono tiny dim" style="margin:6px 0 0">If the skipped ones do as well as the taken ones, that skip rule is costing trades.</p>' : "";
+      el.innerHTML = intro + table + why;
+    }
+  });
+  // the demo (testnet) panel was removed: owner 26 Oct 2026, "no use, demo doesn't run with proper live market rate"
+  UI.view("book/paper", [["paper-strip"], ["paper-open"], ["paper-candidates"], ["paper-bracket"], ["paper-vol"], ["paper-history"]]);
 
   // ------------------------------------------------------------- live, real money (owner, 18 Oct 2026)
   // paise, like the Delta app: a ₹500 wallet rounded to ₹500 hid the ₹0.21 that was really gone (19 Oct 2026)

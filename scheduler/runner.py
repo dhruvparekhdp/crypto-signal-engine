@@ -1887,6 +1887,109 @@ class AppRunner:
         book["roles_v"] = 2
         log.info("bracket_roles_fixed", open=len(book["open"]), closed=len(kept), dropped=len(closed) - len(kept))
 
+    _CAND_OPEN = "data/candidate_book.json"
+    _CAND_CLOSED = "data/candidate_trades.jsonl"
+
+    async def _candidate_book_job(self, now: datetime | None = None) -> dict:
+        """Candidates (analysis/candidate_book.py; owner 26 Oct 2026: paper only, no live change): every swing and
+        intraday signal gets virtual trades per track with live-style exits, never copied to Delta and never touching
+        the paper wallet. A signal is read once it is 5 minutes old, after the paper book has decided on it (its
+        skip_reason labels the swing track). Open trades walk forward on closed 1m bars."""
+        if not settings.candidate_book_enabled:
+            return {}
+        from analysis import bracket_book as bb
+        from analysis import candidate_book as cb
+        now = (now or datetime.now(UTC)).replace(tzinfo=None)
+        path = Path(self._CAND_OPEN)
+        try:
+            book = json.loads(path.read_text())
+        except (OSError, ValueError):
+            book = {"last_id": None, "open": [], "started": now.isoformat(), "parents": {}, "btc_days": {}}
+        async with AsyncSessionFactory() as session:
+            repo = Repository(session)
+            if book["last_id"] is None:                  # first run: start from the newest signal, not history
+                latest = await repo.crypto_signals_between(2, limit=1, include_suppressed=True)
+                book["last_id"] = latest[0].id if latest else 0
+                new = []
+            else:
+                new = await repo.crypto_signals_after(book["last_id"])
+        lad, buf, cf = settings.swing_lock_ladder, settings.swing_lock_buffer_r, settings.swing_lock_confirm_min
+        opened = 0
+        for r in new:
+            ts = r.timestamp.replace(tzinfo=None) if r.timestamp.tzinfo else r.timestamp
+            if now - ts < timedelta(minutes=5):
+                break                                    # the paper book may not have decided yet: next run
+            book["last_id"] = r.id
+            if r.suppressed_by or (getattr(r, "review_round", 0) or 0) > 0 or not r.current_price:
+                continue
+            side = 1 if r.direction == "long" else -1
+            role = bb.role_of(getattr(r, "candidate_role", ""))
+            mode = getattr(r, "trade_mode", "") or "intraday"
+            args = dict(signal_ts=r.timestamp, signal_type=r.signal_type, timeframe=r.timeframe or "", ladder=lad,
+                        buffer_r=buf, confirm_min=cf)
+            plans = []
+            if mode == "swing" and role == "primary":
+                label = (r.skip_reason or "taken").split(":")[0][:40]
+                plans = [("swing", side, r.stop_loss, r.target_price, label),
+                         ("swing_ratchet", side, r.stop_loss, r.target_price, label),
+                         ("swing_mirror", -side, 2 * r.current_price - r.stop_loss,
+                          2 * r.current_price - r.target_price, label)]
+            elif mode == "intraday":
+                if role == "primary":
+                    plans = [("intraday_pick", side, r.stop_loss, r.target_price, "")]
+                elif role == "counter_trend":
+                    plans = [("counter_trend", side, r.stop_loss, r.target_price, "")]
+                else:
+                    parent = book["parents"].get(str(getattr(r, "mirror_of_log_id", 0) or 0))
+                    plans = [("counter_trend_mirror" if parent == "counter_trend" else "intraday_mirror", side,
+                              r.stop_loss, r.target_price, "")]
+                if role != "mirror":
+                    book["parents"][str(r.id)] = plans[0][0]
+            for track, sd, stop, target, label in plans:
+                tr = cb.open_trade(track, r.id, r.symbol, sd, r.current_price, stop or 0.0, target or 0.0,
+                                   label=label, **args)
+                if tr:
+                    book["open"].append(tr)
+                    opened += 1
+        if len(book["parents"]) > 5000:                 # mirrors follow their pick within seconds: keep it small
+            book["parents"] = dict(list(book["parents"].items())[-2000:])
+        states = {st.symbol: st for st in await self.crypto_store.get_all()}
+        btc = states.get("btcusdt")
+        if btc is not None and getattr(btc, "current_price", 0):
+            d = book["btc_days"].setdefault(now.strftime("%Y-%m-%d"), [btc.current_price, btc.current_price])
+            d[1] = btc.current_price
+        fetched: dict[str, list] = {}
+        still, closed = [], []
+        for tr in book["open"]:
+            sym = tr["symbol"].lower()
+            last = datetime.fromisoformat(tr["last_ts"])
+            st = states.get(sym)
+            mem = [c for c in ((st.candles_1m if st else None) or []) if getattr(c, "is_closed", True)]
+            first = min((c.timestamp.replace(tzinfo=None) if c.timestamp.tzinfo else c.timestamp for c in mem),
+                        default=None)
+            bars = mem
+            if first is None or first > last + timedelta(minutes=2):          # a hole: fetch once per coin
+                if sym not in fetched:
+                    oldest = min(datetime.fromisoformat(t["last_ts"]) for t in book["open"]
+                                 if t["symbol"].lower() == sym)
+                    fetched[sym] = await self._signal_bars(sym, oldest, now)
+                bars = fetched[sym]
+            if not bars and now - last > timedelta(hours=24):
+                tr.update(status="closed", exit="no data")
+                closed.append(tr)
+                continue
+            cb.advance(tr, bars)
+            (closed if tr["status"] == "closed" else still).append(tr)
+        book["open"] = still
+        if closed:
+            with open(self._CAND_CLOSED, "a") as fh:
+                for tr in closed:
+                    fh.write(json.dumps(tr) + "\n")
+        tmp = path.with_suffix(".tmp")
+        tmp.write_text(json.dumps(book))
+        tmp.replace(path)
+        return {"new": opened, "open": len(still), "closed": len(closed)}
+
     _VOL_OPEN = "data/vol_book.json"
     _VOL_CLOSED = "data/vol_trades.jsonl"
 
@@ -4355,6 +4458,9 @@ class AppRunner:
         self.scheduler.add_job(
             self._bracket_paper_job, "interval", minutes=2, id="bracket_paper", max_instances=1,
             next_run_time=datetime.now(UTC) + timedelta(seconds=75))
+        self.scheduler.add_job(
+            self._candidate_book_job, "interval", minutes=2, id="candidate_book", max_instances=1,
+            next_run_time=datetime.now(UTC) + timedelta(seconds=105))
         self.scheduler.add_job(
             self._vol_paper_job, "interval", minutes=5, id="vol_paper", max_instances=1,
             next_run_time=datetime.now(UTC) + timedelta(seconds=95))
