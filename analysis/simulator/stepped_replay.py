@@ -74,7 +74,9 @@ class SteppedMarketReplayEngine:
         self.window_years = window_years
         self.lake_root = Path(lake_root)
         self.market_step_hours = max(0.1, market_step_hours)
-        self.step_budget_seconds = max(1.0, step_budget_seconds)
+        # 0 = no pacing. The page no longer asks for an analysis budget (26 Oct 2026);
+        # a positive value is only kept so an old command line can still throttle.
+        self.step_budget_seconds = max(0.0, float(step_budget_seconds))
         self.tp_r = tp_r
         self.sl_r = sl_r
         self.trail_sl = bool(trail_sl)
@@ -302,9 +304,10 @@ class SteppedMarketReplayEngine:
             status["progress_pct"] = round((step_idx / total_steps) * 100.0, 1)
             status["ai_telemetry"] = governor.get_telemetry()
 
-            # Pacing Controller (1hr market = 1min analysis or custom budget)
+            # Pacing only when a budget was asked for. The default is 0: the next
+            # step starts as soon as this window's candles are done.
             elapsed_step_sec = time.perf_counter() - step_start_perf
-            if elapsed_step_sec < self.step_budget_seconds:
+            if self.step_budget_seconds > 0 and elapsed_step_sec < self.step_budget_seconds:
                 status["is_overtime"] = False
                 # Sleep smoothly in small ticks while updating live countdown bar
                 remaining_budget = self.step_budget_seconds - elapsed_step_sec
@@ -318,8 +321,8 @@ class SteppedMarketReplayEngine:
                     self._write_status(status)
                     await asyncio.sleep(0.5)
             else:
-                # Overtime: Took more time as instructed, advance immediately to next step
-                status["is_overtime"] = True
+                # No budget, or the step used its whole budget: go straight on.
+                status["is_overtime"] = self.step_budget_seconds > 0
                 status["step_seconds_elapsed"] = round(elapsed_step_sec, 1)
                 status["step_countdown_remaining"] = 0
                 self._write_status(status)

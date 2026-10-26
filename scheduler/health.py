@@ -293,7 +293,7 @@ async def _api_simulator_start(runner, request: web.Request) -> web.Response:
     cycle_lev = str(data.get("cycle_leverage", "10.0"))
     stepped_mode = data.get("stepped_mode", True)
     step_market_hours = str(data.get("step_market_hours", "1.0"))
-    step_seconds = str(data.get("step_seconds", "60.0"))
+    step_seconds = "0"          # no analysis-budget wait; the field was removed from the page
     strategy = str(data.get("strategy", "all")).strip()
     gemini_key = str(data.get("gemini_key", os.getenv("GEMINI_API_KEY", ""))).strip()
     hf_tokens = str(data.get("hf_tokens", "")).strip()
@@ -436,7 +436,7 @@ async def _api_simulator_get_config(runner, request: web.Request) -> web.Respons
     defaults = {
         "years": "0.0082",
         "step_market_hours": 1.0,
-        "step_seconds": 60.0,
+        "step_seconds": 0,
         "stepped_mode": True,
         "tp_r": 3.0,
         "sl_r": 1.0,
@@ -3014,10 +3014,9 @@ section h2{color:var(--accent-soft)}
             <label style="font-size:11px;color:#94a3b8;display:block;margin-bottom:4px">Market Hours per Step (hrs)</label>
             <input type="number" step="0.5" id="sim-input-step-hours" value="1.0" min="0.1" max="24" oninput="updateSimulatorEstimates()" style="width:100%;background:#0f172a;color:#f1f5f9;border:1px solid #334155;padding:8px 10px;border-radius:6px">
           </div>
-          <div>
-            <label style="font-size:11px;color:#94a3b8;display:block;margin-bottom:4px">Analysis Budget per Step (sec)</label>
-            <input type="number" step="5" id="sim-input-step-seconds" value="10" min="2" max="300" oninput="updateSimulatorEstimates()" style="width:100%;background:#0f172a;color:#f1f5f9;border:1px solid #334155;padding:8px 10px;border-radius:6px">
-          </div>
+          <!-- Analysis budget removed 26 Oct 2026: it only made each step wait out a
+               timer (and showed "overtime" when the work took longer). Steps now
+               advance as soon as the candles for that window are done. -->
           <div style="display:flex;align-items:flex-end">
             <label style="font-size:12px;color:#10b981;font-weight:700;display:flex;align-items:center;gap:6px;cursor:pointer;padding-bottom:10px">
               <input type="checkbox" id="sim-input-stepped" checked style="accent-color:#10b981;cursor:pointer">
@@ -3082,14 +3081,9 @@ section h2{color:var(--accent-soft)}
             <div style="font-size:10px;color:#64748b" id="sim-est-hours">72 market hours</div>
           </div>
           <div>
-            <div style="font-size:10px;color:#94a3b8">ESTIMATED RUN TIME</div>
-            <div id="sim-est-time" style="font-size:17px;font-weight:700;color:#10b981">12 mins</div>
-            <div style="font-size:10px;color:#64748b">at 10s / step</div>
-          </div>
-          <div>
-            <div style="font-size:10px;color:#94a3b8">EXPECTED COMPLETION</div>
-            <div id="sim-est-finish" style="font-size:17px;font-weight:700;color:#f59e0b">Calculating...</div>
-            <div style="font-size:10px;color:#64748b">based on local clock</div>
+            <div style="font-size:10px;color:#94a3b8">PACE</div>
+            <div id="sim-est-time" style="font-size:17px;font-weight:700;color:#10b981">As fast as the data</div>
+            <div style="font-size:10px;color:#64748b">no wait between steps</div>
           </div>
         </div>
       </div>
@@ -4388,23 +4382,11 @@ function updateRMathCard(){
 function updateSimulatorEstimates(){
   const yearsVal = parseFloat(document.getElementById('sim-input-years')?.value || '0.083');
   const stepHours = parseFloat(document.getElementById('sim-input-step-hours')?.value || '1.0');
-  const stepBudgetSec = parseFloat(document.getElementById('sim-input-step-seconds')?.value || '60.0');
-
   const totalMarketHours = Math.round(yearsVal * 8760);
   const totalSteps = Math.max(1, Math.round(totalMarketHours / Math.max(0.1, stepHours)));
-  const totalDurationSec = totalSteps * stepBudgetSec;
-
-  const hours = Math.floor(totalDurationSec / 3600);
-  const mins = Math.floor((totalDurationSec % 3600) / 60);
-  const timeStr = (hours > 0 ? (hours + ' hrs ') : '') + mins + ' mins';
-
-  const finishDate = new Date(Date.now() + totalDurationSec * 1000);
-  const finishStr = window.fmtStamp(finishDate.toISOString());   // the one shared formatter: date + time, IST
-
   setText('sim-est-steps', totalSteps.toLocaleString() + ' Steps');
   setText('sim-est-hours', totalMarketHours.toLocaleString() + ' market hours');
-  setText('sim-est-time', timeStr);
-  setText('sim-est-finish', finishStr);
+  setText('sim-est-time', 'As fast as the data');
 }
 
 // ── Persistent Simulator Settings Storage (localStorage + Server) ──
@@ -4445,7 +4427,7 @@ function getSimulatorFormValues() {
     cycle_leverage: parseFloat(document.getElementById('sim-input-cycle-lev')?.value || '10'),
     stepped_mode: document.getElementById('sim-input-stepped')?.checked ?? true,
     step_market_hours: parseFloat(document.getElementById('sim-input-step-hours')?.value || '1.0'),
-    step_seconds: parseFloat(document.getElementById('sim-input-step-seconds')?.value || '60.0'),
+    step_seconds: 0,
     gemini_key: '',
     openrouter_key: '',
     hf_tokens: '',
@@ -4505,7 +4487,6 @@ function applySimulatorConfig(c) {
   if (c.cycle_leverage !== undefined && document.getElementById('sim-input-cycle-lev')) document.getElementById('sim-input-cycle-lev').value = c.cycle_leverage;
   if (c.stepped_mode !== undefined && document.getElementById('sim-input-stepped')) document.getElementById('sim-input-stepped').checked = !!c.stepped_mode;
   if (c.step_market_hours !== undefined && document.getElementById('sim-input-step-hours')) document.getElementById('sim-input-step-hours').value = c.step_market_hours;
-  if (c.step_seconds !== undefined && document.getElementById('sim-input-step-seconds')) document.getElementById('sim-input-step-seconds').value = c.step_seconds;
   if (c.ai_provider && document.getElementById('sim-input-ai-provider')) document.getElementById('sim-input-ai-provider').value = c.ai_provider;
 }
 
@@ -4516,7 +4497,7 @@ function attachSimulatorInputListeners() {
     'sim-input-strategy', 'sim-input-years', 'sim-input-tp', 'sim-input-sl', 'sim-input-trail', 'sim-input-antiflip',
     'sim-input-stagnation', 'sim-input-cycle-start',
     'sim-input-cycle-target', 'sim-input-cycle-margin', 'sim-input-cycle-lev',
-    'sim-input-stepped', 'sim-input-step-hours', 'sim-input-step-seconds',
+    'sim-input-stepped', 'sim-input-step-hours',
     'sim-input-ai-provider'
   ];
   ids.forEach(id => {
@@ -4589,7 +4570,7 @@ async function startSimulator(){
   const cycleLev = parseFloat(document.getElementById('sim-input-cycle-lev')?.value || '10');
   const stepped = document.getElementById('sim-input-stepped')?.checked ?? true;
   const stepHours = parseFloat(document.getElementById('sim-input-step-hours')?.value || '1.0');
-  const stepSeconds = parseFloat(document.getElementById('sim-input-step-seconds')?.value || '60.0');
+  const stepSeconds = 0;
   const geminiKey = '';
   const openrouterKey = '';
   const hfTokens = '';
@@ -4934,10 +4915,8 @@ function renderSimulator(data){
   if(data.current_market_time){
     setText('sim-clock-market', data.current_market_time + (data.total_steps ? (' (Step #' + (data.current_step || 1) + ' / ' + data.total_steps + ')') : ''));
   }
-  if(data.is_overtime){
-    setText('sim-clock-countdown', '⚠️ Overtime: ' + (data.step_seconds_elapsed || 0) + 's (Processing...)');
-  } else if(data.step_budget_seconds){
-    setText('sim-clock-countdown', '⏱️ ' + (data.step_seconds_elapsed || 0) + 's / ' + data.step_budget_seconds + 's (' + (data.step_countdown_remaining || 0) + 's remaining)');
+  if (data.step_seconds_elapsed) {
+    setText('sim-clock-countdown', 'step took ' + data.step_seconds_elapsed + 's');
   }
 
   // Update Multi-Provider AI Telemetry

@@ -57,7 +57,8 @@ async def main():
     parser.add_argument("--cycle-leverage", type=float, default=10.0)
     parser.add_argument("--stepped-mode", action="store_true", default=False, help="Run in clock-synchronized stepped mode")
     parser.add_argument("--step-market-hours", type=float, default=1.0, help="Market hours per step")
-    parser.add_argument("--step-seconds", type=float, default=60.0, help="Wall-clock analysis budget per step")
+    parser.add_argument("--step-seconds", type=float, default=0.0,
+                        help="Unused wait after each step, in seconds. 0 = advance immediately.")
     parser.add_argument("--strategy", type=str, default="all", help="all, confluence, bollinger_squeeze, volume_spike, rsi_divergence, trend_pullback, range_breakout, sweep_reclaim, breakout_retest")
     # Keys come from the environment (SIM_GEMINI_KEY, SIM_HF_TOKENS, SIM_OPENROUTER_KEY): command-line arguments
     # are visible to every user in the process list (plan finding L11). The flags remain for manual runs.
