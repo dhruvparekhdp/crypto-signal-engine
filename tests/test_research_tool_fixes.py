@@ -61,3 +61,5 @@ def test_r3_stepped_replay_defines_what_its_trade_loop_reads():
     i = src.index("cycle_report_path.write_text(json.dumps(cycle_results")
     assert "cycle_results = run_cycle_simulation(" in src[:i]
     assert "sorted_trades = sorted(" in src[:i]
+    assert "target_balance=self.cycle_target" in src
+    assert "margin_pct=self.cycle_margin_pct" in src

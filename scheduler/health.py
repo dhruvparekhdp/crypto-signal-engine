@@ -2804,12 +2804,12 @@ section h2{color:var(--accent-soft)}
         <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;flex-wrap:wrap;gap:8px">
           <div>
             <div style="font-size:15px;font-weight:700;color:#38bdf8;display:flex;align-items:center;gap:6px">
-              <span>🏆 25 USDT ➔ 100 USDT Compounding Challenge</span>
+              <span id="sim-cycle-challenge-title">🏆 Compounding Challenge</span>
             </div>
-            <div style="font-size:11px;color:#94a3b8">Simulated paper trading account cycles. Resets to $25 upon reaching $100 OR upon busting ($0).</div>
+            <div id="sim-cycle-challenge-sub" style="font-size:11px;color:#94a3b8">Simulated paper trading account cycles. Resets on target hit or bust (&lt; $1).</div>
           </div>
-          <div style="font-size:11px;color:#cbd5e1;background:#0f172a;padding:4px 10px;border-radius:6px;border:1px solid #334155">
-            Rule: <b>Margin 25% · 10x Lev · Full Fee Deduction</b>
+          <div id="sim-cycle-challenge-rule" style="font-size:11px;color:#cbd5e1;background:#0f172a;padding:4px 10px;border-radius:6px;border:1px solid #334155">
+            Rule: <b>—</b>
           </div>
         </div>
         <div class="grid" style="padding:0;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:8px">
@@ -2819,7 +2819,7 @@ section h2{color:var(--accent-soft)}
             <div id="sim-cycle-total-sub" style="font-size:10px;color:#64748b">completed</div>
           </div>
           <div style="background:#0f172a;padding:10px;border-radius:6px;border:1px solid #334155">
-            <div style="font-size:10px;color:#94a3b8">TARGET REACHED ($100)</div>
+            <div id="sim-cycle-target-label" style="font-size:10px;color:#94a3b8">TARGET REACHED</div>
             <div id="sim-cycle-won" style="font-size:18px;font-weight:700;color:#10b981">—</div>
             <div id="sim-cycle-won-sub" style="font-size:10px;color:#10b981">100% goals hit</div>
           </div>
@@ -2857,7 +2857,7 @@ section h2{color:var(--accent-soft)}
           </div>
           <div style="display:flex;gap:6px">
             <button onclick="filterCycleStatements('ALL')" class="sub-tab-btn active" id="cs-tab-all">All</button>
-            <button onclick="filterCycleStatements('TARGET_REACHED')" class="sub-tab-btn" id="cs-tab-won">Targets Hit (100$)</button>
+            <button onclick="filterCycleStatements('TARGET_REACHED')" class="sub-tab-btn" id="cs-tab-won">Targets Hit</button>
             <button onclick="filterCycleStatements('BUSTED')" class="sub-tab-btn" id="cs-tab-busted">Busted (0$)</button>
           </div>
         </div>
@@ -3030,7 +3030,7 @@ section h2{color:var(--accent-soft)}
       <div class="card" style="margin-bottom:16px;background:linear-gradient(135deg,#090d16,#0f172a);border:1px solid rgba(16,185,129,0.35);border-radius:10px;padding:14px">
         <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;margin-bottom:12px">
           <div style="font-size:13px;font-weight:700;color:#38bdf8;display:flex;align-items:center;gap:6px">
-            <span>💡 R-Multiple Live Math Breakdown (Using $100 Margin Base)</span>
+            <span>💡 R-Multiple Live Math Breakdown (<span id="sim-math-margin-label">per-trade margin</span>)</span>
           </div>
           <div style="font-size:10.5px;color:#94a3b8;background:#1e293b;padding:3px 8px;border-radius:4px;border:1px solid #334155">
             Auto-calculates dynamically based on your Target R, Stop R &amp; Leverage
@@ -4339,44 +4339,75 @@ function pollSimulatorStatus(){
   _simPollTimer = setTimeout(fetchSimulatorStatus, 500);
 }
 
+function _simCycleMarginUsdt(){
+  const cycleStart = parseFloat(document.getElementById('sim-input-cycle-start')?.value || '25');
+  const marginPct = parseFloat(document.getElementById('sim-input-cycle-margin')?.value || '25');
+  return Math.max(0.01, cycleStart * (marginPct / 100.0));
+}
+
+function updateCycleChallengeBannerFromForm(){
+  const start = parseFloat(document.getElementById('sim-input-cycle-start')?.value || '25');
+  const target = parseFloat(document.getElementById('sim-input-cycle-target')?.value || '100');
+  const marginPct = parseFloat(document.getElementById('sim-input-cycle-margin')?.value || '25');
+  const lev = parseFloat(document.getElementById('sim-input-cycle-lev')?.value || '10');
+  updateCycleChallengeBanner({ start_capital: start, target_capital: target, margin_pct: marginPct / 100.0, leverage: lev });
+}
+
+function updateCycleChallengeBanner(cc){
+  if(!cc) return;
+  const start = cc.start_capital != null ? cc.start_capital : 25;
+  const target = cc.target_capital != null ? cc.target_capital : 100;
+  const marginPct = cc.margin_pct != null
+    ? (cc.margin_pct <= 1 ? cc.margin_pct * 100 : cc.margin_pct)
+    : 25;
+  const lev = cc.leverage != null ? cc.leverage : 10;
+  setText('sim-cycle-challenge-title', `🏆 ${start} USDT ➔ ${target} USDT Compounding Challenge`);
+  setText('sim-cycle-challenge-sub',
+    `Simulated paper trading account cycles. Resets to $${start} upon reaching $${target} OR upon busting (< $1).`);
+  const ruleEl = document.getElementById('sim-cycle-challenge-rule');
+  if(ruleEl) ruleEl.innerHTML = `Rule: <b>Margin ${marginPct}% · ${lev}x Lev · Full Fee Deduction</b>`;
+  setText('sim-cycle-target-label', `TARGET REACHED ($${target})`);
+  const wonTab = document.getElementById('cs-tab-won');
+  if(wonTab) wonTab.textContent = `Targets Hit ($${target})`;
+}
+
 function updateRMathCard(){
   const tpR = parseFloat(document.getElementById('sim-input-tp')?.value || '3');
   const slR = parseFloat(document.getElementById('sim-input-sl')?.value || '1');
   const lev = parseFloat(document.getElementById('sim-input-cycle-lev')?.value || '10');
-  const baseMargin = 100.0; // Base $100 margin example requested by user
-  
-  // In the simulator engine, 1R benchmark volatility distance is 1.2% price move (min 1.2%, or 1.8x ATR)
+  const baseMargin = _simCycleMarginUsdt();
+  const marginLabel = `$${baseMargin.toFixed(2)} margin`;
+
+  // Illustrative 1R ≈ 1.2% price move (varies by ATR in the engine)
   const oneRPricePct = 1.2;
   const tpPricePct = tpR * oneRPricePct;
   const slPricePct = slR * oneRPricePct;
-  
-  // ROE = Price move % * Leverage
+
   const tpRoePct = tpPricePct * lev;
   const slRoePct = slPricePct * lev;
-  
-  // Dollar profit / loss on $100 margin
+
   const tpCash = (tpRoePct / 100.0) * baseMargin;
   const slCash = (slRoePct / 100.0) * baseMargin;
-  
+
   const rr = (slR > 0) ? (tpR / slR).toFixed(2) : '—';
   const posSize = baseMargin * lev;
 
-  // Update input header badges
-  setText('sim-tp-calc-badge', `+${tpRoePct.toFixed(1)}% ROE · +$${tpCash.toFixed(2)} on $100`);
-  setText('sim-sl-calc-badge', `-${slRoePct.toFixed(1)}% ROE · -$${slCash.toFixed(2)} on $100`);
+  setText('sim-math-margin-label', `Using ${marginLabel} (start × margin %)`);
 
-  // Update live breakdown card
+  setText('sim-tp-calc-badge', `+${tpRoePct.toFixed(1)}% ROE · +$${tpCash.toFixed(2)} on $${baseMargin.toFixed(2)}`);
+  setText('sim-sl-calc-badge', `-${slRoePct.toFixed(1)}% ROE · -$${slCash.toFixed(2)} on $${baseMargin.toFixed(2)}`);
+
   setText('sim-math-tp-roe', `+${tpRoePct.toFixed(1)}% ROE`);
-  setText('sim-math-tp-cash', `+$${tpCash.toFixed(2)} USDT profit on $100`);
+  setText('sim-math-tp-cash', `+$${tpCash.toFixed(2)} USDT profit on $${baseMargin.toFixed(2)}`);
   setText('sim-math-tp-price', `Requires +${tpPricePct.toFixed(2)}% price move (${tpR.toFixed(1)}R)`);
 
   setText('sim-math-sl-roe', `-${slRoePct.toFixed(1)}% ROE`);
-  setText('sim-math-sl-cash', `-$${slCash.toFixed(2)} USDT loss on $100`);
+  setText('sim-math-sl-cash', `-$${slCash.toFixed(2)} USDT loss on $${baseMargin.toFixed(2)}`);
   setText('sim-math-sl-price', `Hits at -${slPricePct.toFixed(2)}% price move (${slR.toFixed(1)}R)`);
 
   setText('sim-math-rr', `${rr} : 1`);
   setText('sim-math-rr-desc', `Gain $${rr} for every $1.00 risked`);
-  setText('sim-math-position', `Position size: $${posSize.toLocaleString()} at ${lev}x`);
+  setText('sim-math-position', `Position size: $${posSize.toLocaleString(undefined, {maximumFractionDigits: 0})} at ${lev}x`);
 }
 
 function updateSimulatorEstimates(){
@@ -4470,6 +4501,7 @@ async function loadSimulatorSettings() {
   }
   updateSimulatorEstimates();
   updateRMathCard();
+  updateCycleChallengeBannerFromForm();
   attachSimulatorInputListeners();
 }
 
@@ -4503,8 +4535,12 @@ function attachSimulatorInputListeners() {
   ids.forEach(id => {
     const el = document.getElementById(id);
     if (el) {
-      el.addEventListener('input', () => { saveSimulatorSettings(); updateSimulatorEstimates(); updateRMathCard(); });
-      el.addEventListener('change', () => { saveSimulatorSettings(); updateSimulatorEstimates(); updateRMathCard(); });
+      el.addEventListener('input', () => {
+        saveSimulatorSettings(); updateSimulatorEstimates(); updateRMathCard(); updateCycleChallengeBannerFromForm();
+      });
+      el.addEventListener('change', () => {
+        saveSimulatorSettings(); updateSimulatorEstimates(); updateRMathCard(); updateCycleChallengeBannerFromForm();
+      });
     }
   });
   _simListenersAttached = true;
@@ -4706,7 +4742,8 @@ function renderSelectedCycleCard(cc, cycleId){
   const isWon = c.status === 'TARGET_REACHED';
   const isBust = c.status === 'BUSTED';
   const statusColor = isWon ? '#10b981' : (isBust ? '#ef4444' : '#38bdf8');
-  const statusBadge = isWon ? '🎯 TARGET HIT ($100)' : (isBust ? '🛑 BUSTED ($0)' : '⏳ IN PROGRESS');
+  const cycleTarget = cc.target_capital != null ? cc.target_capital : 100;
+  const statusBadge = isWon ? `🎯 TARGET HIT ($${cycleTarget})` : (isBust ? '🛑 BUSTED ($0)' : '⏳ IN PROGRESS');
 
   container.innerHTML = `
     <div style="background:#0f172a;border:1px solid #334155;border-radius:8px;padding:14px;margin-bottom:12px">
@@ -4932,6 +4969,7 @@ function renderSimulator(data){
   // Render Cycle Challenge Scorecard & Statements
   if(data.cycle_challenge && data.cycle_challenge.total_cycles != null){
     const cc = data.cycle_challenge;
+    updateCycleChallengeBanner(cc);
     setText('sim-cycle-total', cc.total_cycles);
     setText('sim-cycle-won', cc.targets_hit);
     setText('sim-cycle-won-sub', (cc.targets_hit || 0) + ' cycles reached $' + (cc.target_capital || 100));

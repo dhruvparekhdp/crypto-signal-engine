@@ -261,7 +261,13 @@ class SteppedMarketReplayEngine:
                 # R3: these two were never defined, so the first closed trade raised NameError
                 from analysis.simulator.cycle_challenge import run_cycle_simulation
                 sorted_trades = sorted(self.all_simulated_trades, key=lambda t: str(t.entry_time))
-                cycle_results = run_cycle_simulation(sorted_trades)
+                cycle_results = run_cycle_simulation(
+                    sorted_trades,
+                    start_balance=self.cycle_start,
+                    target_balance=self.cycle_target,
+                    margin_pct=self.cycle_margin_pct,
+                    leverage=self.cycle_leverage,
+                )
 
                 # Save full cycle statements to disk for detailed audits
                 cycle_report_path = Path("data/simulator/reports/cycle_statements.json")
