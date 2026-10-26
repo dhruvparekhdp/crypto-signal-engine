@@ -18,6 +18,12 @@ STOP = 0.05
 TARGETS = (0.0101, 0.0276, 0.0460, 0.1068)
 MAX_HOLD = timedelta(hours=48)
 COST = 0.0015            # Delta taker 0.05% + 18% GST each side, plus slippage: round trip, share of price
+# variations on the same signals (owner, 26 Oct 2026: "keep the bracket and try 2-3 new variation"), fixed before any
+# result: "tight" halves the stop to 2.5%; "trail" keeps the 5% stop but, after the first target, trails the stop
+# 1.5% behind the best price (never below entry) instead of parking it at entry. The third variation is a filter, not
+# a trade: every trade carries BTC's 24 h direction (with / against / flat) and the panel shows "base, with BTC only"
+VARIANTS = {"base": (STOP, None), "tight": (0.025, None), "trail": (STOP, 0.015)}
+BTC_FLAT_PCT = 0.5
 LEVERAGE_SHOWN = 5       # ROI is shown at 5x, the way the channel shows it; nothing is sized
 
 
@@ -36,12 +42,24 @@ def role_of(candidate_role) -> str:
     return ROLE_OF.get(str(candidate_role or "primary"), "primary")
 
 
+def btc_label(side: int, btc_24h_pct) -> str:
+    """BTC's last-24h move relative to the trade: with / against / flat (inside +-0.5%) / unknown."""
+    if btc_24h_pct is None:
+        return "unknown"
+    x = side * float(btc_24h_pct)
+    return "with" if x > BTC_FLAT_PCT else "against" if x < -BTC_FLAT_PCT else "flat"
+
+
 def open_trade(sig_id, symbol: str, side: int, signal_type: str, role: str, source: str, signal_ts: datetime,
-               signal_price: float, confidence: float = 0.0, labels: dict | None = None, pair=None) -> dict:
+               signal_price: float, confidence: float = 0.0, labels: dict | None = None, pair=None,
+               variant: str = "base") -> dict:
     """A virtual trade for one signal; it enters at the open of the first 1m bar after the signal. `labels` (setup,
     news, sentiment, ...) are kept on the trade so results can be split by them afterwards; `pair` is a mirror's
     pick (its signal id), so each pick can be compared with its own mirror."""
-    return {"id": sig_id, "symbol": symbol.upper(), "side": side, "signal_type": signal_type, "role": role,
+    stop_frac, trail = VARIANTS[variant]
+    return {"id": sig_id if variant == "base" else f"{sig_id}~{variant}", "sig_id": sig_id, "variant": variant,
+            "stop_frac": stop_frac, "trail_frac": trail,
+            "symbol": symbol.upper(), "side": side, "signal_type": signal_type, "role": role,
             "source": source, "signal_ts": _naive(signal_ts).isoformat(), "signal_price": signal_price,
             "confidence": confidence, "labels": labels or {}, "pair": pair, "entry": None, "entry_ts": None,
             "stop": None, "legs": 0, "pnl": 0.0, "status": "waiting", "last_ts": _naive(signal_ts).isoformat(),
@@ -75,14 +93,17 @@ def advance(tr: dict, bars) -> dict:
     s = tr["side"]
     for ts, o, h, lo, c in seq:
         if tr["entry"] is None:
-            tr.update(entry=o, entry_ts=ts.isoformat(), stop=o * (1 - s * STOP), status="open")
+            tr.update(entry=o, entry_ts=ts.isoformat(), stop=o * (1 - s * tr.get("stop_frac", STOP)), status="open",
+                      best_px=o)
         e = tr["entry"]
         tr["best"] = max(tr["best"], ((h if s > 0 else lo) / e - 1) * 100 * s)
         tr["worst"] = min(tr["worst"], ((lo if s > 0 else h) / e - 1) * 100 * s)
         n = len(TARGETS)
         if (lo <= tr["stop"]) if s > 0 else (h >= tr["stop"]):
             tr["pnl"] += (n - tr["legs"]) / n * s * (tr["stop"] / e - 1)
-            tr.update(status="closed", exit="stop" if tr["legs"] == 0 else "stop at entry", closed_ts=ts.isoformat())
+            moved = s * (tr["stop"] - e) > 1e-12
+            tr.update(status="closed", exit="stop" if tr["legs"] == 0 else "trailing stop" if moved else "stop at entry",
+                      closed_ts=ts.isoformat())
         else:
             while tr["legs"] < n and ((h >= e * (1 + TARGETS[tr["legs"]])) if s > 0 else (lo <= e * (1 - TARGETS[tr["legs"]]))):
                 tr["pnl"] += TARGETS[tr["legs"]] / n
@@ -90,6 +111,11 @@ def advance(tr: dict, bars) -> dict:
                 if tr["legs"] == 1:
                     tr["stop"] = e                       # "after the first take profit, move the stop loss to entry"
                     tr["tp1_ts"] = ts.isoformat()
+            if tr.get("trail_frac") and tr["legs"] >= 1:     # "trail": after the first target, follow the best price
+                tr["best_px"] = max(tr.get("best_px", e), h) if s > 0 else min(tr.get("best_px", e), lo)
+                cand = tr["best_px"] * (1 - s * tr["trail_frac"])
+                cand = max(cand, e) if s > 0 else min(cand, e)
+                tr["stop"] = max(tr["stop"], cand) if s > 0 else min(tr["stop"], cand)
             if tr["legs"] == n:
                 tr.update(status="closed", exit="all targets", closed_ts=ts.isoformat())
             elif ts + timedelta(minutes=1) - datetime.fromisoformat(tr["entry_ts"]) >= MAX_HOLD:
@@ -114,7 +140,13 @@ def summary(closed: list[dict]) -> dict:
                 "profit_pct": round(100 * sum(x > 0 for x in net) / len(rows), 1),
                 "avg_net_pct": round(sum(net) / len(net), 3), "avg_roi_5x": round(5 * sum(net) / len(net), 2),
                 "full_stops": sum(1 for r in rows if r.get("exit") == "stop")}
+    allv = closed
+    closed = [r for r in allv if r.get("variant", "base") == "base"]
     groups = {"all": closed}
+    for r in allv:
+        groups.setdefault(f"variant:{r.get('variant', 'base')}|{r['source']}|{r['role']}", []).append(r)
+    for r in closed:
+        groups.setdefault(f"btc:{r['source']}|{r['role']}|{(r.get('labels') or {}).get('btc', 'unknown')}", []).append(r)
     for key in ("source", "role", "symbol"):
         for r in closed:
             groups.setdefault(f"{key}:{r[key]}", []).append(r)
@@ -130,17 +162,20 @@ def summary(closed: list[dict]) -> dict:
 def pairs(trades: list[dict]) -> dict:
     """Each pick next to its own mirror (same coin, same moment, other side): the one comparison a market-wide move
     cannot fake. Grouped by the pick's source and role; a pair counts once both sides have a result."""
-    by_id = {str(t["id"]): t for t in trades}
+    by_id = {(t.get("variant", "base"), str(t.get("sig_id", t["id"]))): t for t in trades}
     groups: dict[str, list] = {}
     for m in trades:
         if m.get("role") != "mirror":
             continue
-        pid = (str(m["id"]).rsplit(":", 1)[0] + ":primary") if m.get("source") == "levels" else \
+        v = m.get("variant", "base")
+        sid = str(m.get("sig_id", m["id"]))
+        pid = (sid.rsplit(":", 1)[0] + ":primary") if m.get("source") == "levels" else \
             (str(m["pair"]) if m.get("pair") else None)
-        p = by_id.get(pid) if pid else None
+        p = by_id.get((v, pid)) if pid else None
         if p is None or "net_pct" not in p or "net_pct" not in m:
             continue
-        groups.setdefault(f"{p['source']}|{p['role']}", []).append((p["net_pct"], m["net_pct"]))
+        groups.setdefault(f"{p['source']}|{p['role']}" if v == "base" else f"{v}|{p['source']}|{p['role']}",
+                          []).append((p["net_pct"], m["net_pct"]))
     return {k: {"n": len(v), "pick_avg": round(sum(a for a, _ in v) / len(v), 3),
                 "mirror_avg": round(sum(b for _, b in v) / len(v), 3), "pick_better": sum(a > b for a, b in v)}
             for k, v in groups.items()}

@@ -1800,6 +1800,8 @@ class AppRunner:
                 new = await repo.crypto_signals_after(book["last_id"])
             if book.get("roles_v", 1) < 2:
                 await self._bracket_fix_roles(book, repo)
+        btc_state = await self.crypto_store.get("btcusdt") if hasattr(self.crypto_store, "get") else None
+        btc_24h = getattr(btc_state, "price_change_24h_pct", None) if btc_state is not None else None
         for r in new:
             book["last_id"] = max(book["last_id"], r.id)
             if r.suppressed_by or not r.current_price or r.current_price <= 0:
@@ -1807,11 +1809,14 @@ class AppRunner:
             if (getattr(r, "review_round", 0) or 0) > 0:      # a re-review of a candidate already in the book
                 continue
             role = bb.role_of(getattr(r, "candidate_role", ""))
-            book["open"].append(bb.open_trade(
-                r.id, r.symbol, 1 if r.direction == "long" else -1, r.signal_type, role,
-                "swing" if getattr(r, "trade_mode", "") == "swing" else "intraday",
-                r.timestamp, r.current_price, r.confidence or 0.0,
-                pair=(getattr(r, "mirror_of_log_id", 0) or None) if role == "mirror" else None))
+            side = 1 if r.direction == "long" else -1
+            for v in bb.VARIANTS:                          # the same signal under each bracket variation
+                book["open"].append(bb.open_trade(
+                    r.id, r.symbol, side, r.signal_type, role,
+                    "swing" if getattr(r, "trade_mode", "") == "swing" else "intraday",
+                    r.timestamp, r.current_price, r.confidence or 0.0,
+                    labels={"btc": bb.btc_label(side, btc_24h)},
+                    pair=(getattr(r, "mirror_of_log_id", 0) or None) if role == "mirror" else None, variant=v))
         states = {st.symbol: st for st in await self.crypto_store.get_all()}
         hour = now.replace(minute=0, second=0, microsecond=0).isoformat()
         if settings.bracket_levels_enabled and book.get("level_hour") != hour and now.minute >= 2:
@@ -2134,10 +2139,12 @@ class AppRunner:
                     labels = {"setup": setup["setup"], "level": "swept" if setup["swept"] else "touched",
                               "touches": str(min(setup["touches"], 5)) + ("+" if setup["touches"] >= 5 else ""),
                               **ls.price_labels(i, b.c, side, ema200, atr),
-                              **self._bracket_side_labels(side, states.get(sym), ctx, fr)}
-                    book["open"].append(bb.open_trade(f"lv:{sym}:{int(b.t[i])}:{role}", sym, side,
-                                                      "levels_" + setup["setup"].replace(" ", "_"), role, "levels",
-                                                      now, float(b.c[i]), labels=labels))
+                              **self._bracket_side_labels(side, states.get(sym), ctx, fr),
+                              "btc": bb.btc_label(side, ctx.get("btc_24h"))}
+                    for v in bb.VARIANTS:
+                        book["open"].append(bb.open_trade(f"lv:{sym}:{int(b.t[i])}:{role}", sym, side,
+                                                          "levels_" + setup["setup"].replace(" ", "_"), role, "levels",
+                                                          now, float(b.c[i]), labels=labels, variant=v))
                     added += 1
         log.info("bracket_level_scan", added=added, coins=len(states))
         return added

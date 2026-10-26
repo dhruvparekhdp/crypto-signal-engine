@@ -89,8 +89,10 @@ async def test_the_job_opens_a_trade_per_new_signal_and_closes_it_on_candles(tmp
                      OHLCVCandle(100.1, 101.2, 95.0, 96.0, 1, now + timedelta(minutes=2))]   # touches both: stop
     r.crypto_store._states["ethusdt"] = st
     out = await r._bracket_paper_job(now + timedelta(minutes=5))
-    assert out == {"new": 1, "open": 0, "closed": 1}
+    assert out == {"new": 1, "open": 0, "closed": 3}                  # base, tight and trail on the same signal
     closed = [json.loads(ln) for ln in open(tmp_path / "closed.jsonl")]
+    assert sorted(c["variant"] for c in closed) == ["base", "tight", "trail"]
+    closed = [c for c in closed if c["variant"] == "base"]
     assert closed[0]["exit"] == "stop" and closed[0]["role"] == "primary" and closed[0]["source"] == "intraday"
 
 
@@ -204,7 +206,8 @@ async def test_the_hourly_scan_opens_a_labelled_pick_and_mirror_once_per_setup(t
     r.crypto_store._states["ethusdt"] = st
     await r._bracket_paper_job(datetime(2026, 10, 21, 12, 5))
     book = json.loads((tmp_path / "book.json").read_text())
-    lv = [t for t in book["open"] if t["source"] == "levels"]
+    lv = [t for t in book["open"] if t["source"] == "levels" and t["variant"] == "base"]
+    assert sum(t["source"] == "levels" for t in book["open"]) == 6           # 3 variations x pick + mirror
     assert [(t["role"], t["side"]) for t in lv] == [("primary", 1), ("mirror", -1)] and calls == [("ETHUSDT", "1h")]
     pick, mirror = lv
     assert pick["labels"]["setup"] == "support reclaim" and pick["labels"]["level"] == "swept"
@@ -223,9 +226,9 @@ async def test_the_hourly_scan_opens_a_labelled_pick_and_mirror_once_per_setup(t
     await r._bracket_paper_job(datetime(2026, 10, 21, 12, 30))          # same hour: no scan
     await r._bracket_paper_job(datetime(2026, 10, 21, 13, 5))           # same last bar: no second trade
     book = json.loads((tmp_path / "book.json").read_text())
-    sol = [t for t in book["open"] if t["symbol"] == "SOLUSDT"]
+    sol = [t for t in book["open"] if t["symbol"] == "SOLUSDT" and t["variant"] == "base"]
     assert [t["labels"]["funding"] for t in sol] == ["other side pays", "our side pays"]   # shorts pay longs
-    assert sum(t["source"] == "levels" and t["symbol"] == "ETHUSDT" for t in book["open"]) == 2
+    assert sum(t["source"] == "levels" and t["symbol"] == "ETHUSDT" for t in book["open"]) == 6
 
 
 async def test_the_api_returns_wallet_views_per_source_and_trade_labels(tmp_path):
@@ -268,8 +271,9 @@ def test_each_pick_is_compared_with_its_own_mirror_and_open_trades_can_be_marked
     assert mark(open_trade(1, "x", 1, "c", "primary", "intraday", T0, 1.0), 2.0) is None    # not entered yet
     m = [mark(t, 98.0) for t in (pick, mirror, other)]
     assert m[0]["net_pct"] == pytest.approx(2 - 0.15) and m[1]["net_pct"] == pytest.approx(-2 - 0.15)
-    sr_p = dict(m[0], id="lv:ETHUSDT:1:primary", source="levels", role="primary", pair=None)
-    sr_m = dict(m[1], id="lv:ETHUSDT:1:mirror", source="levels", role="mirror", pair=None)
+    sr_p = dict(m[0], id="lv:ETHUSDT:1:primary", sig_id="lv:ETHUSDT:1:primary", source="levels", role="primary",
+                pair=None)
+    sr_m = dict(m[1], id="lv:ETHUSDT:1:mirror", sig_id="lv:ETHUSDT:1:mirror", source="levels", role="mirror", pair=None)
     out = pairs(m + [sr_p, sr_m])
     assert out["intraday|primary"] == {"n": 1, "pick_avg": 1.85, "mirror_avg": -2.15, "pick_better": 1}
     assert out["levels|primary"]["n"] == 1 and len(out) == 2
@@ -327,7 +331,7 @@ async def test_the_job_labels_roles_from_the_log_pairs_mirrors_and_relabels_old_
     (tmp_path / "closed.jsonl").write_text(json.dumps(closed) + "\n")
     await r._bracket_paper_job(now + timedelta(minutes=1))
     book = json.loads((tmp_path / "book.json").read_text())
-    got = {t["id"]: (t["role"], t["pair"]) for t in book["open"]}
+    got = {t["id"]: (t["role"], t["pair"]) for t in book["open"] if t.get("variant", "base") == "base"}
     assert got == {2: ("mirror", 1), 5: ("counter_trend", None), 6: ("mirror", 5)} and book["roles_v"] == 2
     fixed = [json.loads(ln) for ln in open(tmp_path / "closed.jsonl")]
     assert [(t["id"], t["role"]) for t in fixed] == [(1, "counter_trend")]
@@ -359,3 +363,38 @@ async def test_the_api_marks_open_trades_at_the_current_price_and_pairs_them(tmp
         body = await (await client.get("/api/bracket")).json()
     assert body["summary"]["all"] is None and body["marked"]["side:short"]["avg_net_pct"] == pytest.approx(2.85)
     assert body["pairs"]["intraday|primary"]["pick_better"] == 1 and body["pairs_closed"] == {}
+
+
+
+# ---------------------------------------------------------------- variations on the same signals (26 Oct 2026)
+
+def test_the_tight_variation_stops_at_two_and_a_half_percent():
+    t = advance(open_trade(1, "ethusdt", 1, "c", "primary", "intraday", T0, 100.0, variant="tight"),
+                bars([(100, 100.2, 97.4, 97.6)]))
+    assert t["exit"] == "stop" and t["net_pct"] == pytest.approx(-2.5 - 0.15)
+    base = advance(open_trade(1, "ethusdt", 1, "c", "primary", "intraday", T0, 100.0), bars([(100, 100.2, 97.4, 97.6)]))
+    assert base["status"] == "open" and base["id"] == 1 and t["id"] == "1~tight"
+
+
+def test_the_trail_variation_follows_the_best_price_after_the_first_target():
+    path = [(100, 100.2, 99.9, 100.1), (100.1, 101.2, 100.0, 101.1), (101.1, 104.0, 101.0, 103.9),
+            (103.9, 104.0, 102.3, 102.4)]
+    trail = advance(open_trade(1, "ethusdt", 1, "c", "primary", "intraday", T0, 100.0, variant="trail"), bars(path))
+    # 1st target at 101.01, 2nd at 102.76; best 104 -> trailing stop 102.44 (1.5% behind); the next bar hits it
+    assert trail["exit"] == "trailing stop" and trail["legs"] == 2
+    assert trail["net_pct"] == pytest.approx(((0.0101 + 0.0276) / 4 + 0.5 * (104 * 0.985 / 100 - 1)) * 100 - 0.15, abs=1e-3)
+    base = advance(open_trade(1, "ethusdt", 1, "c", "primary", "intraday", T0, 100.0), bars(path))
+    assert base["status"] == "open"                                           # base: stop still at entry (100)
+
+
+def test_old_groups_stay_base_only_and_variations_and_btc_filter_get_their_own():
+    from analysis.bracket_book import btc_label
+    assert [btc_label(1, 2.0), btc_label(-1, 2.0), btc_label(1, 0.2), btc_label(1, None)] == \
+        ["with", "against", "flat", "unknown"]
+    trades = []
+    for v in ("base", "tight", "trail"):
+        trades.append(advance(open_trade(1, "ethusdt", 1, "c", "primary", "intraday", T0, 100.0, variant=v,
+                                         labels={"btc": "with"}), bars([(100, 100.2, 94.0, 94.5)])))
+    s = summary(trades)
+    assert s["all"]["n"] == 1 and s["variant:tight|intraday|primary"]["n"] == 1
+    assert s["btc:intraday|primary|with"]["n"] == 1

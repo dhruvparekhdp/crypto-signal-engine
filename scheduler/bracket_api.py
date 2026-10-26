@@ -34,7 +34,8 @@ def register(app: web.Application, runner) -> None:
         from datetime import UTC, datetime
         wallets = {}
         for key, src in (("levels", "levels"), ("intraday", "intraday"), ("swing", "swing")):
-            rows = [r for r in closed + book.get("open", []) if r.get("source") == src and r.get("role") == "primary"]
+            rows = [r for r in closed + book.get("open", []) if r.get("source") == src and r.get("role") == "primary"
+                    and r.get("variant", "base") == "base"]
             wallets[key] = wallet_view(rows, settings.bracket_wallet_inr, settings.bracket_margin_inr,
                                        settings.bracket_leverage, datetime.now(UTC))
         # open trades as if closed at the current price: most trades run up to 48 h, and the ones that close first
@@ -54,6 +55,9 @@ def register(app: web.Application, runner) -> None:
             "summary": summary(closed),
             "recent": [{k: r.get(k) for k in ("symbol", "side", "role", "source", "signal_type", "exit", "legs",
                                               "net_pct", "roi_5x_pct", "closed_ts", "best", "worst", "labels")}
-                       for r in closed[-40:]][::-1]})
+                       for r in [c for c in closed if c.get("variant", "base") == "base"][-40:]][::-1],
+            "variants": {"base": "5% stop, stop to entry after the 1st target (the channel's rule)",
+                         "tight": "2.5% stop", "trail": "after the 1st target, stop trails 1.5% behind the best price",
+                         "btc_with": "base, only trades in the direction of BTC's last 24 h"}})
 
     app.router.add_get("/api/bracket", bracket)

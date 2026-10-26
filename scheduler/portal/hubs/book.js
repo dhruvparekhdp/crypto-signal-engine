@@ -323,7 +323,7 @@
       });
       var lrows = Object.keys(lab).sort().map(function (id) { return lab[id]; });
       var nice = { setup: "setup", level: "level", touches: "touches", move_24h: "coin 24 h move", trend_1h_ema200: "1h trend (EMA200)", atr_1h: "1h volatility",
-        coin_news: "coin news", market_news_6h: "market news 6 h", ai_briefing: "AI briefing", btc_24h: "BTC 24 h", funding: "funding", fear_greed: "Fear & Greed", event_window: "event window" };
+        coin_news: "coin news", market_news_6h: "market news 6 h", btc: "BTC 24 h vs the trade", ai_briefing: "AI briefing", btc_24h: "BTC 24 h", funding: "funding", fear_greed: "Fear & Greed", event_window: "event window" };
       function av(x) { return x ? C.signed(x.avg_net_pct, function (y) { return (y > 0 ? "+" : "") + y.toFixed(2) + "%"; }) + ' <span class="dim tiny">n ' + x.n + " · 1st " + x.tp1_pct + "%</span>" : '<span class="dim">—</span>'; }
       var ltable = lrows.length ? '<h4 class="mono small" style="margin:14px 0 6px">S/R SETUPS BY LABEL · PICKS VS MIRRORS · INCL. OPEN TRADES AT THE CURRENT PRICE</h4>' + C.table([
         { label: "LABEL", w: "minmax(0,1fr)", cell: function (r) { return '<span class="dim">' + e(nice[r.k] || r.k) + ":</span> <b>" + e(r.v) + "</b>"; } },
@@ -331,7 +331,22 @@
         { label: "MIRRORS · AVG AFTER FEES", w: "190px", cell: function (r) { return av(r.mirror); } },
         { label: "PICK − MIRROR", w: "110px", cell: function (r) { return r.primary && r.mirror ? C.signed(r.primary.avg_net_pct - r.mirror.avg_net_pct, function (y) { return (y > 0 ? "+" : "") + y.toFixed(2) + "%"; }) : "—"; } }
       ], lrows, { minWidth: 700 }) + '<p class="mono tiny dim" style="margin:6px 0 0">With / against = the label points the same way as the trade, or the other way. Small groups move a lot: wait for 30+ trades before reading one.</p>' : "";
-      el.innerHTML = intro + tiles + wtiles + '<h4 class="mono small" style="margin:14px 0 6px">BY GROUP · CLOSED TRADES, AND INCL. OPEN ONES AT THE CURRENT PRICE</h4>' + table + ptable + ltable +
+      // variations on the same signals (owner, 26 Oct 2026: "keep the bracket and try 2-3 new variation")
+      var VG = [["Intraday picks", "intraday|primary"], ["Intraday mirrors (control)", "intraday|mirror"], ["Counter-trend shorts", "intraday|counter_trend"],
+        ["S/R picks", "levels|primary"], ["S/R mirrors (control)", "levels|mirror"], ["Swing signals", "swing|primary"]];
+      function vc(key) { var a = S[key], b = M[key]; if (!a && !b) return '<span class="dim">—</span>';
+        return (a ? C.signed(a.avg_net_pct, function (y) { return (y > 0 ? "+" : "") + y.toFixed(2) + "%"; }) + ' <span class="dim tiny">n ' + a.n + "</span>" : '<span class="dim">no closed</span>') +
+          (b ? '<br><span class="dim tiny">incl. open ' + (b.avg_net_pct > 0 ? "+" : "") + b.avg_net_pct.toFixed(2) + "% · n " + b.n + "</span>" : ""); }
+      var vrows = VG.filter(function (g) { return S["variant:base|" + g[1]] || M["variant:base|" + g[1]]; });
+      var vtable = vrows.length ? '<h4 class="mono small" style="margin:14px 0 6px">VARIATIONS ON THE SAME SIGNALS · AVG AFTER FEES</h4>' + C.table([
+        { label: "SIGNALS", w: "minmax(0,1fr)", cell: function (g) { return "<b>" + e(g[0]) + "</b>"; } },
+        { label: "BASE (5% STOP)", w: "140px", cell: function (g) { return vc("variant:base|" + g[1]); } },
+        { label: "TIGHT (2.5% STOP)", w: "140px", cell: function (g) { return vc("variant:tight|" + g[1]); } },
+        { label: "TRAIL AFTER 1ST TARGET", w: "150px", cell: function (g) { return vc("variant:trail|" + g[1]); } },
+        { label: "BASE, WITH BTC ONLY", w: "150px", cell: function (g) { return vc("btc:" + g[1] + "|with"); } },
+        { label: "BASE, AGAINST BTC", w: "140px", cell: function (g) { return vc("btc:" + g[1] + "|against"); } }
+      ], vrows, { minWidth: 900 }) + '<p class="mono tiny dim" style="margin:6px 0 0">Started 26 Oct: trades from before then are base only. A variation helps only if it beats base for the picks AND the gap to their mirrors grows.</p>' : "";
+      el.innerHTML = intro + tiles + wtiles + '<h4 class="mono small" style="margin:14px 0 6px">BY GROUP · CLOSED TRADES, AND INCL. OPEN ONES AT THE CURRENT PRICE</h4>' + table + vtable + ptable + ltable +
         '<h4 class="mono small" style="margin:14px 0 6px">LATEST CLOSED</h4>' + recent;
     }
   });
