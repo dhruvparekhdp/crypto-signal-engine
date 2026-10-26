@@ -36,6 +36,7 @@ from analysis.crypto_state import CryptoState, OHLCVCandle
 from analysis.simulator.ai_orchestrator import DualEngineAIOrchestrator
 from analysis.simulator.cycle_challenge import run_cycle_simulation
 from analysis.simulator.global_ai_governor import governor
+from analysis.simulator.exits import bracket, manage_bar
 from analysis.simulator.replay_engine import MarketReplayEngine, SimulatedTrade
 from analysis.simulator.strategy_dispatcher import SimulatorStrategyDispatcher
 
@@ -55,10 +56,11 @@ class SteppedMarketReplayEngine:
         lake_root: str = "data/lake",
         market_step_hours: float = 1.0,
         step_budget_seconds: float = 60.0,
-        tp_r: float = 2.0,
-        sl_r: float = 1.2,
+        tp_r: float = 3.0,
+        sl_r: float = 1.0,
+        trail_sl: bool = True,
         anti_flip_cooldown_minutes: int = 90,
-        stagnation_exit_minutes: int = 60,
+        stagnation_exit_minutes: int = 10080,
         cycle_start: float = 25.0,
         cycle_target: float = 100.0,
         cycle_margin_pct: float = 0.25,
@@ -75,6 +77,7 @@ class SteppedMarketReplayEngine:
         self.step_budget_seconds = max(1.0, step_budget_seconds)
         self.tp_r = tp_r
         self.sl_r = sl_r
+        self.trail_sl = bool(trail_sl)
         self.anti_flip_cooldown_minutes = anti_flip_cooldown_minutes
         self.stagnation_exit_minutes = stagnation_exit_minutes
         self.cycle_start = cycle_start
@@ -93,6 +96,7 @@ class SteppedMarketReplayEngine:
             lake_root=str(self.lake_root),
             tp_r=self.tp_r,
             sl_r=self.sl_r,
+            trail_sl=self.trail_sl,
             anti_flip_cooldown_minutes=self.anti_flip_cooldown_minutes,
             stagnation_exit_minutes=self.stagnation_exit_minutes,
             strategy=self.strategy,
@@ -351,63 +355,11 @@ class SteppedMarketReplayEngine:
             c_low = float(lows[i])
             c_atr = max(c_high - c_low, c_close * 0.004)
 
-            # In-position management
+            # In-position management — same function the batch replay uses.
             if active_trade:
-                is_long = active_trade.direction == "LONG"
-                entry = active_trade.entry_price
-                risk_dist = abs(entry - active_trade.sl_price)
-                target_dist = abs(active_trade.tp_price - entry)
-
-                # Excursion tracking
-                if is_long:
-                    cur_gain = (c_high - entry) / entry * 100.0
-                    cur_dd = (c_low - entry) / entry * 100.0
-                    if cur_gain > active_trade.peak_gain_pct:
-                        active_trade.peak_gain_pct = round(cur_gain, 2)
-                        active_trade.peak_r = round(cur_gain / max(risk_dist / entry * 100.0, 0.001), 2)
-                    if cur_dd < active_trade.max_drawdown_pct:
-                        active_trade.max_drawdown_pct = round(cur_dd, 2)
-
-                    # Breakeven ratchet (+0.8R)
-                    if cur_gain >= 0.8 and not active_trade.breakeven_ratchet_hit:
-                        active_trade.breakeven_ratchet_hit = True
-                        active_trade.sl_price = entry
-
-                    # Check Exits
-                    hit_tp = c_high >= active_trade.tp_price
-                    hit_sl = c_low <= active_trade.sl_price
-                else:
-                    cur_gain = (entry - c_low) / entry * 100.0
-                    cur_dd = (entry - c_high) / entry * 100.0
-                    if cur_gain > active_trade.peak_gain_pct:
-                        active_trade.peak_gain_pct = round(cur_gain, 2)
-                        active_trade.peak_r = round(cur_gain / max(risk_dist / entry * 100.0, 0.001), 2)
-                    if cur_dd < active_trade.max_drawdown_pct:
-                        active_trade.max_drawdown_pct = round(cur_dd, 2)
-
-                    if cur_gain >= 0.8 and not active_trade.breakeven_ratchet_hit:
-                        active_trade.breakeven_ratchet_hit = True
-                        active_trade.sl_price = entry
-
-                    hit_tp = c_low <= active_trade.tp_price
-                    hit_sl = c_high >= active_trade.sl_price
-
-                if hit_tp and not hit_sl:            # R4: both touched in one bar -> the stop counts
+                outcome = manage_bar(active_trade, c_high, c_low, c_close, trail=self.trail_sl)
+                if outcome:
                     active_trade.exit_time = c_time.isoformat()
-                    active_trade.exit_price = active_trade.tp_price
-                    active_trade.exit_reason = f"TAKE_PROFIT_{self.tp_r}R"
-                    active_trade.pnl_r = self.tp_r
-                    active_trade.pnl_pct = round(abs(active_trade.exit_price - entry) / entry * 100.0, 2)
-                    active_trade.target_pct_reached = 100.0
-                    closed_trades.append(active_trade)
-                    active_trade = None
-                    last_trade_time = c_time
-                elif hit_sl:
-                    active_trade.exit_time = c_time.isoformat()
-                    active_trade.exit_price = active_trade.sl_price
-                    active_trade.exit_reason = f"STOP_LOSS_{self.sl_r}R"
-                    active_trade.pnl_r = -self.sl_r if not active_trade.breakeven_ratchet_hit else 0.0
-                    active_trade.pnl_pct = round(-abs(entry - active_trade.exit_price) / entry * 100.0, 2)
                     closed_trades.append(active_trade)
                     active_trade = None
                     last_trade_time = c_time
@@ -474,14 +426,11 @@ class SteppedMarketReplayEngine:
                     if mins_since < self.anti_flip_cooldown_minutes and target_dir != last_trade_dir:
                         continue
 
-                # Open Simulated Position with Volatility Structure Stop
+                # Open. 1R is the live book's 3×ATR (never under 0.3% of price).
                 self.base_engine.trade_counter += 1
                 is_long = target_dir == 1
                 pos_entry = c_close
-                # Dynamic structure stop: 1.8x ATR floor, min 1.2% distance (immune to 5m noise)
-                risk_dist = max(1.8 * c_atr, pos_entry * 0.012)
-                pos_tp = pos_entry + self.tp_r * risk_dist if is_long else pos_entry - self.tp_r * risk_dist
-                pos_sl = pos_entry - self.sl_r * risk_dist if is_long else pos_entry + self.sl_r * risk_dist
+                pos_sl, pos_tp, _one_r = bracket(pos_entry, c_atr, 1 if is_long else -1, self.tp_r, self.sl_r)
 
                 active_trade = SimulatedTrade(
                     trade_id=self.base_engine.trade_counter,
@@ -491,6 +440,7 @@ class SteppedMarketReplayEngine:
                     entry_price=round(pos_entry, 4),
                     tp_price=round(pos_tp, 4),
                     sl_price=round(pos_sl, 4),
+                    init_sl_price=round(pos_sl, 4),
                     indicators_at_entry={
                         "strategy": matched_sig_type,
                         "confidence": round(matched_sig_conf, 3),

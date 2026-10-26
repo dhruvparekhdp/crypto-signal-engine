@@ -40,10 +40,15 @@ async def main():
     parser = argparse.ArgumentParser(description="3-Year Live Market Simulator with Hugging Face AI")
     parser.add_argument("--symbols", type=str, default="BTCUSDT,ETHUSDT,SOLUSDT,XRPUSDT,AVAXUSDT,LINKUSDT")
     parser.add_argument("--years", type=float, default=3.0)
-    parser.add_argument("--tp-r", type=float, default=2.0)
-    parser.add_argument("--sl-r", type=float, default=1.2)
+    parser.add_argument("--tp-r", type=float, default=3.0,
+                        help="target in R; live swing book is 3")
+    parser.add_argument("--sl-r", type=float, default=1.0,
+                        help="stop in R; 1R is 3xATR (live swing book)")
+    parser.add_argument("--trail-sl", action=argparse.BooleanOptionalAction, default=True,
+                        help="trail the stop with the live profit ladder (1R->BE, 1.5R->0.5R, ...)")
     parser.add_argument("--anti-flip", type=int, default=90)
-    parser.add_argument("--stagnation", type=int, default=60)
+    parser.add_argument("--stagnation", type=int, default=10080,
+                        help="minutes with no progress before a flat exit; live swing hold is 7 days")
     parser.add_argument("--max-ai-reviews", type=int, default=300)
     parser.add_argument("--lake-root", type=str, default="data/lake")
     parser.add_argument("--cycle-start", type=float, default=25.0)
@@ -107,6 +112,7 @@ async def main():
             step_budget_seconds=args.step_seconds,
             tp_r=args.tp_r,
             sl_r=args.sl_r,
+            trail_sl=args.trail_sl,
             anti_flip_cooldown_minutes=args.anti_flip,
             stagnation_exit_minutes=args.stagnation,
             cycle_start=args.cycle_start,
@@ -130,6 +136,7 @@ async def main():
         lake_root=args.lake_root,
         tp_r=args.tp_r,
         sl_r=args.sl_r,
+        trail_sl=args.trail_sl,
         anti_flip_cooldown_minutes=args.anti_flip,
         stagnation_exit_minutes=args.stagnation,
         strategy=args.strategy,

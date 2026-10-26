@@ -281,8 +281,9 @@ async def _api_simulator_start(runner, request: web.Request) -> web.Response:
     if isinstance(symbols, list):
         symbols = ",".join(symbols)
     years = str(data.get("years", "3.0"))
-    tp_r = str(data.get("tp_r", "2.0"))
-    sl_r = str(data.get("sl_r", "1.2"))
+    tp_r = str(data.get("tp_r", "3.0"))
+    sl_r = str(data.get("sl_r", "1.0"))
+    trail_sl = bool(data.get("trail_sl", True))
     anti_flip = str(data.get("anti_flip", "90"))
     stagnation = str(data.get("stagnation", "60"))
     max_ai = str(data.get("max_ai_reviews", "100"))
@@ -314,6 +315,7 @@ async def _api_simulator_start(runner, request: web.Request) -> web.Response:
         "--years", years,
         "--tp-r", tp_r,
         "--sl-r", sl_r,
+        "--trail-sl" if trail_sl else "--no-trail-sl",
         "--anti-flip", anti_flip,
         "--stagnation", stagnation,
         "--max-ai-reviews", max_ai,
@@ -436,10 +438,11 @@ async def _api_simulator_get_config(runner, request: web.Request) -> web.Respons
         "step_market_hours": 1.0,
         "step_seconds": 60.0,
         "stepped_mode": True,
-        "tp_r": 2.2,
-        "sl_r": 1.5,
+        "tp_r": 3.0,
+        "sl_r": 1.0,
+        "trail_sl": True,
         "anti_flip": 90,
-        "stagnation": 60,
+        "stagnation": 10080,
         "max_ai_reviews": 150,
         "cycle_start": 25.0,
         "cycle_target": 100.0,
@@ -2955,14 +2958,20 @@ section h2{color:var(--accent-soft)}
               <label style="font-size:11px;color:#94a3b8;font-weight:600">🎯 Target Multiple (R)</label>
               <span id="sim-tp-calc-badge" style="font-size:10px;color:#10b981;font-weight:700">+55.0% ROE · +$55 on $100</span>
             </div>
-            <input type="number" step="0.1" id="sim-input-tp" value="2.2" oninput="updateRMathCard()" style="width:100%;background:#0f172a;color:#10b981;border:1px solid #059669;padding:8px 10px;border-radius:6px;font-weight:700">
+            <input type="number" step="0.1" id="sim-input-tp" value="3.0" oninput="updateRMathCard()" style="width:100%;background:#0f172a;color:#10b981;border:1px solid #059669;padding:8px 10px;border-radius:6px;font-weight:700">
           </div>
           <div>
             <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px">
               <label style="font-size:11px;color:#94a3b8;font-weight:600">🛑 Stop-Loss Multiple (R)</label>
               <span id="sim-sl-calc-badge" style="font-size:10px;color:#ef4444;font-weight:700">-30.0% ROE · -$30 on $100</span>
             </div>
-            <input type="number" step="0.1" id="sim-input-sl" value="1.5" oninput="updateRMathCard()" style="width:100%;background:#0f172a;color:#ef4444;border:1px solid #e11d48;padding:8px 10px;border-radius:6px;font-weight:700">
+            <input type="number" step="0.1" id="sim-input-sl" value="1.0" oninput="updateRMathCard()" style="width:100%;background:#0f172a;color:#ef4444;border:1px solid #e11d48;padding:8px 10px;border-radius:6px;font-weight:700">
+          </div>
+          <div style="display:flex;align-items:flex-end">
+            <label style="font-size:12px;color:#f59e0b;font-weight:700;display:flex;align-items:center;gap:6px;cursor:pointer;padding-bottom:10px">
+              <input type="checkbox" id="sim-input-trail" checked style="accent-color:#f59e0b;cursor:pointer">
+              Trail stop (live ladder)
+            </label>
           </div>
           <div>
             <label style="font-size:11px;color:#94a3b8;display:block;margin-bottom:4px">Anti-Flip Cooldown (min)</label>
@@ -2970,7 +2979,7 @@ section h2{color:var(--accent-soft)}
           </div>
           <div>
             <label style="font-size:11px;color:#94a3b8;display:block;margin-bottom:4px">Smart Stagnation Exit (min)</label>
-            <input type="number" id="sim-input-stagnation" value="60" style="width:100%;background:#0f172a;color:#f1f5f9;border:1px solid #334155;padding:8px 10px;border-radius:6px">
+            <input type="number" id="sim-input-stagnation" value="10080" style="width:100%;background:#0f172a;color:#f1f5f9;border:1px solid #334155;padding:8px 10px;border-radius:6px">
           </div>
           <div>
             <label style="font-size:11px;color:#10b981;display:block;margin-bottom:4px;font-weight:700">💰 Cycle Start Capital ($)</label>
@@ -3056,10 +3065,10 @@ section h2{color:var(--accent-soft)}
         </div>
 
         <div style="font-size:11px;color:#94a3b8;line-height:1.45;background:#030712;padding:8px 12px;border-radius:6px;border:1px solid #1e293b">
-          ℹ️ <b>What does 'R' mean?</b> <code>1R</code> is your baseline risk unit (defined as <b>1.2% price move</b> / 1.8x ATR). 
-          With <b>10x leverage</b>: <code>1R = 12% ROE ($12 per $100 margin)</code>. At <b>25x leverage</b>: <code>1R = 30% ROE ($30 per $100 margin)</code>.<br>
-          • <b>Target Multiple:</b> Multiplier of 1R. E.g. at 2.2R and 10x, you make <code>+26.4% ROE (+$26.40 on $100)</code>.<br>
-          • <b>Stop-Loss Multiple:</b> Multiplier of 1R. E.g. at 1.5R and 10x, you risk <code>-18.0% ROE (-$18.00 on $100)</code>.
+          ℹ️ <b>What does 'R' mean?</b> <code>1R</code> is the live swing stop: <b>3×ATR</b>, never under 0.3% of price (was 1.8×ATR / 1.2%, which this page used to invent).
+          The dollar card below illustrates a 1.2% 1R only so the ROE stays readable — the engine uses the real ATR.<br>
+          • <b>Target 3R / stop 1R</b> is the live book. <b>Trail stop</b> is the live ladder: at 1R the stop moves to break-even, at 1.5R it locks +0.5R, at 2R +1R, at 2.5R +1.5R, then every extra 0.5R locks another 0.5R. Off = the original stop stays put.<br>
+          • These detectors are still the old 5-minute intraday set (confluence, squeeze, volume). The swing 4h/8h book is a different engine. Stagnation default is 7 days, the live max hold.
         </div>
       </div>
 
@@ -4337,8 +4346,8 @@ function pollSimulatorStatus(){
 }
 
 function updateRMathCard(){
-  const tpR = parseFloat(document.getElementById('sim-input-tp')?.value || '2.2');
-  const slR = parseFloat(document.getElementById('sim-input-sl')?.value || '1.5');
+  const tpR = parseFloat(document.getElementById('sim-input-tp')?.value || '3');
+  const slR = parseFloat(document.getElementById('sim-input-sl')?.value || '1');
   const lev = parseFloat(document.getElementById('sim-input-cycle-lev')?.value || '10');
   const baseMargin = 100.0; // Base $100 margin example requested by user
   
@@ -4424,8 +4433,9 @@ function getSimulatorFormValues() {
   return {
     strategy: document.getElementById('sim-input-strategy')?.value || 'all',
     years: document.getElementById('sim-input-years')?.value || '0.0082',
-    tp_r: parseFloat(document.getElementById('sim-input-tp')?.value || '2.2'),
-    sl_r: parseFloat(document.getElementById('sim-input-sl')?.value || '1.5'),
+    tp_r: parseFloat(document.getElementById('sim-input-tp')?.value || '3.0'),
+    sl_r: parseFloat(document.getElementById('sim-input-sl')?.value || '1.0'),
+    trail_sl: document.getElementById('sim-input-trail')?.checked ?? true,
     anti_flip: parseInt(document.getElementById('sim-input-antiflip')?.value || '90'),
     stagnation: parseInt(document.getElementById('sim-input-stagnation')?.value || '60'),
     max_ai_reviews: 150,
@@ -4486,6 +4496,7 @@ function applySimulatorConfig(c) {
   if (c.years !== undefined && document.getElementById('sim-input-years')) document.getElementById('sim-input-years').value = c.years;
   if (c.tp_r !== undefined && document.getElementById('sim-input-tp')) document.getElementById('sim-input-tp').value = c.tp_r;
   if (c.sl_r !== undefined && document.getElementById('sim-input-sl')) document.getElementById('sim-input-sl').value = c.sl_r;
+  if (c.trail_sl !== undefined && document.getElementById('sim-input-trail')) document.getElementById('sim-input-trail').checked = !!c.trail_sl;
   if (c.anti_flip !== undefined && document.getElementById('sim-input-antiflip')) document.getElementById('sim-input-antiflip').value = c.anti_flip;
   if (c.stagnation !== undefined && document.getElementById('sim-input-stagnation')) document.getElementById('sim-input-stagnation').value = c.stagnation;
   if (c.cycle_start !== undefined && document.getElementById('sim-input-cycle-start')) document.getElementById('sim-input-cycle-start').value = c.cycle_start;
@@ -4502,7 +4513,7 @@ let _simListenersAttached = false;
 function attachSimulatorInputListeners() {
   if (_simListenersAttached) return;
   const ids = [
-    'sim-input-strategy', 'sim-input-years', 'sim-input-tp', 'sim-input-sl', 'sim-input-antiflip',
+    'sim-input-strategy', 'sim-input-years', 'sim-input-tp', 'sim-input-sl', 'sim-input-trail', 'sim-input-antiflip',
     'sim-input-stagnation', 'sim-input-cycle-start',
     'sim-input-cycle-target', 'sim-input-cycle-margin', 'sim-input-cycle-lev',
     'sim-input-stepped', 'sim-input-step-hours', 'sim-input-step-seconds',
@@ -4566,8 +4577,9 @@ async function startSimulator(){
   const pauseBtn = document.getElementById('sim-btn-pause');
   const strategy = document.getElementById('sim-input-strategy')?.value || 'all';
   const years = parseFloat(document.getElementById('sim-input-years')?.value || '0.0082');
-  const tp = parseFloat(document.getElementById('sim-input-tp')?.value || '2.2');
-  const sl = parseFloat(document.getElementById('sim-input-sl')?.value || '1.5');
+  const tp = parseFloat(document.getElementById('sim-input-tp')?.value || '3.0');
+  const sl = parseFloat(document.getElementById('sim-input-sl')?.value || '1.0');
+  const trail = document.getElementById('sim-input-trail')?.checked ?? true;
   const antiflip = parseInt(document.getElementById('sim-input-antiflip')?.value || '90');
   const stagnation = parseInt(document.getElementById('sim-input-stagnation')?.value || '60');
   const maxai = 150;
@@ -4596,6 +4608,7 @@ async function startSimulator(){
         years: years,
         tp_r: tp,
         sl_r: sl,
+        trail_sl: trail,
         anti_flip: antiflip,
         stagnation: stagnation,
         max_ai_reviews: maxai,

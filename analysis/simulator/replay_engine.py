@@ -26,6 +26,7 @@ from analysis.crypto_signals import (
     VolumeSpikeAnalyzer,
 )
 from analysis.crypto_state import CryptoState, OHLCVCandle, resample_candles
+from analysis.simulator.exits import bracket, manage_bar
 from analysis.simulator.strategy_dispatcher import SimulatorStrategyDispatcher
 
 log = logging.getLogger("simulator.replay")
@@ -42,6 +43,8 @@ class SimulatedTrade:
     exit_price: float = 0.0
     tp_price: float = 0.0
     sl_price: float = 0.0
+    init_sl_price: float = 0.0     # the stop at entry; pnl_r is measured against this, not the trailed stop
+    peak_price: float = 0.0        # best price seen, for the profit ladder
     pnl_pct: float = 0.0
     pnl_r: float = 0.0
     exit_reason: str = ""  # "TAKE_PROFIT_2.0R", "STOP_LOSS_1.2R", "STAGNATION_60M", etc.
@@ -72,12 +75,13 @@ class MarketReplayEngine:
         symbols: list[str],
         window_years: float = 3.0,
         lake_root: str = "data/lake",
-        tp_r: float = 2.0,
-        sl_r: float = 1.2,
+        tp_r: float = 3.0,
+        sl_r: float = 1.0,
         anti_flip_cooldown_minutes: int = 90,
-        stagnation_exit_minutes: int = 60,
+        stagnation_exit_minutes: int = 10080,
         tp1_scale_out_enabled: bool = True,
         strategy: str = "all",
+        trail_sl: bool = True,
         on_tick_callback: Callable[[dict], None] | None = None,
     ):
         self.symbols = [s.upper() for s in symbols]
@@ -88,6 +92,7 @@ class MarketReplayEngine:
         self.anti_flip_cooldown_minutes = anti_flip_cooldown_minutes
         self.stagnation_exit_minutes = stagnation_exit_minutes
         self.tp1_scale_out_enabled = tp1_scale_out_enabled
+        self.trail_sl = bool(trail_sl)
         self.strategy = (strategy or "all").lower().strip()
         self.on_tick_callback = on_tick_callback
 
@@ -195,111 +200,32 @@ class MarketReplayEngine:
 
             if in_pos and active_trade:
                 bars_held = i - pos_entry_idx
-                is_long = active_trade.direction == "LONG"
-                entry = active_trade.entry_price
-                tp = active_trade.tp_price
-                sl = active_trade.sl_price
-                target_dist_pct = abs(tp - entry) / entry * 100.0
-                risk_dist_pct = abs(entry - sl) / entry * 100.0
-
-                # Excursion tracking
-                if is_long:
-                    cur_gain = (c_high - entry) / entry * 100.0
-                    cur_dd = (c_low - entry) / entry * 100.0
-                    if cur_gain > active_trade.peak_gain_pct:
-                        active_trade.peak_gain_pct = cur_gain
-                        active_trade.peak_r = round(cur_gain / max(risk_dist_pct, 0.001), 2)
-                    if cur_dd < active_trade.max_drawdown_pct:
-                        active_trade.max_drawdown_pct = cur_dd
-
-                    # Check TP1 milestone (+1.0R / 50% target)
-                    if cur_gain >= 0.5 * target_dist_pct and not active_trade.tp1_hit:
-                        active_trade.tp1_hit = True
-
-                    # Check Breakeven ratchet (+0.8%)
-                    if cur_gain >= 0.8 and not active_trade.breakeven_ratchet_hit:
-                        active_trade.breakeven_ratchet_hit = True
-                        active_trade.sl_price = entry  # Lock at breakeven
-
-                    # Dynamic runner extension (+1.5R at >=1.8R)
-                    if cur_gain >= 1.8 * risk_dist_pct and not active_trade.runner_extended:
-                        active_trade.runner_extended = True
-                        active_trade.tp_price = entry + (self.tp_r + 1.5) * c_atr
-                        active_trade.sl_price = entry + 1.2 * risk_dist_pct
-
-                    # Check Exits
-                    hit_tp = c_high >= active_trade.tp_price
-                    hit_sl = c_low <= active_trade.sl_price
-                else:  # Short
-                    cur_gain = (entry - c_low) / entry * 100.0
-                    cur_dd = (entry - c_high) / entry * 100.0
-                    if cur_gain > active_trade.peak_gain_pct:
-                        active_trade.peak_gain_pct = cur_gain
-                        active_trade.peak_r = round(cur_gain / max(risk_dist_pct, 0.001), 2)
-                    if cur_dd < active_trade.max_drawdown_pct:
-                        active_trade.max_drawdown_pct = cur_dd
-
-                    if cur_gain >= 0.5 * target_dist_pct and not active_trade.tp1_hit:
-                        active_trade.tp1_hit = True
-
-                    if cur_gain >= 0.8 and not active_trade.breakeven_ratchet_hit:
-                        active_trade.breakeven_ratchet_hit = True
-                        active_trade.sl_price = entry
-
-                    if cur_gain >= 1.8 * risk_dist_pct and not active_trade.runner_extended:
-                        active_trade.runner_extended = True
-                        active_trade.tp_price = entry - (self.tp_r + 1.5) * c_atr
-                        active_trade.sl_price = entry - 1.2 * risk_dist_pct
-
-                    hit_tp = c_low <= active_trade.tp_price
-                    hit_sl = c_high >= active_trade.sl_price
-
-                # Resolution
-                active_trade.target_pct_reached = min(
-                    100.0, max(0.0, (active_trade.peak_gain_pct / max(target_dist_pct, 0.001) * 100.0))
-                )
-
-                if hit_tp and not hit_sl:            # R4: both touched in one bar -> the stop counts
-                    active_trade.exit_price = active_trade.tp_price
+                outcome = manage_bar(active_trade, float(c_high), float(c_low), float(c_close),
+                                     trail=self.trail_sl)
+                if outcome:
                     active_trade.exit_time = str(c_time)
-                    active_trade.pnl_pct = target_dist_pct if is_long else target_dist_pct
-                    active_trade.pnl_r = round(self.tp_r + (1.5 if active_trade.runner_extended else 0.0), 2)
-                    active_trade.exit_reason = "TAKE_PROFIT_RUNNER" if active_trade.runner_extended else "TAKE_PROFIT_FULL"
+                    if active_trade.peak_r >= 1.0:
+                        active_trade.tp1_hit = True
                     symbol_trades.append(active_trade)
                     in_pos = False
                     active_trade = None
                     continue
-
-                if hit_sl:
-                    active_trade.exit_price = active_trade.sl_price
+                # Stagnation: bars are 5-minute. Live swing hold is 7 days (10080 min).
+                if bars_held >= (self.stagnation_exit_minutes // 5) and active_trade.peak_r < 0.3:
+                    entry = active_trade.entry_price
+                    init = active_trade.init_sl_price or active_trade.sl_price
+                    risk = abs(entry - init) or 1e-9
+                    side = 1 if active_trade.direction == "LONG" else -1
+                    active_trade.exit_price = float(c_close)
                     active_trade.exit_time = str(c_time)
-                    if active_trade.breakeven_ratchet_hit:
-                        active_trade.pnl_pct = 0.0
-                        active_trade.pnl_r = 0.0
-                        active_trade.exit_reason = "BREAKEVEN_STOP_LOCKED"
-                    else:
-                        active_trade.pnl_pct = -risk_dist_pct
-                        active_trade.pnl_r = -self.sl_r
-                        active_trade.exit_reason = "STOP_LOSS_HIT"
+                    active_trade.pnl_r = round(side * (float(c_close) - entry) / risk, 3)
+                    active_trade.pnl_pct = round(side * (float(c_close) - entry) / entry * 100.0, 3)
+                    active_trade.exit_reason = "STAGNATION_TIMEOUT"
+                    self.stagnation_exits += 1
                     symbol_trades.append(active_trade)
                     in_pos = False
                     active_trade = None
                     continue
-
-                # Smart Stagnation Exit
-                if bars_held >= (self.stagnation_exit_minutes // 5):
-                    if active_trade.peak_gain_pct < 0.4:
-                        active_trade.exit_price = c_close
-                        active_trade.exit_time = str(c_time)
-                        move = (c_close - entry) / entry * 100.0 if is_long else (entry - c_close) / entry * 100.0
-                        active_trade.pnl_pct = round(move, 2)
-                        active_trade.pnl_r = round(move / max(risk_dist_pct, 0.001), 2)
-                        active_trade.exit_reason = "STAGNATION_60M_TIMEOUT"
-                        self.stagnation_exits += 1
-                        symbol_trades.append(active_trade)
-                        in_pos = False
-                        active_trade = None
-                        continue
                 continue
 
             # Production Signal Detection: 5-Family Confluence, Bollinger, Volume Spike, RSI Divergence
@@ -364,14 +290,11 @@ class MarketReplayEngine:
                     self.anti_flip_vetos += 1
                     continue
 
-            # Open Simulated Position with Volatility Structure Stop
+            # Open. 1R is the live book's 3×ATR (never under 0.3% of price).
             self.trade_counter += 1
             is_long = target_dir == 1
             pos_entry = c_close
-            # Dynamic structure stop: 1.8x ATR floor, min 1.2% distance (immune to 5m noise)
-            risk_dist = max(1.8 * c_atr, pos_entry * 0.012)
-            pos_tp = pos_entry + self.tp_r * risk_dist if is_long else pos_entry - self.tp_r * risk_dist
-            pos_sl = pos_entry - self.sl_r * risk_dist if is_long else pos_entry + self.sl_r * risk_dist
+            pos_sl, pos_tp, one_r = bracket(pos_entry, c_atr, 1 if is_long else -1, self.tp_r, self.sl_r)
 
             active_trade = SimulatedTrade(
                 trade_id=self.trade_counter,
@@ -381,11 +304,13 @@ class MarketReplayEngine:
                 entry_price=round(pos_entry, 4),
                 tp_price=round(pos_tp, 4),
                 sl_price=round(pos_sl, 4),
+                init_sl_price=round(pos_sl, 4),
                 indicators_at_entry={
                     "strategy": sig_type,
                     "confidence": round(sig_conf, 3),
                     "rsi": round(float(c_rsi), 1),
-                    "atr_pct": round(float(risk_dist / pos_entry * 100.0), 3),
+                    "atr_pct": round(float(one_r * self.sl_r / pos_entry * 100.0), 3),
+                    "trail_sl": self.trail_sl,
                     "htf_ema": round(htf_ema, 2),
                 },
             )

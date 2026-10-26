@@ -3,12 +3,16 @@ import inspect
 
 
 def test_r4_every_simulator_counts_the_stop_when_one_bar_touches_both():
-    from analysis.simulator import replay_engine, stepped_replay
+    """Both replay engines share manage_bar, which checks the stop before the target.
+    The multi-year pipeline still has the check inline."""
+    from analysis.simulator import exits, replay_engine, stepped_replay
     import scripts.backtest_multi_year_pipeline as pipeline
-    for mod in (replay_engine, stepped_replay, pipeline):
-        src = inspect.getsource(mod)
-        assert "if hit_tp and not hit_sl:" in src, mod.__name__
-        assert "\n                if hit_tp:\n" not in src and "\n            if hit_tp:\n" not in src, mod.__name__
+    src = inspect.getsource(exits)
+    assert src.index("if hit_sl:") < src.index("if hit_tp:")
+    for mod in (replay_engine, stepped_replay):
+        assert "manage_bar(" in inspect.getsource(mod), mod.__name__
+    pipe = inspect.getsource(pipeline)
+    assert "if hit_tp and not hit_sl:" in pipe
 
 
 def test_r5_replay_never_invents_candles_unless_asked(tmp_path):
