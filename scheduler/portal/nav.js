@@ -21,7 +21,8 @@
       { id: "paper", label: "Paper cycle", native: true, aliases: ["/classic#paper"] },
       { id: "live", label: "Live ₹ (real)", native: true },
       { id: "guard", label: "Session guard", native: true, aliases: ["/classic#guard"] },
-      { id: "simulator", label: "Simulator", url: "/classic#simulator" },
+      { id: "simulator", label: "Simulator", native: true },
+      { id: "intraday-sim", label: "Intraday sim (old)", url: "/classic#simulator" },
       { id: "journal", label: "Journal", url: "/journal" }
     ] },
     { id: "evidence", label: "Evidence", tabs: [

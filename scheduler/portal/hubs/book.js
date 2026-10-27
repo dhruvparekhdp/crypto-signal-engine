@@ -425,6 +425,129 @@
   // the demo (testnet) panel was removed: owner 26 Oct 2026, "no use, demo doesn't run with proper live market rate"
   UI.view("book/paper", [["paper-strip"], ["paper-open"], ["paper-candidates"], ["paper-bracket"], ["paper-vol"], ["paper-history"]]);
 
+  // ------------------------------------------------------------- live-book simulator (owner, 27 Oct 2026)
+  // Replays the LIVE book (8 live swing specs, live exit, live sizing and limits, Delta fees) from a date with a
+  // wallet: /api/sim/live-book. Play steps through the closed trades one by one.
+  var SIM_SPECS = ["4h vol breakout", "4h Keltner", "4h Donchian", "4h Ichimoku", "8h Keltner", "8h vol breakout", "8h Donchian", "8h Ichimoku"];
+  var SIM_COINS = ["BTC", "ETH", "SOL", "XRP", "BNB", "ADA", "DOGE", "AVAX", "LINK", "SUI", "TIA", "XAUT"];
+  function simDate(ms) { return ms ? new Date(ms).toISOString().slice(0, 10) : "—"; }
+  function simChart(eq, start, n) {
+    var pts = [[null, start]].concat(eq.slice(0, n).map(function (p) { return [p[0], p[1]]; }));
+    if (pts.length < 2) return '<p class="mono small dim">No closed trades yet.</p>';
+    var t0 = eq[0][0], t1 = eq[eq.length - 1][0], all = eq.map(function (p) { return p[1]; }).concat([start, start * 0.5]);
+    var lo = Math.min.apply(null, all), hi = Math.max.apply(null, all), W = 1000, H = 260, P = 8;
+    var logY = lo > 0 && hi / lo > 4;                        // compounding: a straight scale flattens the first year
+    function f(v) { return logY ? Math.log(v) : v; }
+    function x(t) { return t == null ? P : P + (t - t0) / Math.max(1, t1 - t0) * (W - 2 * P); }
+    function y(v) { return H - P - (f(v) - f(lo)) / Math.max(1e-9, f(hi) - f(lo)) * (H - 2 * P); }
+    var line = pts.map(function (q) { return x(q[0]).toFixed(1) + "," + y(q[1]).toFixed(1); }).join(" ");
+    var last = pts[pts.length - 1][1], up = last >= start;
+    return '<svg viewBox="0 0 ' + W + " " + H + '" preserveAspectRatio="none" style="width:100%;height:220px;display:block" role="img" aria-label="wallet over time">' +
+      '<line x1="0" x2="' + W + '" y1="' + y(start).toFixed(1) + '" y2="' + y(start).toFixed(1) + '" stroke="currentColor" stroke-opacity=".35" stroke-dasharray="6 6"/>' +
+      '<line x1="0" x2="' + W + '" y1="' + y(start * 0.5).toFixed(1) + '" y2="' + y(start * 0.5).toFixed(1) + '" stroke="#e5484d" stroke-opacity=".6" stroke-dasharray="3 7"/>' +
+      '<polyline fill="none" stroke="' + (up ? "#12a87b" : "#e5484d") + '" stroke-width="2.5" vector-effect="non-scaling-stroke" points="' + line + '"/></svg>' +
+      '<p class="mono tiny dim" style="margin:4px 0 0">Dashed: the starting wallet · red dashed: the floor (half of it), where the live book stops opening trades' +
+      (logY ? " · log scale (equal steps = equal % change)" : "") + ".</p>";
+  }
+  function simUrl(p) {
+    var q = ["wallet=" + encodeURIComponent(p.wallet), "risk=" + encodeURIComponent(p.risk), "max_open=" + encodeURIComponent(p.max_open),
+      "round_up=" + encodeURIComponent(p.round_up)];
+    if (p.start) q.push("start=" + p.start); if (p.end) q.push("end=" + p.end);
+    if (p.specs.length < SIM_SPECS.length) q.push("specs=" + p.specs.join(","));
+    if (p.coins.length < SIM_COINS.length) q.push("coins=" + p.coins.join(","));
+    return "/api/sim/live-book?" + q.join("&");
+  }
+  function simForm(el, ctx) {
+    var p = ctx.s.p;
+    function fld(k, label, type, extra) { return '<label class="fld"><span>' + e(label) + '</span><input type="' + type + '" data-act="f" data-k="' + k + '" value="' + e(p[k]) + '"' + (extra || "") + "></label>"; }
+    el.querySelector(".sim-form").innerHTML =
+      fld("start", "From", "date") + fld("end", "To (empty = latest)", "date") + fld("wallet", "Wallet ₹", "number", ' min="100" step="100" style="width:100px"') +
+      fld("risk", "Risk % a trade", "number", ' min="0.1" max="10" step="0.5" style="width:80px"') + fld("max_open", "Max open (0 = no limit)", "number", ' min="0" max="20" step="1" style="width:80px"') +
+      fld("round_up", "One-contract round-up %", "number", ' min="0" max="25" step="1" style="width:80px"') +
+      '<button class="mini" data-act="run">' + (ctx.s.busy ? "Running…" : "Run") + '</button><button class="mini" data-act="play">' + (ctx.s.timer ? "Stop" : "Play") + "</button>" +
+      '<div style="flex-basis:100%;margin-top:6px"><span class="mono tiny dim">Strategies </span>' + SIM_SPECS.map(function (n, i) { return C.chip("spec", n, p.specs.indexOf(i) >= 0).replace("data-act", 'data-i="' + i + '" data-act'); }).join("") + "</div>" +
+      '<div style="flex-basis:100%;margin-top:4px"><span class="mono tiny dim">Coins </span>' + SIM_COINS.map(function (c) { return C.chip("coin", c, p.coins.indexOf(c) >= 0).replace("data-act", 'data-c="' + c + '" data-act'); }).join("") + "</div>";
+  }
+  function simStop(ctx) { if (ctx.s.timer) { clearInterval(ctx.s.timer); ctx.s.timer = null; } }
+  UI.widget("sim-live", {
+    title: "LIVE-BOOK SIMULATOR · WHAT THE LIVE BOOK WOULD HAVE DONE",
+    mount: function (el, ctx) {
+      ctx.s.p = { start: "2025-01-01", end: "", wallet: 800, risk: 3, max_open: 4, round_up: 10,
+        specs: SIM_SPECS.map(function (_, i) { return i; }), coins: SIM_COINS.slice() };
+      ctx.s.t = { sort: null };
+      el.innerHTML = '<p class="mono small dim" style="margin:0 0 8px">The live book replayed: the 8 live swing strategies on the live coins, the live exit (3×ATR stop, 3R target, profit-lock ladder, 7 days), Delta fees and funding, and the live rules — whole Delta contracts, the one-contract round-up, the BTC volatility filter, one trade per coin, max open, 10% daily loss limit, floor at half the wallet, no news blackout. Past results, not a promise.</p>' +
+        '<div class="toolbar sim-form" style="flex-wrap:wrap"></div><div data-slot="data" class="mono tiny dim" style="margin:6px 0"></div><div data-slot="out"></div>';
+      simForm(el, ctx);
+      UI.Net.get("/api/sim/live-book/meta").then(function (m) { ctx.s.meta = m; ctx.render(); }).catch(function () { /* shown on run */ });
+    },
+    unmount: function (el, ctx) { simStop(ctx); },
+    on: {
+      f: function (el, ev, t, ctx) { ctx.s.p[t.dataset.k] = t.value; },
+      spec: function (el, ev, t, ctx) { var i = +t.dataset.i, a = ctx.s.p.specs, k = a.indexOf(i); if (k >= 0) { if (a.length > 1) a.splice(k, 1); } else a.push(i); simForm(el, ctx); },
+      coin: function (el, ev, t, ctx) { var c = t.dataset.c, a = ctx.s.p.coins, k = a.indexOf(c); if (k >= 0) { if (a.length > 1) a.splice(k, 1); } else a.push(c); simForm(el, ctx); },
+      run: function (el, ev, t, ctx) {
+        simStop(ctx); ctx.s.busy = true; ctx.s.err = null; simForm(el, ctx);
+        UI.Net.get(simUrl(ctx.s.p)).then(function (r) { ctx.s.res = r; ctx.s.step = null; })
+          .catch(function (err) { ctx.s.err = err.message; })
+          .then(function () { ctx.s.busy = false; simForm(el, ctx); ctx.render(); });
+      },
+      play: function (el, ev, t, ctx) {
+        var r = ctx.s.res; if (!r || !r.equity.length) return;
+        if (ctx.s.timer) { simStop(ctx); simForm(el, ctx); return; }
+        var n = r.equity.length, per = Math.max(1, Math.ceil(n / 160));
+        ctx.s.step = 0;
+        ctx.s.timer = setInterval(function () {
+          ctx.s.step = Math.min(n, ctx.s.step + per); ctx.render();
+          if (ctx.s.step >= n) { simStop(ctx); simForm(el, ctx); }
+        }, 70);
+        simForm(el, ctx);
+      },
+      sort: function (el, ev, t, ctx) { C.sortState(ctx.s.t, t.dataset.k); ctx.render(); }
+    },
+    render: function (el, D, ctx) {
+      var m = ctx.s.meta, out = el.querySelector('[data-slot="out"]');
+      el.querySelector('[data-slot="data"]').textContent = m && m.trades ? "Data: " + m.trades + " trades, signals " + simDate(m.first_entry_ms) + " → " + simDate(m.last_entry_ms) + " · refreshed " + (m.refreshed_at || "—") : "";
+      if (ctx.s.err) { out.innerHTML = C.empty("Could not run: " + ctx.s.err); return; }
+      var r = ctx.s.res;
+      if (!r) { out.innerHTML = C.empty(ctx.s.busy ? "Running…" : "Pick a start date and a wallet, then Run."); return; }
+      var S = r.summary, n = ctx.s.step == null ? r.equity.length : ctx.s.step;
+      var shown = r.trades.slice(0, n), w = n ? shown[n - 1].wallet_after : S.start_inr;
+      var won = shown.filter(function (x) { return x.pnl_inr > 0; }).length;
+      var sk = S.skips || {}, why = [["filter", "BTC too wild"], ["full", "book full"], ["coin_open", "coin already open"], ["too_small", "below one contract"],
+        ["too_wide", "stop too wide for the leverage rule"], ["daily_loss", "daily loss limit"], ["floor", "below the floor"]]
+        .filter(function (k) { return sk[k[0]]; }).map(function (k) { return sk[k[0]] + " " + k[1]; }).join(" · ");
+      out.innerHTML = C.tiles([
+          ["WALLET", rs(S.start_inr) + " → " + rs(w), (w / S.start_inr).toFixed(2) + "×" + (ctx.s.step != null && n < r.equity.length ? " so far" : ""), w >= S.start_inr ? "up" : "dn"],
+          ["TRADES", String(n), won + " won · " + (n - won) + " lost" + (n ? " · " + Math.round(100 * won / n) + "% win" : "")],
+          ["AVG R A TRADE", S.avg_r == null ? "—" : (S.avg_r > 0 ? "+" : "") + S.avg_r.toFixed(2) + "R", "after fees and funding, whole run"],
+          ["DEEPEST DROP", S.max_dd_pct + "%", "from a high, closed trades"],
+          ["LONGEST LOSING RUN", String(S.losing_streak), "trades in a row"],
+          ["TRADES A MONTH", String(S.per_month), S.signals + " signals in the window"]]) +
+        simChart(r.equity, S.start_inr, n) +
+        (why ? '<p class="mono tiny dim" style="margin:6px 0">Signals not taken: ' + e(why) + ".</p>" : "") +
+        '<h4 class="mono small" style="margin:14px 0 6px">BY MONTH</h4>' + C.table([
+          { label: "MONTH", w: "90px", cell: function (x) { return "<b>" + e(x.month) + "</b>"; } },
+          { label: "TRADES", w: "70px", cell: function (x) { return e(x.trades) + ' <span class="dim tiny">' + e(x.won) + " won</span>"; } },
+          { label: "P&L", w: "110px", cell: function (x) { return C.signed(x.pnl_inr, function (y) { return rs(y, true); }); } },
+          { label: "WALLET AT MONTH END", w: "minmax(0,1fr)", cell: function (x) { return e(rs(x.wallet_end)); } }
+        ], r.months.slice().reverse(), { minWidth: 440 }) +
+        '<h4 class="mono small" style="margin:14px 0 6px">EVERY TRADE · NEWEST FIRST</h4>' + C.table([
+          { label: "OPENED", w: "92px", cell: function (x) { return e(simDate(x.entry_t)); }, sort: function (x) { return x.entry_t; } },
+          { label: "CLOSED", w: "92px", cell: function (x) { return e(simDate(x.exit_t)); }, sort: function (x) { return x.exit_t; } },
+          { label: "COIN", w: "64px", cell: function (x) { return "<b>" + e(x.coin) + "</b>"; }, sort: function (x) { return x.coin; } },
+          { label: "SIDE", w: "70px", cell: function (x) { return C.side(x.side); } },
+          { label: "SETUP", w: "minmax(0,1fr)", cell: function (x) { return e(x.setup); } },
+          { label: "RISK", w: "80px", cell: function (x) { return e(rs(x.risk_inr)) + ' <span class="dim tiny">' + e(x.contracts) + "c</span>"; } },
+          { label: "R", w: "64px", cell: function (x) { return C.signed(x.r, function (y) { return (y > 0 ? "+" : "") + y.toFixed(2); }); }, sort: function (x) { return x.r; } },
+          { label: "P&L", w: "90px", cell: function (x) { return C.signed(x.pnl_inr, function (y) { return rs(y, true); }); }, sort: function (x) { return x.pnl_inr; } },
+          { label: "EXIT", w: "70px", cell: function (x) { return '<span class="dim">' + e(x.reason) + "</span>"; } },
+          { label: "WALLET", w: "90px", cell: function (x) { return e(rs(x.wallet_after)); } }
+        ], shown.slice().reverse(), { minWidth: 900, state: ctx.s.t, limit: 300 });
+      ctx.right(r.params.start ? "from " + r.params.start : "");
+    }
+  });
+  UI.view("book/simulator", [["sim-live"]]);
+
   // ------------------------------------------------------------- live, real money (owner, 18 Oct 2026)
   // paise, like the Delta app: a ₹500 wallet rounded to ₹500 hid the ₹0.21 that was really gone (19 Oct 2026)
   function rs(x, signed) {
