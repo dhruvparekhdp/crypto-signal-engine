@@ -87,12 +87,22 @@ async def test_l3_total_same_side_risk_is_capped(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_l2_news_blackout_applies_to_swing():
+async def test_l2_news_blackout_applies_to_swing_only_when_the_guard_is_on():
+    from types import SimpleNamespace as NS
+    rows, logs, _ = await _swing([("BTCUSDT", "donchian", 1, 60000.0)], {
+        "scheduler.runner.AppRunner._blackout": lambda self, now: NS(name="FOMC", kind="calendar"),
+        "scheduler.runner.settings.event_bias_mode": False, "scheduler.runner.settings.swing_news_guard": True})
+    assert rows == [] and logs[0].skip_reason == "news_blackout"
+
+
+@pytest.mark.asyncio
+async def test_swing_trades_open_through_a_news_blackout_by_default():
+    # 27 Oct 2026, owner: "news should never go blackout" - the swing book follows its backtest, which had none
     from types import SimpleNamespace as NS
     rows, logs, _ = await _swing([("BTCUSDT", "donchian", 1, 60000.0)], {
         "scheduler.runner.AppRunner._blackout": lambda self, now: NS(name="FOMC", kind="calendar"),
         "scheduler.runner.settings.event_bias_mode": False})
-    assert rows == [] and logs[0].skip_reason == "news_blackout"
+    assert len(rows) == 1 and logs[0].skip_reason != "news_blackout"
 
 
 @pytest.mark.asyncio

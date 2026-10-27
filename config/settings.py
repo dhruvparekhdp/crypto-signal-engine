@@ -238,7 +238,10 @@ class Settings(BaseSettings):
     swing_daily_loss_pct: float = 9.0
     swing_streak_pause_after: int = 3
     swing_streak_pause_minutes: int = 120
-    swing_news_guard: bool = True
+    # off (owner, 27 Oct 2026: "news should never go blackout ... why block"): the 5-year swing backtest never had a
+    # blackout; swing entries within 24 h after an FOMC / jobs report averaged +1.11R (n 169) vs +0.34R otherwise,
+    # and AI-tagged headline windows blocked 7 of 11 swing signals on 24 Oct (e.g. UK inflation filed as a blackout)
+    swing_news_guard: bool = False
     # 12 Oct 2026: 9% -> 12%. Backtest (live wallet setup): 12-month median x2.08 -> x2.25, 24-month x3.41 -> x3.85,
     # worst fall 31% -> 32%; 15-20% added nothing. At 9%, three 3% shorts blocked every new signal for 4 days.
     swing_max_side_risk_pct: float = 0.12       # 0 = off
