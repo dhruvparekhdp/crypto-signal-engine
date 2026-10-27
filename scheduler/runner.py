@@ -341,6 +341,7 @@ class AppRunner:
         # when it last ran (so a fast-move trigger cannot fire it twice).
         self._monitor_day = None
         self._monitor_calls = 0
+        self._monitor_release_calls = 0
         self._monitor_last_run = None
         self.multi_horizon = MultiHorizonPredictor()
         self._ws_tasks: list[asyncio.Task] = []
@@ -3474,10 +3475,17 @@ class AppRunner:
         try:
             if not settings.event_monitor_enabled or not chain_for("briefing"):
                 return
+            from analysis.ai_gates import event_near
             if self._monitor_day != now.date():
-                self._monitor_day, self._monitor_calls = now.date(), 0
-            if self._monitor_calls >= settings.event_monitor_daily_cap:
-                log.info("event_monitor_daily_cap_reached", calls=self._monitor_calls)
+                self._monitor_day, self._monitor_calls, self._monitor_release_calls = now.date(), 0, 0
+            # 27 Oct 2026 (owner: "volatility is expected now, fed rates news ... try to fill news part"): a run near
+            # a scheduled release (FOMC, CPI, jobs) has its own allowance, so a busy morning cannot leave the
+            # monitor blind for the release itself
+            release = event_near(now)
+            used, cap = ((self._monitor_release_calls, settings.event_monitor_release_cap) if release
+                         else (self._monitor_calls, settings.event_monitor_daily_cap))
+            if used >= cap:
+                log.info("event_monitor_daily_cap_reached", calls=used, release=release)
                 return
             async with AsyncSessionFactory() as session:
                 repo_ = Repository(session)
@@ -3498,7 +3506,10 @@ class AppRunner:
             if not reasons:
                 log.info("event_monitor_skipped_quiet")
                 return
-            self._monitor_calls += 1
+            if release:
+                self._monitor_release_calls += 1
+            else:
+                self._monitor_calls += 1
             self._monitor_last_run = now
             reply = await ask_json(monitor_model_role(max_level), MONITOR_SYSTEM,
                                    monitor_prompt(calendar_text(now), active),
@@ -3540,7 +3551,8 @@ class AppRunner:
                 self.latest_briefing = await repo.latest_briefing()
             log.info("event_monitor_ran", new=len(got["new"]), updates=len(got["updates"]),
                      resolved=len(got["resolved"]), max_level=max_level,
-                     served_by=reply.served_by, calls_today=self._monitor_calls)
+                     served_by=reply.served_by, calls_today=self._monitor_calls,
+                     release_calls_today=self._monitor_release_calls)
         except Exception:
             log.exception("event_monitor_failed")
         finally:

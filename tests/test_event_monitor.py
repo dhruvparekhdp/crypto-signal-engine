@@ -139,3 +139,54 @@ class TestWiring(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class _Session:
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *a):
+        return False
+
+
+def _monitor_runner(monkeypatch, near: bool):
+    from datetime import UTC, datetime
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock
+
+    from analysis import ai_gates
+    from collectors import llm_client
+    from scheduler import runner as R
+    r = R.AppRunner()
+    monkeypatch.setattr(llm_client, "chain_for", lambda role: ["gemini"])
+    monkeypatch.setattr(ai_gates, "event_near", lambda now, *a, **k: near)
+    monkeypatch.setattr(R, "AsyncSessionFactory", _Session)
+    monkeypatch.setattr(R, "Repository", lambda s: SimpleNamespace(recent_events=AsyncMock(return_value=[]),
+                                                                   news_sentiment_since=AsyncMock(return_value=[])))
+    ask = AsyncMock(return_value=SimpleNamespace(data=None, failures=[]))
+    monkeypatch.setattr(llm_client, "ask_json", ask)
+    r.crypto_store.get = AsyncMock(return_value=None)
+    r._schedule_monitor = lambda m: None
+    r._monitor_day = datetime.now(UTC).date()
+    return r, ask
+
+
+async def test_a_busy_morning_cannot_use_up_the_checks_for_a_scheduled_release(monkeypatch):
+    # 27 Oct 2026: 8 checks were gone by 10:08 UTC the day before the FOMC and the monitor was blind for 8 hours
+    from config.settings import settings
+    r, ask = _monitor_runner(monkeypatch, near=True)
+    r._monitor_calls = settings.event_monitor_daily_cap                 # the ordinary allowance is spent
+    await r._event_monitor_job()
+    assert ask.await_count == 1 and r._monitor_release_calls == 1 and r._monitor_calls == settings.event_monitor_daily_cap
+    r._monitor_release_calls = settings.event_monitor_release_cap       # the release allowance has its own cap
+    await r._event_monitor_job()
+    assert ask.await_count == 1
+
+
+async def test_away_from_releases_the_daily_cap_still_holds(monkeypatch):
+    from config.settings import settings
+    assert settings.event_monitor_daily_cap >= 40
+    r, ask = _monitor_runner(monkeypatch, near=False)
+    r._monitor_calls = settings.event_monitor_daily_cap
+    await r._event_monitor_job()
+    assert ask.await_count == 0

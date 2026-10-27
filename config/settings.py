@@ -163,7 +163,10 @@ class Settings(BaseSettings):
     move_attribution_enabled: bool = True
     # The event monitor: adaptive, jittered web checks with a daily cap.
     event_monitor_enabled: bool = True
-    event_monitor_daily_cap: int = 8            # 18 Oct: runs only when something happened (analysis/ai_gates.py)
+    event_monitor_daily_cap: int = 40           # 18 Oct: runs only when something happened (analysis/ai_gates.py)
+    # 27 Oct: 8 a day ran out at 10:08 UTC on the day before an FOMC (7 runs in one level-4 burst) and the monitor was
+    # blind for 8 h; Gemini flash-lite had used 22 of its 500 a day. Runs within 2 h of a scheduled release do not count.
+    event_monitor_release_cap: int = 16
     llm_chain_briefing_calm: str = (
         "gemini:gemini-3.1-flash-lite+search, gemini:gemini-3.5-flash-lite+search, "
         "groq:openai/gpt-oss-20b+search, openrouter:nvidia/nemotron-3-ultra-550b-a55b:free+search")

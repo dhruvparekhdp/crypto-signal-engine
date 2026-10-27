@@ -93,3 +93,15 @@ async def test_the_rss_job_scores_with_our_model_when_every_headline_has_a_vecto
 async def test_without_vectors_finbert_scores_as_before(monkeypatch):
     rows, classify, _ = await _run_job(monkeypatch, [])                   # the Space could not embed
     assert classify.await_count == 1 and rows["id0"].model == "hf/finbert+rules"
+
+
+def test_a_headline_about_the_fed_decision_is_never_dropped_as_noise():
+    # 27 Oct 2026, the day before an FOMC: the model called these noise (it was trained before Warsh chaired the Fed)
+    for h in ("Fed rate hikes are coming, but not this week: CNBC survey",
+              "FOMC Meeting LIVE Updates Today Oct. 27: Will Kevin Warsh Announce Surprise Fed Rate Hike?"):
+        r = H.classify([-1.0, 0.0], h, TINY)
+        assert r["relevant"] and r["event_type"] == "rate_decision" and r["symbol"] == "all"
+        assert r["confidence"] < 0.7                                   # still only the LLM check can pause trading
+    for h in ("FOMC Meeting LIVE Updates Today Oct. 27: How To Watch, What To Expect, and Impact",
+              "Stock Market Today: Nasdaq Up As Fed Meet Starts"):
+        assert H.classify([-1.0, 0.0], h, TINY)["event_type"] == "noise"

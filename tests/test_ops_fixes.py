@@ -120,7 +120,7 @@ async def test_our_space_gets_its_own_key_json_mode_and_a_long_timeout():
 def test_jobs_that_cost_more_than_they_gave_are_trimmed():
     from config.settings import Settings
     f = Settings.model_fields
-    assert f["event_monitor_daily_cap"].default == 8     # 18 Oct 2026: gated, runs only when something happened
+    assert f["event_monitor_daily_cap"].default == 40    # 18 Oct gated to 8; 27 Oct 40 (8 ran out before an FOMC)
     assert f["v2_backtest_enabled"].default is False
     assert f["coindcx_enabled"].default is False
 

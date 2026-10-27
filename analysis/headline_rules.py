@@ -13,7 +13,7 @@ import re
 EVENT_RULES: list[tuple[str, tuple[str, ...]]] = [
     ("hack", ("hack", "exploit", "drained", "stolen", "breach", "insolven", "bankrupt", "depeg", "rug pull")),
     ("rate_decision", ("rate cut", "rate hike", "fomc", "fed decision", "interest rate", "basis points", "bps",
-                       "powell", "rate decision", "holds rates", "ecb", "boj")),
+                       "powell", "warsh", "rate decision", "holds rates", "federal reserve", "ecb", "boj")),
     ("inflation_data", ("cpi", "inflation", "pce", "ppi", "consumer prices")),
     ("jobs_data", ("payroll", "nfp", "jobless", "unemployment", "jobs report", "labor market")),
     ("war", ("war", "missile", "invasion", "airstrike", "military", "attack on", "sanction", "ceasefire")),

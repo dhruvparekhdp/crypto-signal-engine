@@ -15,11 +15,17 @@ from __future__ import annotations
 
 import json
 import math
+import re
 from functools import lru_cache
 from pathlib import Path
 
 MODEL_PATH = Path(__file__).resolve().parent / "models" / "headline_triage.json"
 HIGH_IMPACT = {"rate_decision", "inflation_data", "jobs_data", "war", "tariff"}
+# 27 Oct 2026, the day before an FOMC: the model filed "Fed rate hikes are coming, but not this week: CNBC survey" and
+# "Will Kevin Warsh Announce Surprise Fed Rate Hike?" as noise (it was trained before Warsh chaired the Fed). A headline
+# that names the rate decision itself is kept as rate_decision; "what to expect" pieces stay noise (headline_rules).
+FED_DECISION = re.compile(r"\bfomc\b|rate (hike|cut|decision)s?\b|fed decision|holds rates|\bwarsh\b|federal reserve",
+                          re.I)
 UNCONFIRMED_HIGH_IMPACT_CAP = 0.69          # below the 0.7 that turns a headline into a trading pause
 MACRO = {"rate_decision", "inflation_data", "jobs_data", "war", "tariff", "macro_other"}
 
@@ -56,20 +62,24 @@ def classify(vec: list[float], headline: str, model: dict | None = None) -> dict
     m = model or load()
     if m is None or not vec or len(vec) != m["dim"]:
         return None
-    from analysis.headline_rules import symbol
+    from analysis.headline_rules import NOISE_PATTERNS, symbol
     x = _unit(vec)
     p_rel = 1 / (1 + math.exp(-_scores(m["relevance"], x)[0]))           # binary head: one row, class True
     relevant = p_rel >= m["threshold"]
+    fed = FED_DECISION.search(headline) is not None and not NOISE_PATTERNS.search(headline)
+    relevant = relevant or fed
     ev_classes, ev_p = m["event"]["classes"], _softmax(_scores(m["event"], x))
     ranked = sorted(zip(ev_p, ev_classes), reverse=True)
     if not relevant:
         event, p_ev = "noise", 1 - p_rel
+    elif fed:
+        event = "rate_decision"
     else:
         p_ev, event = next(((p, c) for p, c in ranked if c != "noise"), ranked[0])
     if relevant:
         d = dict(zip(m["direction"]["classes"], _softmax(_scores(m["direction"], x))))
         score = d.get(1, 0.0) - d.get(-1, 0.0)
-        confidence = p_rel * max(d.values())
+        confidence = (max(p_rel, m["threshold"]) if fed else p_rel) * max(d.values())
     else:
         score, confidence = 0.0, min(0.1, 1 - p_rel)
     if event == "hack":
