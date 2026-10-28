@@ -672,7 +672,8 @@ class AppRunner:
                         wallet = trade.wallet_after
                         await repo.close_position_atomic(cycle.id, row.id, trade, wallet)
                         if getattr(pos, "trade_mode", "") == "swing":
-                            dres = await self._delta_call("on_paper_close", pos.symbol, trade.reason.value)
+                            dres = await self._delta_call("on_paper_close", pos.symbol, trade.reason.value,
+                                                          self._spec_of_pos(pos))
                             if not dres or dres.get("ok") or dres.get("reason") == "not_open_on_delta":
                                 await self._channel_post("close", pos.symbol, trade.reason.value, trade.net_pnl > 0)
                         events = [_event(
@@ -728,7 +729,7 @@ class AppRunner:
                             self._tick_notes.append(f"profit lock ({settings.swing_lock_mode}): "
                                                     f"stop {pos.stop_price:.6g} -> {new_stop:.6g}")
                             pos.stop_price = new_stop
-                            await self._delta_call("on_stop_change", pos.symbol, new_stop)
+                            await self._delta_call("on_stop_change", pos.symbol, new_stop, self._spec_of_pos(pos))
                             in_profit = (new_stop > pos.entry_price) if side_i > 0 else (new_stop < pos.entry_price)
                             if in_profit or abs(new_stop - pos.entry_price) / pos.entry_price < 0.005:
                                 pos.stop_moved_by_profit_lock = True       # exits are labelled profit_lock, not stop
@@ -810,7 +811,8 @@ class AppRunner:
                     wallet = trade.wallet_after
                     await repo.close_position_atomic(cycle.id, row.id, trade, wallet)
                     if getattr(pos, "trade_mode", "") == "swing":
-                        dres = await self._delta_call("on_paper_close", pos.symbol, trade.reason.value)
+                        dres = await self._delta_call("on_paper_close", pos.symbol, trade.reason.value,
+                                                      self._spec_of_pos(pos))
                         if not dres or dres.get("ok") or dres.get("reason") == "not_open_on_delta":
                             await self._channel_post("close", pos.symbol, trade.reason.value, trade.net_pnl > 0)
                     events.append(_event(
@@ -1486,11 +1488,21 @@ class AppRunner:
             guard_block = self._swing_account_guard(closed, now, equity0) if settings.swing_account_guards else None
         blackout = self._blackout(now) if settings.swing_news_guard else None
         news_bias = self._event_bias_for(blackout, states) if (blackout is not None and settings.event_bias_mode) else None
+        per_coin = sb.per_coin_limit(now)
         for sig in sigs:
             log_id = await self._log_signal(sig)
             if sig.symbol in open_syms:
-                await self._mark_skipped(log_id, "already_open_in_symbol")
-                continue
+                # 28 Oct 2026 (owner): up to per_coin swing trades on one coin, same direction, different strategies
+                mine = [(1 if str(getattr(p.side, "value", p.side)) == "long" else -1,
+                         sb.spec_of(getattr(p, "signal_type", ""), getattr(p, "timeframe", "")))
+                        for p in cstate.positions if p.symbol == sig.symbol]
+                why = (sb.coin_refusal(mine, 1 if sig.direction == "long" else -1,
+                                       sb.spec_of(sig.signal_type, sig.timeframe), per_coin)
+                       if all(getattr(p, "trade_mode", "") == "swing" for p in cstate.positions if p.symbol == sig.symbol)
+                       else "already_open_in_symbol")
+                if why:
+                    await self._mark_skipped(log_id, why)
+                    continue
             if sig.symbol in excluded:
                 await self._mark_skipped(log_id, "coin_without_edge")
                 continue
@@ -2264,14 +2276,22 @@ class AppRunner:
                        float(settings.delta_india_max_spread_pct), float(settings.delta_india_max_slippage_r))
         return g.reason
 
+    @staticmethod
+    def _spec_of_pos(pos) -> str:
+        """The strategy identity of a paper swing position, which names its own record on Delta (several per coin)."""
+        from analysis import swing_book as sb
+        return sb.spec_of(getattr(pos, "signal_type", ""), getattr(pos, "timeframe", ""))
+
     async def _mirror_delta_india(self, symbol: str, side_word: str, entry: float, stop: float,
                                   target: float, signal_type: str, usdt_inr: float = 83.0, timeframe: str = "") -> bool:
         """Copy a paper swing open to every active Delta book (live first, then the demo). True when the live book
         took it."""
+        from analysis import swing_book as sb
         live_ok = False
         for book in self._delta_targets():
             plan = await self._delta_call_one(book, "on_paper_open", symbol, side_word, entry, stop, target,
-                                              signal_type, usdt_inr=usdt_inr)
+                                              signal_type, sb.spec_of(signal_type, timeframe), sb.per_coin_limit(),
+                                              usdt_inr=usdt_inr)
             if plan is None:
                 continue
             log.info("delta_india_mirror", symbol=symbol, target=book, ok=plan.ok, reason=plan.reason,

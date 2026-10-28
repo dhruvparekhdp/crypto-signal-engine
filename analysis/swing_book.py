@@ -410,6 +410,42 @@ COIN_R = {"SOL": 0.440, "LINK": 0.392, "DOGE": 0.328, "SUI": 0.298, "ADA": 0.272
           "AVAX": 0.190, "BTC": 0.112, "XRP": 0.099, "LTC": 0.003, "BCH": -0.016}
 
 
+def spec_of(signal_type: str, timeframe: str) -> str:
+    """One trade's strategy identity on a coin: 'swing_donchian@4h'."""
+    return f"{signal_type or ''}@{timeframe or ''}"
+
+
+def per_coin_limit(now: datetime | None = None) -> int:
+    """Swing trades allowed on one coin now: settings.swing_max_per_coin until swing_multi_per_coin_until, then 1
+    (owner 28 Oct 2026: on for 3 days, then review)."""
+    from config.settings import settings
+    n = max(1, int(settings.swing_max_per_coin or 1))
+    until = (settings.swing_multi_per_coin_until or "").strip()
+    if n > 1 and until:
+        try:
+            end = datetime.fromisoformat(until.replace("Z", "+00:00"))
+        except ValueError:
+            return 1                                        # a bad date must never leave it on
+        end = end if end.tzinfo else end.replace(tzinfo=UTC)
+        if (now or datetime.now(UTC)).astimezone(UTC) >= end:
+            return 1
+    return n
+
+
+def coin_refusal(open_on_coin: list[tuple[int, str]], side: int, spec: str, limit: int) -> str:
+    """Why another swing trade on this coin is refused ('' = allowed). open_on_coin: (side, spec) of the coin's open
+    swing trades. Same direction only (Delta nets a coin's trades into one position) and one trade per strategy."""
+    if not open_on_coin:
+        return ""
+    if len(open_on_coin) >= limit:
+        return "already_open_in_symbol"
+    if any(s != side for s, _ in open_on_coin):
+        return "opposite_side_open_in_symbol"
+    if any(sp == spec for _, sp in open_on_coin):
+        return "same_strategy_open_in_symbol"
+    return ""
+
+
 def priority(signal_type: str, timeframe: str, symbol: str) -> float:
     """Higher = take first. Unknown strategies or coins rank at the book's average."""
     strat = signal_type.replace("swing_", "")

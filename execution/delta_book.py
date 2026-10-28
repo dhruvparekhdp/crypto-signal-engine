@@ -162,7 +162,7 @@ class DeltaBook:
         tmp.replace(self.state_path)
 
     async def plan(self, binance_symbol: str, side_word: str, entry: float,
-                   stop: float, target: float) -> MirrorPlan:
+                   stop: float, target: float, spec: str = "", per_coin: int = 1) -> MirrorPlan:
         delta_sym = binance_to_delta_symbol(binance_symbol)
         product = await self.client.product(delta_sym)
         if product is None:
@@ -194,6 +194,11 @@ class DeltaBook:
         # the leverage this stop allows (the order is placed at exactly that leverage)
         stop_frac = abs(entry - stop) / entry if entry > 0 else 0.0
         lev = leverage_for(stop_frac, self.min_leverage)
+        same = _same_coin(self._load_state().get("positions") or {}, delta_sym)
+        if same:
+            # owner 28 Oct 2026: several trades on one coin - Delta nets them into ONE position with ONE leverage, so
+            # a new trade may lower the coin's leverage (liquidation moves away) but never raise it
+            lev = min([lev] + [int(r.get("leverage") or lev) for _, r in same])
         if liquidation_distance(lev) < stop_frac * 1.2:
             # the minimum leverage would put liquidation within 1.2x of the stop: do not trade this one
             return MirrorPlan(False, "stop_too_wide_for_leverage", self.mode, binance_symbol, delta_sym, product.id,
@@ -213,9 +218,14 @@ class DeltaBook:
         if self.max_open and len(state.get("positions") or {}) >= self.max_open:
             return MirrorPlan(False, "delta_book_full", self.mode, binance_symbol, delta_sym,
                               product.id, side, size, entry, stop, target, notional, risk, inr)
-        if delta_sym in (state.get("positions") or {}):
-            return MirrorPlan(False, "already_open_on_delta", self.mode, binance_symbol, delta_sym,
-                              product.id, side, size, entry, stop, target, notional, risk, inr)
+        same = _same_coin(state.get("positions") or {}, delta_sym)
+        if same:
+            from analysis.swing_book import coin_refusal
+            why = coin_refusal([(1 if r.get("side") == "buy" else -1, r.get("spec") or "(earlier trade)")
+                                for _, r in same], 1 if side == "buy" else -1, spec or "", max(1, int(per_coin or 1)))
+            if why:
+                return MirrorPlan(False, why.replace("in_symbol", "on_delta"), self.mode, binance_symbol, delta_sym,
+                                  product.id, side, size, entry, stop, target, notional, risk, inr)
         return MirrorPlan(True, "", self.mode, binance_symbol, delta_sym, product.id, side,
                           size, entry, stop, target, notional, risk, inr, lev)
 
@@ -296,8 +306,10 @@ class DeltaBook:
                 "new_flows": [{"type": v["type"], "inr": v["inr"]} for v in new]}
 
     async def on_paper_open(self, binance_symbol: str, side_word: str, entry: float,
-                            stop: float, target: float, signal_type: str = "") -> MirrorPlan:
-        """Called after a paper swing position opens."""
+                            stop: float, target: float, signal_type: str = "", spec: str = "",
+                            per_coin: int = 1) -> MirrorPlan:
+        """Called after a paper swing position opens. Each trade is its own record (key: the Delta symbol, then
+        'SYM#2', 'SYM#3' for more trades on the same coin), named by its strategy `spec`."""
         if self.mode == "off":
             return MirrorPlan(False, "mode_off")
         if self.kill_switch:
@@ -309,7 +321,7 @@ class DeltaBook:
             self._append_shadow({"t": int(time.time() * 1000), "event": "refused", "reason": guard,
                                  "binance_symbol": binance_symbol})
             return MirrorPlan(False, guard)
-        plan = await self.plan(binance_symbol, side_word, entry, stop, target)
+        plan = await self.plan(binance_symbol, side_word, entry, stop, target, spec, per_coin)
         row = {**asdict(plan), "t": int(time.time() * 1000), "signal_type": signal_type,
                "placed": False}
         if not plan.ok:
@@ -322,13 +334,14 @@ class DeltaBook:
                   "init_stop": plan.stop, "exchange_stop": plan.stop, "risk": abs(plan.entry - plan.stop),
                   "target": plan.target, "product_id": plan.product_id, "tick": tick,
                   "binance_symbol": binance_symbol.lower(), "opened_ms": int(time.time() * 1000),
-                  "signal_type": signal_type}
+                  "signal_type": signal_type, "spec": spec, "delta_symbol": plan.delta_symbol}
         can_live = self.live
         if not can_live:
             row["note"] = "shadow_only_no_order"
             self._append_shadow(row)
             state = self._load_state()                       # rehearse the ladder in shadow too
-            state.setdefault("shadow", {})[plan.delta_symbol] = record
+            shadow = state.setdefault("shadow", {})
+            shadow[_new_key(shadow, plan.delta_symbol)] = record
             self._save_state(state)
             return plan
 
@@ -376,12 +389,14 @@ class DeltaBook:
         # stop can never leave a position the 5-minute reconcile does not know about (it restores a missing stop).
         record["pending"] = True
         state = self._load_state()
-        state.setdefault("positions", {})[plan.delta_symbol] = record
+        positions = state.setdefault("positions", {})
+        key = _new_key(positions, plan.delta_symbol)
+        positions[key] = record
         self._save_state(state)
         try:
             entry_order = await self.client.place_market(plan.product_id, plan.side, plan.size)
             record.update(entry_fill=(entry_order or {}).get("average_fill_price") or "filled")
-            self._update_record(plan.delta_symbol, record)
+            self._update_record(key, record)
             close_side = "sell" if plan.side == "buy" else "buy"
             stop_order = None
             for attempt in range(2):                         # the stop is not optional: retry once, else go flat
@@ -395,7 +410,7 @@ class DeltaBook:
             if stop_order is None:
                 row.update(placed=True, entry_order=_trim(entry_order), error=f"stop_rejected_closed: {str(stop_err)[:150]}")
                 self._append_shadow(row)
-                await self.on_paper_close(binance_symbol, "stop_rejected")
+                await self.on_paper_close(binance_symbol, "stop_rejected", spec)
                 return MirrorPlan(False, "stop_rejected_closed", plan.mode, plan.binance_symbol, plan.delta_symbol,
                                   plan.product_id, plan.side, plan.size, plan.entry, plan.stop, plan.target,
                                   plan.notional_usd, plan.risk_inr, plan.inr_available, plan.leverage)
@@ -412,7 +427,7 @@ class DeltaBook:
             })
             record.update(stop_order_id=_oid(stop_order), tp_order_id=_oid(tp_order) if tp_order else None,
                           pending=False)
-            self._update_record(plan.delta_symbol, record)
+            self._update_record(key, record)
             # the exchange's own liquidation price must sit beyond the stop; if not, get out now
             liq = None
             if hasattr(self.client, "liquidation_price"):
@@ -421,10 +436,15 @@ class DeltaBook:
                 except DeltaError:
                     liq = None
             row["liquidation"] = liq
-            if liq and ((plan.side == "sell" and liq <= plan.stop) or (plan.side == "buy" and liq >= plan.stop)):
-                row["error"] = f"liquidation_inside_stop: liq {liq} vs stop {plan.stop}"
+            # every trade on this coin shares the one position's liquidation price: it must sit beyond all their stops
+            stops = [plan.stop] + [float(r.get("exchange_stop") or r.get("stop") or plan.stop)
+                                   for k, r in _same_coin(self._load_state().get("positions") or {}, plan.delta_symbol)
+                                   if k != key]
+            worst = max(stops) if plan.side == "sell" else min(stops)
+            if liq and ((plan.side == "sell" and liq <= worst) or (plan.side == "buy" and liq >= worst)):
+                row["error"] = f"liquidation_inside_stop: liq {liq} vs stop {worst}"
                 self._append_shadow(row)
-                await self.on_paper_close(binance_symbol, "liquidation_inside_stop")
+                await self.on_paper_close(binance_symbol, "liquidation_inside_stop", spec)
                 return MirrorPlan(False, "liquidation_inside_stop", plan.mode, plan.binance_symbol,
                                   plan.delta_symbol, plan.product_id, plan.side, plan.size, plan.entry,
                                   plan.stop, plan.target, plan.notional_usd, plan.risk_inr, plan.inr_available,
@@ -434,7 +454,7 @@ class DeltaBook:
             row["error"] = str(e)[:200]
             state = self._load_state()
             if not record.get("entry_fill"):                  # the entry itself failed: nothing is open
-                (state.get("positions") or {}).pop(plan.delta_symbol, None)
+                (state.get("positions") or {}).pop(key, None)
             state.setdefault("errors", []).append({
                 "t": int(time.time() * 1000),
                 "error": str(e)[:200],
@@ -449,9 +469,9 @@ class DeltaBook:
         return plan
 
 
-    def _update_record(self, delta_sym: str, record: dict) -> None:
+    def _update_record(self, key: str, record: dict) -> None:
         state = self._load_state()
-        state.setdefault("positions", {})[delta_sym] = record
+        state.setdefault("positions", {})[key] = record
         self._save_state(state)
 
     # --- the profit ladder on the exchange (13 Oct 2026) -------------------------------------------------------------
@@ -461,18 +481,19 @@ class DeltaBook:
         cand = lock_stop - side * self.backstop_r * risk
         return max(init_stop, cand) if side > 0 else min(init_stop, cand)
 
-    async def on_stop_change(self, binance_symbol: str, lock_stop: float) -> dict:
+    async def on_stop_change(self, binance_symbol: str, lock_stop: float, spec: str = "") -> dict:
         """The engine moved this trade's stop (ladder). Tighten the exchange backstop if it should move."""
         delta_sym = binance_to_delta_symbol(binance_symbol)
         state = self._load_state()
         where = "positions" if self.live else "shadow"
-        pos = (state.get(where) or {}).get(delta_sym)
+        key = _find_key(state.get(where) or {}, delta_sym, spec)
+        pos = (state.get(where) or {}).get(key) if key else None
         if not pos:
             return {"ok": False, "reason": "not_open_on_delta"}
         side = 1 if pos["side"] == "buy" else -1
         if pos.get("stop") != lock_stop:          # the engine's current lock, shown on the Live page (18 Oct review:
             pos["stop"] = lock_stop               # it kept showing the original stop after the ladder moved)
-            state[where][delta_sym] = pos
+            state[where][key] = pos
             self._save_state(state)
         want = round_to_tick(self.backstop_for(side, pos["init_stop"], pos["risk"], lock_stop), pos.get("tick", 0), side)
         cur = pos["exchange_stop"]
@@ -507,38 +528,55 @@ class DeltaBook:
                     # price is already beyond where the backstop belongs (testnet 14 Oct): do what that stop
                     # would have done and close at market; the old stop stays until the close is through
                     self._append_shadow(row)
-                    closed = await self.on_paper_close(binance_symbol, "backstop_breached")
+                    closed = await self.on_paper_close(binance_symbol, "backstop_breached", spec)
                     return {"ok": closed.get("ok", False), "reason": "closed_backstop_breached"}
                 self._append_shadow(row)
                 return {"ok": False, "reason": f"amend_failed_{e}"}
         pos["exchange_stop"] = want
-        state[where][delta_sym] = pos
+        state[where][key] = pos
         self._save_state(state)
         self._append_shadow(row)
         return {"ok": True, "reason": "amended", "exchange_stop": want}
 
-    async def on_paper_close(self, binance_symbol: str, reason: str = "") -> dict:
-        """The engine closed this trade (target, confirmed lock, time, stop). Flatten on Delta, cancel leftovers."""
+    async def on_paper_close(self, binance_symbol: str, reason: str = "", spec: str = "") -> dict:
+        """The engine closed this trade (target, confirmed lock, time, stop). Flatten on Delta, cancel leftovers.
+        When other trades stay open on the same coin, only this trade's contracts are sold and only its own stop and
+        target orders are cancelled."""
         delta_sym = binance_to_delta_symbol(binance_symbol)
         state = self._load_state()
         where = "positions" if self.live else "shadow"
-        pos = (state.get(where) or {}).pop(delta_sym, None)
+        key = _find_key(state.get(where) or {}, delta_sym, spec)
+        pos = (state.get(where) or {}).pop(key, None) if key else None
         if not pos:
             return {"ok": False, "reason": "not_open_on_delta"}
-        row = {"t": int(time.time() * 1000), "event": "close", "delta_symbol": delta_sym, "reason": reason,
+        others = _same_coin(state.get(where) or {}, delta_sym)
+        row = {"t": int(time.time() * 1000), "event": "close", "delta_symbol": delta_sym, "key": key, "reason": reason,
                "mode": self.mode, "placed": False}
         if self.live:
             try:
                 size = await self.client.position_size(pos["product_id"])
-                if size:
+                if others:
+                    n = min(abs(size), int(pos.get("size") or 0))
+                    if n:
+                        await self.client.place_market(pos["product_id"], "sell" if size > 0 else "buy", n,
+                                                       reduce_only=True)
+                        row["closed_contracts"] = n
+                    for oid in (pos.get("stop_order_id"), pos.get("tp_order_id")):
+                        if oid:
+                            try:
+                                await self.client.cancel_order(oid, pos["product_id"])
+                            except DeltaError:
+                                pass                  # already filled or gone
+                elif size:
                     await self.client.place_market(pos["product_id"], "sell" if size > 0 else "buy", abs(size),
                                                    reduce_only=True)
                     row["closed_contracts"] = abs(size)
-                await self.client.cancel_all(pos["product_id"])
+                if not others:
+                    await self.client.cancel_all(pos["product_id"])
                 row["placed"] = True
             except DeltaError as e:
                 row["error"] = str(e)[:200]
-                state[where][delta_sym] = pos          # keep it so reconcile retries
+                state[where][key] = pos                # keep it so reconcile retries
                 self._save_state(state)
                 self._append_shadow(row)
                 return {"ok": False, "reason": f"close_failed_{e}"}
@@ -562,7 +600,15 @@ class DeltaBook:
         floor_event = await self.refresh_capital()          # deposits / withdrawals -> the floor (after the rate)
         state = self._load_state()
         events = [floor_event] if floor_event else []
+        groups: dict[str, list] = {}
+        for key, pos in (state.get("positions") or {}).items():
+            groups.setdefault(_coin_of(key, pos), []).append(key)
+        for delta_sym, keys in groups.items():
+            if len(keys) > 1:
+                events += await self._reconcile_coin(state, delta_sym, keys)
         for delta_sym, pos in list((state.get("positions") or {}).items()):
+            if len(groups.get(_coin_of(delta_sym, pos), [])) > 1:
+                continue                                    # several trades on this coin: done above
             if pos.get("pending") and time.time() * 1000 - int(pos.get("opened_ms") or 0) < 120_000:
                 continue                                    # an entry in flight right now: leave it to on_paper_open
             try:
@@ -608,12 +654,108 @@ class DeltaBook:
             self._append_shadow({"t": int(time.time() * 1000), **e})
         return events
 
+    async def _reconcile_coin(self, state: dict, delta_sym: str, keys: list[str]) -> list[dict]:
+        """Several trades on one coin (28 Oct 2026): Delta shows one net position. Flat -> all closed. Smaller than our
+        records -> the trades whose own stop or target order is no longer open were filled on the exchange. Otherwise
+        every trade must still have its own stop (put back at its own size if missing)."""
+        positions = state["positions"]
+        recs = [(k, positions[k]) for k in keys]
+        now_ms = time.time() * 1000
+        if any(r.get("pending") and now_ms - int(r.get("opened_ms") or 0) < 120_000 for _, r in recs):
+            return []                                       # an entry in flight: leave it to on_paper_open
+        pid = recs[0][1]["product_id"]
+        try:
+            size = await self.client.position_size(pid)
+            orders = await self.client.open_orders(pid)
+        except DeltaError as e:
+            return [{"delta_symbol": delta_sym, "event": "reconcile_error", "error": str(e)[:160]}]
+        events = []
+        if size == 0:
+            try:
+                await self.client.cancel_all(pid)
+            except DeltaError:
+                pass
+            for k, r in recs:
+                positions.pop(k, None)
+                events.append({"delta_symbol": delta_sym, "key": k, "event": "closed_on_exchange",
+                               "binance_symbol": r.get("binance_symbol")})
+            return events
+        open_ids = {_oid(o) for o in orders}
+        ours = sum(int(r.get("size") or 0) for _, r in recs)
+        if abs(size) < ours:
+            for k, r in recs:
+                gone = [o for o in (r.get("stop_order_id"), r.get("tp_order_id")) if o and o not in open_ids]
+                if not gone:
+                    continue
+                for oid in (r.get("stop_order_id"), r.get("tp_order_id")):
+                    if oid and oid in open_ids:
+                        try:
+                            await self.client.cancel_order(oid, pid)
+                        except DeltaError:
+                            pass
+                positions.pop(k, None)
+                events.append({"delta_symbol": delta_sym, "key": k, "event": "closed_on_exchange",
+                               "binance_symbol": r.get("binance_symbol")})
+            left = sum(int(r.get("size") or 0) for k, r in recs if k in positions)
+            if left != abs(size):
+                events.append({"delta_symbol": delta_sym, "event": "size_mismatch", "ours": left, "delta": size})
+            return events
+        if abs(size) != ours:
+            events.append({"delta_symbol": delta_sym, "event": "size_mismatch", "ours": ours, "delta": size})
+        for k, r in recs:
+            if r.get("stop_order_id") in open_ids:
+                continue
+            try:
+                side = 1 if r["side"] == "buy" else -1
+                new = await self.client.place_stop_market(pid, "sell" if side > 0 else "buy", int(r["size"]),
+                                                          r["exchange_stop"])
+                r["stop_order_id"] = _oid(new)
+                events.append({"delta_symbol": delta_sym, "key": k, "event": "stop_restored",
+                               "stop": r["exchange_stop"]})
+            except DeltaError as e:
+                events.append({"delta_symbol": delta_sym, "key": k, "event": "stop_check_error", "error": str(e)[:160]})
+        return events
+
     async def flatten_all(self) -> list[dict]:
         """Kill switch action: close every live Delta position and cancel its orders."""
         out = []
         for delta_sym, pos in list((self._load_state().get("positions") or {}).items()):
-            out.append({delta_sym: await self.on_paper_close(pos.get("binance_symbol") or delta_sym, "kill_switch")})
+            out.append({delta_sym: await self.on_paper_close(pos.get("binance_symbol") or delta_sym, "kill_switch",
+                                                             pos.get("spec") or "")})
         return out
+
+
+def _coin_of(key: str, rec: dict) -> str:
+    return str(rec.get("delta_symbol") or key.split("#")[0])
+
+
+def _same_coin(records: dict, delta_sym: str) -> list[tuple[str, dict]]:
+    """Every open trade record on one Delta coin (several since 28 Oct 2026)."""
+    return [(k, r) for k, r in (records or {}).items() if _coin_of(k, r) == delta_sym]
+
+
+def _new_key(records: dict, delta_sym: str) -> str:
+    """The first trade on a coin keeps the plain symbol (as before); more get 'SYM#2', 'SYM#3'."""
+    if delta_sym not in records:
+        return delta_sym
+    i = 2
+    while f"{delta_sym}#{i}" in records:
+        i += 1
+    return f"{delta_sym}#{i}"
+
+
+def _find_key(records: dict, delta_sym: str, spec: str = "") -> str | None:
+    """The record of one trade: by its strategy, else the coin's only record, else its only record from before
+    strategies were stored."""
+    same = _same_coin(records, delta_sym)
+    if spec:
+        hit = [k for k, r in same if r.get("spec") == spec]
+        if hit:
+            return hit[0]
+    if len(same) == 1:
+        return same[0][0]
+    legacy = [k for k, r in same if not r.get("spec")]
+    return legacy[0] if len(legacy) == 1 else None
 
 
 def _oid(obj) -> int | None:

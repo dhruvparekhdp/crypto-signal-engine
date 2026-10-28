@@ -153,8 +153,12 @@ def execution_parity(live_positions: dict, paper_rows: list, marks: dict, contra
     for dsym, rec in (live_positions or {}).items():
         sym = str(rec.get("binance_symbol") or "").lower()
         side = 1 if rec.get("side") == "buy" else -1
-        paper = next((p for p in paper_rows if p.symbol.lower() == sym and getattr(p, "trade_mode", "swing") == "swing"
-                      and (1 if str(getattr(p.side, "value", p.side)) == "long" else -1) == side), None)
+        same = [p for p in paper_rows if p.symbol.lower() == sym and getattr(p, "trade_mode", "swing") == "swing"
+                and (1 if str(getattr(p.side, "value", p.side)) == "long" else -1) == side]
+        # several trades per coin (28 Oct 2026): match the paper trade of the same strategy when the record names it
+        spec = rec.get("spec")
+        paper = next((p for p in same if spec and f"{getattr(p, 'signal_type', '')}@{getattr(p, 'timeframe', '')}" == spec),
+                     same[0] if same else None)
         row = {"symbol": dsym, "side": "long" if side > 0 else "short", "problems": []}
         if paper is None:
             row["problems"].append("no open paper position on this coin and side")

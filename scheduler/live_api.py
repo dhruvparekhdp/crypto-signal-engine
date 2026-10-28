@@ -38,19 +38,37 @@ def live_rows(records: dict, exchange: list[dict], orders: list[dict], rate: flo
     """One row per position, joining our record (by contract symbol) with Delta's margined position and its open
     exit orders. A position on Delta that we have no record of is shown too (flagged), never hidden."""
     by_sym = {str(p.get("product_symbol") or "").upper(): p for p in exchange if _f(p.get("size"), 0)}
-    syms = list(dict.fromkeys(list(records) + list(by_sym)))
+
+    def coin(key: str, rec: dict) -> str:
+        return str(rec.get("delta_symbol") or key.split("#")[0]).upper()
+    per_coin: dict[str, int] = {}
+    for k, r in records.items():
+        per_coin[coin(k, r)] = per_coin.get(coin(k, r), 0) + 1
+    syms = list(dict.fromkeys(list(records) + [s for s in by_sym if s not in per_coin]))
     out = []
     for sym in syms:
-        rec, ex = records.get(sym) or {}, by_sym.get(sym) or {}
+        rec = records.get(sym) or {}
+        ex = by_sym.get(coin(sym, rec) if rec else sym) or {}
         size = int(_f(ex.get("size"), 0) or 0)
+        multi = per_coin.get(coin(sym, rec), 0) > 1 if rec else False
+        share = 1.0
+        if multi and size:
+            # several trades on one coin (28 Oct 2026): Delta shows one net position; this row is this trade's part
+            n = int(rec.get("size") or 0)
+            share = min(1.0, n / abs(size))
+            size = n if size > 0 else -n
         side = "short" if (size < 0 or rec.get("side") == "sell") else "long"
-        entry = _f(ex.get("entry_price")) or _f(rec.get("entry_fill")) or _f(rec.get("entry"))
+        entry = ((_f(rec.get("entry_fill")) or _f(rec.get("entry"))) if multi else
+                 (_f(ex.get("entry_price")) or _f(rec.get("entry_fill")) or _f(rec.get("entry"))))
         mark = _f(ex.get("mark_price"))
         cv = _f(ex.get("product", {}).get("contract_value") if isinstance(ex.get("product"), dict) else None) or \
             _f(rec.get("contract_value")) or delta_contract_for(str(rec.get("binance_symbol") or "")) or 1.0
-        upnl_usd = (mark - entry) * size * cv if entry and mark and size else _f(ex.get("unrealized_pnl"))
+        upnl_usd = (mark - entry) * size * cv if entry and mark and size else (
+            None if multi else _f(ex.get("unrealized_pnl")))
         pid = ex.get("product_id") or rec.get("product_id")
         mine = [o for o in orders if str(o.get("product_id")) == str(pid)]
+        if multi:
+            mine = [o for o in mine if o.get("id") in (rec.get("stop_order_id"), rec.get("tp_order_id"))]
         stop_o = next((o for o in mine if o.get("stop_order_type") == "stop_loss_order"), None)
         tp_o = next((o for o in mine if o.get("stop_order_type") == "take_profit_order"), None)
         init_stop = _f(rec.get("init_stop"))
@@ -59,7 +77,7 @@ def live_rows(records: dict, exchange: list[dict], orders: list[dict], rate: flo
         if entry and mark and risk:
             r_now = ((mark - entry) if side == "long" else (entry - mark)) / risk
         upnl_inr = upnl_usd * rate if upnl_usd is not None else None
-        margin_inr = (_f(ex.get("margin"), 0) or 0) * rate
+        margin_inr = (_f(ex.get("margin"), 0) or 0) * rate * share
         out.append({
             "symbol": sym, "side": side, "contracts": abs(size) if size else rec.get("size"),
             "entry": entry, "mark": mark, "liquidation": _f(ex.get("liquidation_price")),
@@ -71,7 +89,7 @@ def live_rows(records: dict, exchange: list[dict], orders: list[dict], rate: flo
             "exchange_stop": _f(stop_o.get("stop_price")) if stop_o else None,
             "exchange_target": _f(tp_o.get("stop_price")) if tp_o else None,
             "engine_stop": _f(rec.get("stop")), "init_stop": init_stop, "leverage": rec.get("leverage"),
-            "opened_ms": rec.get("opened_ms"), "signal_type": rec.get("signal_type"),
+            "opened_ms": rec.get("opened_ms"), "signal_type": rec.get("signal_type"), "spec": rec.get("spec"),
             "binance_symbol": rec.get("binance_symbol"),
             "flags": ([] if rec else ["on Delta but not in our records"]) + ([] if ex or not rec else
                                                                                ["in our records but flat on Delta"])

@@ -57,7 +57,8 @@ async def test_a_requested_trade_closes_at_the_current_price_and_the_request_is_
             assert await Repository(s).get_open_positions(cycle.id) == []
             t = (await Repository(s).get_cycle_trades(cycle.id))[0]
     assert t.exit_reason == "manual" and t.exit_price == pytest.approx(0.59, rel=0.01) and t.net_pnl > 0
-    runner._delta_call.assert_any_await("on_paper_close", "xrpusdt", "manual")       # Delta books follow
+    from unittest.mock import ANY
+    runner._delta_call.assert_any_await("on_paper_close", "xrpusdt", "manual", ANY)  # Delta books follow (per trade)
     runner._close_trade_note.assert_awaited()                                        # and the closing note
     assert json.loads((tmp_path / "requests.json").read_text()) == []
     done = [json.loads(x) for x in (tmp_path / "data" / "paper_close_requests_done.jsonl").read_text().splitlines()]
