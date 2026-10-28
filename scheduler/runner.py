@@ -3499,9 +3499,12 @@ class AppRunner:
             from analysis.ai_gates import btc_shock, event_near, fresh_news_count
             btc = await self.crypto_store.get("btcusdt")
             closes = [c.close for c in (btc.candles_1m if btc else [])]
+            last_run = getattr(self, "_monitor_last_run", None)
+            stale = last_run is None or (now - last_run).total_seconds() >= settings.event_monitor_max_quiet_minutes * 60
             reasons = [r for r, ok in (("release_near", event_near(now)), ("btc_shock", btc_shock(closes)),
                                        ("live_event", max_level >= 3),
-                                       ("news", fresh_news_count(heads, getattr(self, "_monitor_last_run", None), now) >= 3))
+                                       ("news", fresh_news_count(heads, last_run, now) >= 3),
+                                       ("stale", stale))
                        if ok]
             if not reasons:
                 log.info("event_monitor_skipped_quiet")
@@ -3898,7 +3901,7 @@ class AppRunner:
                 return
             # 18 Oct 2026: explain only coins that really moved (>= 3% in 4 h), at most N runs a day
             from analysis.ai_gates import big_movers
-            movers = big_movers(moves, settings.move_attribution_min_move_pct)
+            movers = big_movers(moves, settings.move_attribution_min_move_pct, settings.move_attribution_top_n)
             day = now.date()
             if getattr(self, "_attr_day", None) != day:
                 self._attr_day, self._attr_runs = day, 0

@@ -23,7 +23,7 @@ def test_search_roles_have_a_non_groq_fallback_and_run_less_often():
         assert "openrouter:" in chain and chain.strip().endswith("+search")
     # 15 Oct 2026: briefing news had no predictive value (rank corr -0.03, 1,214 headlines) - a 3-hourly risk radar
     assert Settings.model_fields["market_briefing_minutes"].default == 180
-    assert Settings.model_fields["move_attribution_minutes"].default == 180
+    assert Settings.model_fields["move_attribution_minutes"].default == 30      # 28 Oct (owner): every 30 min
 
 
 @pytest.mark.asyncio
@@ -120,7 +120,7 @@ async def test_our_space_gets_its_own_key_json_mode_and_a_long_timeout():
 def test_jobs_that_cost_more_than_they_gave_are_trimmed():
     from config.settings import Settings
     f = Settings.model_fields
-    assert f["event_monitor_daily_cap"].default == 40    # 18 Oct gated to 8; 27 Oct 40 (8 ran out before an FOMC)
+    assert f["event_monitor_daily_cap"].default == 60    # 18 Oct 8; 27 Oct 40 (ran out before an FOMC); 28 Oct 60
     assert f["v2_backtest_enabled"].default is False
     assert f["coindcx_enabled"].default is False
 

@@ -30,3 +30,12 @@ def test_big_movers():
     m = [SimpleNamespace(symbol="a", change_4h=3.4), SimpleNamespace(symbol="b", change_4h=-1.2),
          SimpleNamespace(symbol="c", change_4h=None)]
     assert [x.symbol for x in big_movers(m)] == ["a"]
+
+
+def test_on_a_calm_half_hour_the_biggest_movers_are_still_explained():
+    # 28 Oct 2026: the Moves page was 1 day 6 h old because no coin had moved 3% in 4 h
+    m = [SimpleNamespace(symbol=s, change_4h=c) for s, c in (("a", 0.4), ("b", -1.9), ("c", None), ("d", 1.1))]
+    assert big_movers(m, 3.0) == []
+    assert [x.symbol for x in big_movers(m, 3.0, top_n=2)] == ["b", "d"]
+    m.append(SimpleNamespace(symbol="e", change_4h=-3.5))
+    assert [x.symbol for x in big_movers(m, 3.0, top_n=2)] == ["e"]          # a real move still comes alone

@@ -155,7 +155,7 @@ def parse_monitor(data: dict, known_ids: set[int]) -> dict:
 
 # ── When to check next ────────────────────────────────────────────────────
 
-BASE_MINUTES = {0: 45, 1: 45, 2: 45, 3: 20, 4: 10, 5: 5}
+BASE_MINUTES = {0: 25, 1: 25, 2: 25, 3: 20, 4: 10, 5: 5}   # 28 Oct 2026: calm checks every ~30 min (owner)
 
 
 def next_delay_minutes(max_level: int, rng: random.Random | None = None) -> float:

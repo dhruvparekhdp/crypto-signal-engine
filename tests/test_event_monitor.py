@@ -80,7 +80,7 @@ class TestTiming(unittest.TestCase):
         rng = random.Random(1)
         calm = [next_delay_minutes(0, rng) for _ in range(200)]
         shock = [next_delay_minutes(5, rng) for _ in range(200)]
-        self.assertTrue(all(27 <= x <= 63 for x in calm))
+        self.assertTrue(all(15 <= x <= 35 for x in calm))                  # 28 Oct: about every 30 min
         self.assertTrue(all(3 <= x <= 7 for x in shock))
         self.assertGreater(len(set(calm)), 50)
 
@@ -190,3 +190,18 @@ async def test_away_from_releases_the_daily_cap_still_holds(monkeypatch):
     r._monitor_calls = settings.event_monitor_daily_cap
     await r._event_monitor_job()
     assert ask.await_count == 0
+
+
+async def test_a_quiet_market_still_gets_a_briefing_every_half_hour(monkeypatch):
+    # 28 Oct 2026, owner: "last updated 1d 6h ago, i want it on 30 min basis"
+    from datetime import UTC, datetime, timedelta
+
+    from config.settings import settings
+    r, ask = _monitor_runner(monkeypatch, near=False)
+    now = datetime.now(UTC).replace(tzinfo=None)
+    r._monitor_last_run = now - timedelta(minutes=5)
+    await r._event_monitor_job()
+    assert ask.await_count == 0                                         # fresh, nothing happening: skip
+    r._monitor_last_run = now - timedelta(minutes=settings.event_monitor_max_quiet_minutes + 1)
+    await r._event_monitor_job()
+    assert ask.await_count == 1

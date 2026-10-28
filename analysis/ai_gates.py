@@ -42,6 +42,11 @@ def btc_shock(closes_1m: list[float], pct: float = 2.0, minutes: int = 60) -> bo
     return ref > 0 and abs(closes_1m[-1] / ref - 1) * 100 >= pct
 
 
-def big_movers(moves, pct: float = 3.0) -> list:
-    """Coins that moved at least pct% over the last 4 hours (the only ones worth explaining)."""
-    return [m for m in moves if m.change_4h is not None and abs(m.change_4h) >= pct]
+def big_movers(moves, pct: float = 3.0, top_n: int = 0) -> list:
+    """Coins that moved at least pct% over the last 4 hours, or, when none did, the top_n biggest 4-hour movers
+    (28 Oct 2026: the Moves page must refresh every half hour, not only after a big move)."""
+    big = [m for m in moves if m.change_4h is not None and abs(m.change_4h) >= pct]
+    if big or not top_n:
+        return big
+    ranked = sorted((m for m in moves if m.change_4h is not None), key=lambda m: -abs(m.change_4h))
+    return ranked[:top_n]

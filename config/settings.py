@@ -163,10 +163,11 @@ class Settings(BaseSettings):
     move_attribution_enabled: bool = True
     # The event monitor: adaptive, jittered web checks with a daily cap.
     event_monitor_enabled: bool = True
-    event_monitor_daily_cap: int = 40           # 18 Oct: runs only when something happened (analysis/ai_gates.py)
+    event_monitor_daily_cap: int = 60           # 18 Oct: runs only when something happened (analysis/ai_gates.py)
     # 27 Oct: 8 a day ran out at 10:08 UTC on the day before an FOMC (7 runs in one level-4 burst) and the monitor was
     # blind for 8 h; Gemini flash-lite had used 22 of its 500 a day. Runs within 2 h of a scheduled release do not count.
     event_monitor_release_cap: int = 16
+    event_monitor_max_quiet_minutes: int = 30   # 28 Oct (owner): the briefing is never older than this
     llm_chain_briefing_calm: str = (
         "gemini:gemini-3.1-flash-lite+search, gemini:gemini-3.5-flash-lite+search, "
         "groq:openai/gpt-oss-20b+search, openrouter:nvidia/nemotron-3-ultra-550b-a55b:free+search")
@@ -434,10 +435,13 @@ class Settings(BaseSettings):
     # under cold_storage_dir (storage/cold_storage.py), never deleted outright.
     db_retention_days: int = 365
     cold_storage_dir: str = "data/archive"
-    move_attribution_minutes: int = 180         # hourly searching calls exhausted Groq's daily quota
+    # 28 Oct 2026, owner: "market movers page and news ... last updated 1d 6h ago, i want it on 30 min basis". The
+    # 18 Oct limits (every 3 h, only after a 3% move, 4 a day) left it a day stale; Gemini flash-lite has 500 a day.
+    move_attribution_minutes: int = 30
     move_attribution_window_hours: int = 12
-    move_attribution_min_move_pct: float = 3.0   # explain only coins that moved this much in 4 h (18 Oct 2026)
-    move_attribution_daily_cap: int = 4
+    move_attribution_min_move_pct: float = 3.0   # a coin this far in 4 h is always explained
+    move_attribution_top_n: int = 4              # on a calm half hour the biggest movers are explained anyway
+    move_attribution_daily_cap: int = 48
     # Reviewing what is already open.
     #
     # A losing position has to keep earning the right to stay open: the local
