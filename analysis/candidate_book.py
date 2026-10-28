@@ -12,6 +12,8 @@ Tracks
   swing_ratchet        the same signals with the ratchet exit (lab x_ratchet_g05, 23 Oct: +0.020R / +0.022R a trade in
                        both periods): from 2.8R the target moves out 0.25R per 0.25R gained, the stop 0.5R behind
   swing_mirror         the opposite side of each swing signal, same stop distance and exit: the control
+  swing_2h             paper-only 2h swing specs (settings.swing_candidate_strategies, 28 Oct 2026) with the live exit;
+                       swing_2h_mirror is their control
   intraday_pick        intraday primary signals: their own stop and target, 24 h limit
   counter_trend        the engine's held-back counter-trend shorts ("mirror_shadow"): same exit
   intraday_mirror      mirrors of the picks: the control;  counter_trend_mirror: mirrors of the counter-trend shorts
@@ -30,10 +32,10 @@ COST = BE_COST_FRAC                     # Delta taker 0.05% + 18% GST each side 
 SWING_HOLD = timedelta(days=7)
 INTRADAY_HOLD = timedelta(hours=24)
 RATCHET_FROM_R, RATCHET_STEP_R, RATCHET_TARGET_GAP_R, RATCHET_LOCK_GAP_R = 2.8, 0.25, 0.45, 0.5
-CONTROL = {"swing": "swing_mirror", "swing_ratchet": "swing", "intraday_pick": "intraday_mirror",
+CONTROL = {"swing": "swing_mirror", "swing_2h": "swing_2h_mirror", "swing_ratchet": "swing", "intraday_pick": "intraday_mirror",
            "counter_trend": "counter_trend_mirror"}
 GATE = {"days": 28, "n": 100, "n_each_week_kind": 20}
-EXIT_OF = {"swing": "swing", "swing_mirror": "swing", "swing_ratchet": "ratchet", "intraday_pick": "fixed",
+EXIT_OF = {"swing": "swing", "swing_mirror": "swing", "swing_2h": "swing", "swing_2h_mirror": "swing", "swing_ratchet": "ratchet", "intraday_pick": "fixed",
            "counter_trend": "fixed", "intraday_mirror": "fixed", "counter_trend_mirror": "fixed"}
 
 

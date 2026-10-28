@@ -1353,6 +1353,8 @@ class AppRunner:
                 if settings.swing_config_fail_closed:
                     return
             specs = sb.parse_specs(settings.swing_strategies)
+            live_tfs = set(sb.timeframes(specs))
+            cand = [c for c in sb.parse_specs(settings.swing_candidate_strategies or "") if c[0] not in live_tfs]
             if settings.swing_registry:                       # plan 2.3: one registry row + forward clock per spec
                 try:
                     from analysis import strategy_registry as reg_mod
@@ -1368,7 +1370,7 @@ class AppRunner:
             now_ms = int(now.timestamp() * 1000)
             from analysis.lab.data import INTERVAL_MS
             async with httpx.AsyncClient() as client:
-              for tf in sb.timeframes(specs):
+              for tf in sb.timeframes(specs + cand):
                 for sym in symbols:
                     try:
                         b = await sb.fetch_bars(client, sym, now_ms, tf)
@@ -1385,7 +1387,7 @@ class AppRunner:
                         continue
                     self._swing_seen[key] = last
                     self._save_swing_seen()
-                    setup = sb.evaluate(b, specs)
+                    setup = sb.evaluate(b, specs + cand)
                     age_min = (now_ms - (last + INTERVAL_MS[tf])) / 60000
                     self._swing_last[key] = {"bar_close": last + INTERVAL_MS[tf], "signal": setup.strategy if setup else None,
                                              "side": setup.side if setup else 0, "age_min": round(age_min, 1)}
@@ -1412,6 +1414,13 @@ class AppRunner:
                     # basic rating from the backtest (recorded only; compared with outcomes before it may decide)
                     from analysis.signal_rating import rate as _rate
                     from analysis.signal_rating import tag as _rtag
+                    if tf not in live_tfs:
+                        # paper candidate only (28 Oct 2026): logged for the candidates book, never traded
+                        log_id = await self._log_signal(sig)
+                        await self._mark_skipped(log_id, "paper_candidate_only")
+                        log.info("swing_candidate_signal", symbol=sym, tf=tf, strategy=setup.strategy,
+                                 side=sig.direction, price=price)
+                        continue
                     sig.rating = _rate(sig.signal_type, sig.timeframe, sym,
                                        getattr(verdict, "btc_vol_rank", None) if verdict is not None else None)
                     sig.indicators_summary = f"{sig.indicators_summary} | {_rtag(sig.rating)}"
@@ -1934,7 +1943,11 @@ class AppRunner:
             args = dict(signal_ts=r.timestamp, signal_type=r.signal_type, timeframe=r.timeframe or "", ladder=lad,
                         buffer_r=buf, confirm_min=cf)
             plans = []
-            if mode == "swing" and role == "primary":
+            if mode == "swing" and role == "primary" and (r.skip_reason or "") == "paper_candidate_only":
+                plans = [("swing_2h", side, r.stop_loss, r.target_price, r.timeframe or ""),
+                         ("swing_2h_mirror", -side, 2 * r.current_price - r.stop_loss,
+                          2 * r.current_price - r.target_price, r.timeframe or "")]
+            elif mode == "swing" and role == "primary":
                 label = (r.skip_reason or "taken").split(":")[0][:40]
                 plans = [("swing", side, r.stop_loss, r.target_price, label),
                          ("swing_ratchet", side, r.stop_loss, r.target_price, label),

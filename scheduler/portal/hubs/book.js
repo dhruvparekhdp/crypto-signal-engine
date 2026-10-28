@@ -399,7 +399,7 @@
       function pair(p) { return p && p[1] ? r(p[0]) + ' <span class="dim tiny">n ' + p[1] + "</span>" : '<span class="dim">—</span>'; }
       var intro = '<p class="mono small dim" style="margin:0 0 10px">Every strategy that is not live gets its own virtual trades with live-style exits: no slot limit, no one-per-coin rule, never sent to Delta, never in the paper wallet. ' +
         "One can qualify for live only when it has run " + g.days + "+ days, closed " + g.n + "+ trades, is profitable after fees, beats its control (the same signal on the other side), and is profitable in both rising and falling BTC weeks. You decide what goes live.</p>";
-      var order = ["swing", "swing_ratchet", "swing_mirror", "intraday_pick", "intraday_mirror", "counter_trend", "counter_trend_mirror"];
+      var order = ["swing", "swing_ratchet", "swing_mirror", "swing_2h", "swing_2h_mirror", "intraday_pick", "intraday_mirror", "counter_trend", "counter_trend_mirror"];
       var rows = order.filter(function (k) { return T[k]; }).map(function (k) { return [k, T[k]]; });
       var chip = function (s) { var c = s.indexOf("qualifies") === 0 ? "up" : s === "not qualifying" ? "dn" : "dim"; return '<b class="' + c + '">' + e(s) + "</b>"; };
       var table = rows.length ? C.table([

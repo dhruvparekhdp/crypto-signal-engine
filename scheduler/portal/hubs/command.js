@@ -280,6 +280,7 @@
     counter_trend_short_shadow: "counter-trend short: research only", counter_trend_short_shadow_held: "counter-trend short: research only",
     mirror_review_tracking: "mirror kept for comparison", already_open_in_symbol: "coin already has a trade",
     coin_without_edge: "coin left out: no backtest edge", news_blackout: "news window: no new trades",
+    paper_candidate_only: "2h paper candidate: scored, not traded",
     stale: "too old when checked", adaptive_loss_cooldown: "paused after losses", opposite_side_won: "the other side was picked"
   };
   function whyText(r) {

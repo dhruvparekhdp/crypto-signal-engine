@@ -156,3 +156,71 @@ async def test_the_api_shows_each_strategy_with_its_gate(tmp_path):
     t = body["tracks"]["swing"]
     assert t["closed"]["n"] == 1 and t["status"] == "collecting" and t["name"].startswith("Swing signals")
     assert t["labels"]["taken"]["n"] == 1 and any(c["check"] == "beats its control" for c in t["gate"])
+
+
+async def test_2h_candidates_are_scored_in_paper_and_never_queued_for_a_trade(tmp_path, monkeypatch):
+    # owner 28 Oct 2026: "add some strategy and trades in paper" - 2h passed the lab, so it is scored, not traded
+    import json
+
+    from datetime import UTC
+    from unittest.mock import AsyncMock
+
+    import numpy as np
+    from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+
+    from analysis import swing_book as sb
+    from analysis.crypto_state import CryptoState
+    from analysis.lab.data import INTERVAL_MS
+    from config.settings import settings
+    from scheduler.runner import AppRunner
+    from storage.models import Base
+    from storage.repository import Repository
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+    sm = async_sessionmaker(engine, expire_on_commit=False)
+    monkeypatch.setattr("scheduler.runner.AsyncSessionFactory", sm)
+    monkeypatch.setattr(settings, "swing_enabled", True)
+    monkeypatch.setattr(settings, "paper_trading_enabled", True)
+    monkeypatch.setattr(settings, "swing_registry", False)
+    r = AppRunner()
+    r._swing_seen = {"x": 0}
+    r._save_swing_seen = lambda: None
+    st = CryptoState(symbol="ethusdt", base_asset="ETH")
+    st.current_price = 100.0
+    r.crypto_store._states["ethusdt"] = st
+    seen_tfs = []
+
+    async def fake_fetch(client, sym, now_ms, tf):
+        seen_tfs.append(tf)
+        iv = INTERVAL_MS[tf]
+        last = now_ms - iv - 60_000                          # a bar that closed a minute ago
+        t = np.arange(last - 199 * iv, last + 1, iv)
+        one = np.full(len(t), 100.0)
+        return sb.Bars(sym, tf, t, one, one, one, one, one, one)
+
+    def fake_eval(b, specs):
+        assert any(tf == "2h" for tf, _, _ in specs)
+        return sb.SwingSetup(b.symbol, "donchian", 1, int(b.t[-1]), 1.0, 100.0, b.interval) if b.interval == "2h" else None
+    monkeypatch.setattr(sb, "fetch_bars", fake_fetch)
+    monkeypatch.setattr(sb, "evaluate", fake_eval)
+    r._regime_verdict = AsyncMock(return_value=None)
+    monkeypatch.setattr("analysis.lab.runner.CRYPTO", ["ETHUSDT"])
+    await r._swing_scan_job()
+    assert "2h" in seen_tfs and "4h" in seen_tfs
+    assert r._pending_swing == []                            # never reaches the paper wallet or Delta
+    async with sm() as s:
+        logs = await Repository(s).crypto_signals_between(1, 0, include_suppressed=True)
+    assert [(x.timeframe, x.skip_reason, x.trade_mode) for x in logs] == [("2h", "paper_candidate_only", "swing")]
+
+    now = datetime.now(UTC).replace(tzinfo=None) + timedelta(minutes=10)
+    r._CAND_OPEN, r._CAND_CLOSED = str(tmp_path / "c.json"), str(tmp_path / "c.jsonl")
+    (tmp_path / "c.json").write_text(json.dumps({"last_id": 0, "open": [], "started": now.isoformat(),
+                                                 "parents": {}, "btc_days": {}}))
+
+    async def no_bars(*a):
+        return []
+    r._signal_bars = no_bars
+    await r._candidate_book_job(now)
+    book = json.loads((tmp_path / "c.json").read_text())
+    assert sorted((t["track"], t["side"]) for t in book["open"]) == [("swing_2h", 1), ("swing_2h_mirror", -1)]

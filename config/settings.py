@@ -191,6 +191,12 @@ class Settings(BaseSettings):
     swing_enabled: bool = True
     swing_strategies: str = ("4h@vol_breakout:z=3.0,4h@keltner_break:k=2.5,4h@donchian:n=100,4h@ichimoku,"
                              "8h@keltner_break:k=2.0,8h@vol_breakout:z=3.0,8h@donchian:n=100,8h@ichimoku")
+    # Paper-only candidates (owner 28 Oct 2026: "1212 signals only 1-2 trade ... add some strategy and trades in
+    # paper"): scanned like the live specs but never queued for the paper wallet or Delta; the candidates book scores
+    # them. 2h passed the lab rule fixed before the run (net >= +0.10R in 2021-24 and 2025-26, 100+ trades each):
+    # Donchian +0.133 / +0.123R, Keltner +0.179 / +0.162R, vol breakout +0.164 / +0.139R (2h Ichimoku and every 1h
+    # spec failed). Timeframes already traded live are ignored here.
+    swing_candidate_strategies: str = "2h@vol_breakout:z=3.0,2h@keltner_break:k=2.5,2h@donchian:n=100"
     swing_scan_seconds: int = 300
     swing_risk_pct: float = 0.03
     # Backtest (scripts/portfolio_wallet, fixed vs adaptive): cutting risk in drawdowns barely reduced the

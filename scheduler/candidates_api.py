@@ -14,6 +14,8 @@ from aiohttp import web
 NAMES = {"swing": "Swing signals, live exit (every signal, no slot limit)",
          "swing_ratchet": "Swing signals, ratchet exit",
          "swing_mirror": "Swing mirrors (control)",
+         "swing_2h": "2h swing (paper candidate)",
+         "swing_2h_mirror": "2h swing mirrors (control)",
          "intraday_pick": "Intraday picks", "intraday_mirror": "Intraday mirrors (control)",
          "counter_trend": "Counter-trend shorts (held back)", "counter_trend_mirror": "Counter-trend mirrors (control)"}
 
