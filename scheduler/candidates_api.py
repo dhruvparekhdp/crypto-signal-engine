@@ -16,6 +16,8 @@ NAMES = {"swing": "Swing signals, live exit (every signal, no slot limit)",
          "swing_mirror": "Swing mirrors (control)",
          "swing_2h": "2h swing (paper candidate)",
          "swing_2h_mirror": "2h swing mirrors (control)",
+         "impulse_follow": "Live moves, follow the move", "impulse_fade": "Live moves, against the move (control)",
+         "impulse_ai": "Live moves, the AI's call with live news",
          "intraday_pick": "Intraday picks", "intraday_mirror": "Intraday mirrors (control)",
          "counter_trend": "Counter-trend shorts (held back)", "counter_trend_mirror": "Counter-trend mirrors (control)"}
 
@@ -47,7 +49,17 @@ def register(app: web.Application, runner) -> None:
                             datetime.now(UTC))
         for k, v in card["tracks"].items():
             v["name"] = NAMES.get(k, k)
+        impulses = []
+        try:
+            for ln in Path(getattr(runner, "_IMPULSE_LOG", "data/impulse_events.jsonl")).read_text().splitlines()[-20:]:
+                try:
+                    impulses.append(json.loads(ln))
+                except ValueError:
+                    continue
+        except OSError:
+            pass
         return web.json_response({
+            "impulses": impulses[::-1],
             "started": book.get("started"), "open": len(book.get("open", [])), "gate": cb.GATE, **card,
             "recent": [{k: r.get(k) for k in ("track", "symbol", "side", "signal_type", "label", "exit", "r_net",
                                               "closed_ts")} for r in closed[-30:]][::-1]})

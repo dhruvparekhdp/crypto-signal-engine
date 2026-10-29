@@ -399,7 +399,7 @@
       function pair(p) { return p && p[1] ? r(p[0]) + ' <span class="dim tiny">n ' + p[1] + "</span>" : '<span class="dim">—</span>'; }
       var intro = '<p class="mono small dim" style="margin:0 0 10px">Every strategy that is not live gets its own virtual trades with live-style exits: no slot limit, no one-per-coin rule, never sent to Delta, never in the paper wallet. ' +
         "One can qualify for live only when it has run " + g.days + "+ days, closed " + g.n + "+ trades, is profitable after fees, beats its control (the same signal on the other side), and is profitable in both rising and falling BTC weeks. You decide what goes live.</p>";
-      var order = ["swing", "swing_ratchet", "swing_mirror", "swing_2h", "swing_2h_mirror", "intraday_pick", "intraday_mirror", "counter_trend", "counter_trend_mirror"];
+      var order = ["swing", "swing_ratchet", "swing_mirror", "swing_2h", "swing_2h_mirror", "impulse_follow", "impulse_fade", "impulse_ai", "intraday_pick", "intraday_mirror", "counter_trend", "counter_trend_mirror"];
       var rows = order.filter(function (k) { return T[k]; }).map(function (k) { return [k, T[k]]; });
       var chip = function (s) { var c = s.indexOf("qualifies") === 0 ? "up" : s === "not qualifying" ? "dn" : "dim"; return '<b class="' + c + '">' + e(s) + "</b>"; };
       var table = rows.length ? C.table([
@@ -419,7 +419,15 @@
         { label: "AVG AFTER FEES", w: "120px", cell: function (k) { return r(L[k].avg_r); } },
         { label: "WIN", w: "70px", cell: function (k) { return e(L[k].win_pct + "%"); } }
       ], labs, { minWidth: 420 }) + '<p class="mono tiny dim" style="margin:6px 0 0">If the skipped ones do as well as the taken ones, that skip rule is costing trades.</p>' : "";
-      el.innerHTML = intro + table + why;
+      var I = d.impulses || [];
+      var moves = '<h4 class="mono small" style="margin:14px 0 6px">LIVE MOVES · LAST 20 (the AI reads each one with the live news)</h4>' + (I.length ? C.table([
+        { label: "WHEN", w: "120px", cell: function (x) { return e(U.stamp(x.detected)); } },
+        { label: "COIN", w: "90px", cell: function (x) { return "<b>" + e(x.symbol.replace("USDT", "")) + "</b>"; } },
+        { label: "MOVE 15 MIN", w: "130px", cell: function (x) { return C.signed(x.move_pct, function (y) { return (y > 0 ? "+" : "") + y.toFixed(2) + "%"; }) + '<br><span class="dim tiny">' + x.sd_mult + "× normal · vol " + x.vol_mult + "×</span>"; } },
+        { label: "AI CALL", w: "120px", cell: function (x) { var a = x.ai; return a ? "<b>" + e(a.call) + "</b> " + Math.round(a.confidence * 100) + "%" : '<span class="dim">no read</span>'; } },
+        { label: "CAUSE", w: "minmax(0,1fr)", cell: function (x) { var a = x.ai || {}; return e((a.cause_type ? a.cause_type + ": " : "") + (a.cause || "—")) + (a.reason ? '<br><span class="dim tiny">' + e(a.reason) + "</span>" : ""); } }
+      ], I, { minWidth: 720 }) : C.empty("No live move yet: a coin has to move 4× its normal 15 minutes, at least 1%, on 3× volume."));
+      el.innerHTML = intro + table + why + moves;
     }
   });
   // the demo (testnet) panel was removed: owner 26 Oct 2026, "no use, demo doesn't run with proper live market rate"

@@ -377,6 +377,11 @@ class Settings(BaseSettings):
     # candidates: every non-live strategy paper-traded with live-style exits and a promotion scorecard
     # (analysis/candidate_book.py; owner 26 Oct 2026: "only paper, no changes for live")
     candidate_book_enabled: bool = True
+    # Live move detector (analysis/impulse.py; owner 30 Oct 2026): alerts + paper tracks only. The AI reads each minute's
+    # moves with live news (web-search model, role "briefing"); impulse_ai_daily_cap keeps it inside the free tier.
+    impulse_enabled: bool = True
+    impulse_alerts: bool = True
+    impulse_ai_daily_cap: int = 40
     # support / resistance setups for the same bracket on every watchlist coin, labelled with news and sentiment
     # (analysis/level_signals.py); and the wallet view: fixed margin per trade at fixed leverage, skipped only when
     # the paper wallet has no free margin - no risk rules (owner, 21 Oct 2026: "keep wallet limit not risk")

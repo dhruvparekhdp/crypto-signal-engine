@@ -1916,6 +1916,150 @@ class AppRunner:
 
     _CAND_OPEN = "data/candidate_book.json"
     _CAND_CLOSED = "data/candidate_trades.jsonl"
+    _IMPULSE_LOG = "data/impulse_events.jsonl"
+
+    async def _impulse_klines(self, client, symbol: str, interval: str, limit: int) -> list[tuple]:
+        """Closed Binance futures bars (open_ms, o, h, l, c, volume), oldest first; the forming bar is dropped."""
+        r = await client.get("https://fapi.binance.com/fapi/v1/klines",
+                             params={"symbol": symbol, "interval": interval, "limit": limit})
+        r.raise_for_status()
+        now_ms = int(datetime.now(UTC).timestamp() * 1000)
+        step = {"1m": 60_000, "15m": 900_000}[interval]
+        return [(int(k[0]), float(k[1]), float(k[2]), float(k[3]), float(k[4]), float(k[5]))
+                for k in r.json() if int(k[0]) + step <= now_ms]
+
+    async def _impulse_context(self, now: datetime) -> dict:
+        """What the AI gets besides the moves: scheduled releases near now, open world events, the last 2 h of
+        headlines that are not noise, and the latest briefing."""
+        from analysis.event_calendar import EVENTS_2026
+        ctx: dict = {"now": now.strftime("%Y-%m-%d %H:%M")}
+        ctx["calendar"] = [f"{e.name} at {e.at:%d %b %H:%M} UTC" for e in EVENTS_2026
+                           if abs((e.at - now).total_seconds()) <= 3 * 3600]
+        try:
+            async with AsyncSessionFactory() as session:
+                repo = Repository(session)
+                heads = await repo.news_sentiment_since(2, limit=300)
+                events = await repo.recent_events(1)
+                brief = self.latest_briefing or await repo.latest_briefing()
+            ctx["headlines"] = [f"{h.published_at:%H:%M} [{h.source}] {h.headline}" for h in heads
+                                if (h.event_type or "noise") != "noise"][:15]
+            ctx["events"] = [f"[L{e.level_current}] {e.title}" for e in events if e.status == "active"][:8]
+            ctx["briefing"] = getattr(brief, "summary", "") or ""
+        except Exception as e:  # noqa: BLE001 - the AI still gets the moves and the calendar
+            log.debug("impulse_context_failed", error=str(e)[:120])
+        return ctx
+
+    def _impulse_candidates(self, book: dict, cb) -> int:
+        """Live moves (data/impulse_events.jsonl, written by _impulse_job) -> paper trades: follow, fade (control) and
+        the AI's call (owner 30 Oct 2026). Lines are read once, from the offset kept in the candidates book."""
+        from analysis import impulse as im
+        try:
+            lines = Path(self._IMPULSE_LOG).read_text().splitlines()
+        except OSError:
+            return 0
+        start = int(book.get("impulse_line", 0))
+        if start > len(lines):                       # the file was replaced: read it from the top
+            start = 0
+        n = 0
+        for ln in lines[start:]:
+            try:
+                ev = json.loads(ln)
+            except ValueError:
+                continue
+            imp = im.Impulse(**{k: ev[k] for k in im.Impulse.__dataclass_fields__})
+            ts = datetime.fromisoformat(ev["detected"])
+            a = ev.get("ai") or {}
+            label = f"ai {a.get('call', 'none')} · {a.get('cause_type', '-')}" + (" · btc-led" if (ev.get("breadth") or {}).get("btc_led") else "")
+            plans = [("impulse_follow", imp.side), ("impulse_fade", -imp.side)]
+            side_ai = im.ai_side(imp.side, a)
+            if side_ai:
+                plans.append(("impulse_ai", side_ai))
+            for track, side in plans:
+                stop, target = im.levels(imp, side)
+                tr = cb.open_trade(track, f"{imp.symbol}:{imp.at_ms}", imp.symbol, side, imp.price, stop, target,
+                                   signal_ts=ts, signal_type="impulse", timeframe="15m", label=label)
+                if tr:
+                    book["open"].append(tr)
+                    n += 1
+        book["impulse_line"] = len(lines)
+        return n
+
+    async def _impulse_job(self) -> dict:
+        """Every minute: the live move detector (analysis/impulse.py; owner 30 Oct 2026, alerts and paper only). Each
+        watchlist coin's last 15 minutes against its last 24 h (Binance futures bars, like the lab); a move gets one
+        AI read with the live news per minute (all coins together), a Telegram alert, and a line in
+        data/impulse_events.jsonl that the candidates book turns into paper trades. Never places an order."""
+        if not settings.impulse_enabled:
+            return {}
+        import httpx
+
+        from analysis import impulse as im
+        now = datetime.now(UTC).replace(tzinfo=None)
+        symbols = [s.upper() for s in await self.crypto_store.get_symbols()]
+        base = getattr(self, "_impulse_base", {})
+        self._impulse_base = base
+        last_fire = getattr(self, "_impulse_last", {})
+        self._impulse_last = last_fire
+        found, moves = [], {}
+        async with httpx.AsyncClient(timeout=10) as client:
+            for sym in symbols:
+                data_sym = im.DATA_SYMBOL.get(sym, sym)
+                try:
+                    b = base.get(sym)
+                    if b is None or (now - b[0]).total_seconds() >= 900:
+                        k15 = await self._impulse_klines(client, data_sym, "15m", 98)
+                        base[sym] = b = (now, im.baseline([x[4] for x in k15[-97:]], [x[5] for x in k15[-96:]]))
+                    bars = await self._impulse_klines(client, data_sym, "1m", 18)
+                except Exception as e:  # noqa: BLE001 - one coin failing must not stop the rest
+                    log.debug("impulse_fetch_failed", symbol=sym, error=str(e)[:100])
+                    continue
+                if len(bars) >= 16 and bars[-16][4] > 0:
+                    moves[sym] = (bars[-1][4] / bars[-16][4] - 1) * 100
+                imp = im.detect(sym, bars, b[1])
+                if imp is None:
+                    continue
+                if now.timestamp() - last_fire.get(sym, 0) < im.COOLDOWN_H * 3600:
+                    continue
+                last_fire[sym] = now.timestamp()
+                found.append(imp)
+        if not found:
+            return {"moves": 0}
+        events = []
+        for imp in found:
+            ev = imp.as_dict()
+            ev["breadth"] = im.breadth(moves, imp.side)
+            ev["detected"] = now.isoformat()
+            events.append(ev)
+        summary = ""
+        day = now.date()
+        if getattr(self, "_impulse_ai_day", None) != day:
+            self._impulse_ai_day, self._impulse_ai_calls = day, 0
+        from collectors.llm_client import ask_json, chain_for
+        if chain_for("briefing") and self._impulse_ai_calls < settings.impulse_ai_daily_cap:
+            self._impulse_ai_calls += 1
+            ctx = await self._impulse_context(now)
+            ctx["breadth"] = events[0]["breadth"]
+            try:
+                reply = await ask_json("briefing", im.AI_SYSTEM, im.ai_prompt(events, ctx), max_tokens=900,
+                                       temperature=0.2, timeout=60.0)
+                got = im.parse_ai(reply.data if reply else None, {e["symbol"] for e in events})
+                summary = got["summary"]
+                for ev in events:
+                    ev["ai"] = got["reads"].get(ev["symbol"])
+                    ev["ai_model"] = reply.served_by if reply else ""
+            except Exception as e:  # noqa: BLE001 - the move is still recorded and scored without the AI
+                log.warning("impulse_ai_failed", error=str(e)[:140])
+        with open(self._IMPULSE_LOG, "a") as fh:
+            for ev in events:
+                fh.write(json.dumps(ev) + "\n")
+        log.info("impulse_detected", moves=[(e["symbol"], e["move_pct"], (e.get("ai") or {}).get("call")) for e in events],
+                 ai_calls_today=self._impulse_ai_calls)
+        if settings.impulse_alerts:
+            try:
+                await self.notifier.send_text(im.alert_text(events, summary), parse_mode=ParseMode.HTML)
+            except Exception as e:  # noqa: BLE001
+                log.warning("impulse_alert_failed", error=str(e)[:120])
+        return {"moves": len(events)}
 
     async def _candidate_book_job(self, now: datetime | None = None) -> dict:
         """Candidates (analysis/candidate_book.py; owner 26 Oct 2026: paper only, no live change): every swing and
@@ -1982,6 +2126,7 @@ class AppRunner:
                 if tr:
                     book["open"].append(tr)
                     opened += 1
+        opened += self._impulse_candidates(book, cb)
         if len(book["parents"]) > 5000:                 # mirrors follow their pick within seconds: keep it small
             book["parents"] = dict(list(book["parents"].items())[-2000:])
         states = {st.symbol: st for st in await self.crypto_store.get_all()}
@@ -4513,6 +4658,9 @@ class AppRunner:
         self.scheduler.add_job(
             self._bracket_paper_job, "interval", minutes=2, id="bracket_paper", max_instances=1,
             next_run_time=datetime.now(UTC) + timedelta(seconds=75))
+        self.scheduler.add_job(
+            self._impulse_job, "interval", minutes=1, id="impulse", max_instances=1,
+            next_run_time=datetime.now(UTC) + timedelta(minutes=2))
         self.scheduler.add_job(
             self._candidate_book_job, "interval", minutes=2, id="candidate_book", max_instances=1,
             next_run_time=datetime.now(UTC) + timedelta(seconds=105))
