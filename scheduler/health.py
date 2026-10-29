@@ -6903,19 +6903,15 @@ td.num,th.num{text-align:right;font-variant-numeric:tabular-nums}
 }
 </style>
 </head>
-<body>
-<header>
-  <h1>&#128200; Price Outlook</h1>
-  <span class="tick" id="tick">loading&hellip;</span>
-  <span class="spacer"></span>
-  <a class="nav-btn" href="/">&larr; Dashboard</a>
-  <a class="nav-btn" href="/audit">Audit</a>
-  <a class="nav-btn" href="/api/debug/signals">Diagnostics</a>
-</header>
-<main>
+<body class="cmd-tool">
+<main class="wrap">
+  <div class="tool-head">
+    <h2>Price outlook</h2>
+    <span class="dim mono" id="tick">loading&hellip;</span>
+  </div>
   <div class="surges" id="surges"></div>
-  <div class="note" id="note"></div>
-  <div class="scroll"><table class="tbl">
+  <div class="note panel-body" id="note"></div>
+  <div class="panel tbl-scroll"><table class="tbl">
     <thead><tr>
       <th>Market</th>
       <th class="num">Price</th>
@@ -6927,10 +6923,12 @@ td.num,th.num{text-align:right;font-variant-numeric:tabular-nums}
       <th>In 4 hours</th>
       <th class="h-24h">In 24 hours</th>
     </tr></thead>
-    <tbody id="rows"><tr><td colspan="9" class="empty">loading&hellip;</td></tr></tbody>
+    <tbody id="rows"><tr><td colspan="9" class="empty-state">loading&hellip;</td></tr></tbody>
   </table></div>
 </main>
 <script>
+const LOAD_MS=10000;
+function withTimeout(p,ms){return Promise.race([p,new Promise((_,rej)=>setTimeout(()=>rej(new Error('timeout')),ms))]);}
 const esc=s=>String(s==null?'':s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 function px(v){
   if(v==null) return '—';
@@ -6959,7 +6957,7 @@ function cell(f, price){
 async function load(){
   let d;
   try{
-    const r = await fetch('/api/predict');
+    const r = await withTimeout(fetch('/api/predict'), LOAD_MS);
     if(!r.ok) throw new Error('server returned ' + r.status);
     d = await r.json();
   }catch(e){
@@ -6999,7 +6997,7 @@ async function load(){
       ${cell(f['1h'],m.price)}${cell(f['4h'],m.price)}
       <td class="h-24h" style="padding:0">${cell(f['24h'],m.price).replace(/^<td[^>]*>/,'<div class="fc" style="padding:11px 14px">').replace(/<\\/td>$/,'</div>')}</td>
     </tr>`;
-  }).join('') : '<tr><td colspan="9" class="empty">No markets with enough history yet.</td></tr>';
+  }).join('') : '<tr><td colspan="9" class="empty-state">No markets with enough history yet.</td></tr>';
 }
 load(); setInterval(load, 20000);
 </script>
@@ -7119,18 +7117,18 @@ table.sb td.n{text-align:right;font-variant-numeric:tabular-nums}
 }
 </style>
 </head>
-<body>
-<header>
-  <h1>Market Moves</h1>
-  <span class="tick" id="tick">loading&hellip;</span>
-  <span class="spacer"></span>
-  <button class="nav-btn" id="run" type="button" onclick="runNow()">Run analysis now</button>
-  <a class="nav-btn" href="/">&larr; Dashboard</a>
-  <a class="nav-btn" href="/predict">Outlook</a>
-  <a class="nav-btn" href="/audit">Audit</a>
-</header>
-<main id="main"><div class="card empty">Loading&hellip;</div></main>
+<body class="cmd-tool">
+<main id="main" class="wrap">
+  <div class="tool-head">
+    <h2>Market moves</h2>
+    <span class="dim mono" id="tick">loading&hellip;</span>
+    <button class="pill-btn" id="run" type="button" onclick="runNow()">Run analysis now</button>
+  </div>
+  <div id="main-body"><div class="panel empty-state">Loading&hellip;</div></div>
+</main>
 <script>
+const LOAD_MS=10000;
+function withTimeout(p,ms){return Promise.race([p,new Promise((_,rej)=>setTimeout(()=>rej(new Error('timeout')),ms))]);}
 function esc(s){return String(s==null?'':s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));}
 function pct(v){ if(v==null||!isFinite(v)) return '<b class="muted">—</b>';
   return '<b class="'+(v>=0?'pos':'neg')+'">'+(v>=0?'+':'')+v.toFixed(2)+'%</b>'; }
@@ -7153,9 +7151,9 @@ function factsBlock(f){ if(!f) return ''; const out=[]; const n=v=>(v>=0?'+':'')
   return out.length?'<div class="facts">'+out.map(x=>'<span>'+esc(x)+'</span>').join('')+'</div>':''; }
 
 function render(){
-  const main=document.getElementById('main');
+  const main=document.getElementById('main-body');
   if(!DATA || !DATA.runs.length){
-    main.innerHTML='<div class="card empty">No analysis yet. It runs every hour once the engine has an hour of prices and a Groq key; press <b>Run analysis now</b> to start one.</div>'
+    main.innerHTML='<div class="panel empty-state">No analysis yet. It runs every hour once the engine has an hour of prices and a Groq key; press <b>Run analysis now</b> to start one.</div>'
       + eventsCard() + shadowCard() + briefingCard();
     return;
   }
@@ -7264,7 +7262,16 @@ function shadowCard(){
 }
 function pick(i){ SEL=i; render(); window.scrollTo({top:0,behavior:'smooth'}); }
 async function load(){
-  try{ const r=await fetch('/api/moves?limit=48'); DATA=await r.json(); }catch(e){ DATA={runs:[],upcoming:[]}; }
+  const body=document.getElementById('main-body');
+  try{
+    const r=await withTimeout(fetch('/api/moves?limit=48'), LOAD_MS);
+    if(!r.ok) throw new Error('server returned '+r.status);
+    DATA=await r.json();
+  }catch(e){
+    if(body) Panel.error(body,'market moves',e,load);
+    document.getElementById('tick').textContent='failed to update';
+    return;
+  }
   document.getElementById('tick').textContent=DATA.runs.length?('updated '+(window.fmtAgo?fmtAgo(DATA.runs[0].at):'')):'no analysis yet';
   render();
 }
@@ -7723,14 +7730,16 @@ _HTML = (
 # Every server-rendered page gets the portal header (hubs + the hub's pages) and skin; see
 # scheduler/portal.py and docs/PORTAL_REVAMP.md. This replaced the older page-group strip.
 from scheduler.portal import chrome_snippet as _chrome_snippet  # noqa: E402
+from scheduler.portal import command_tool_head_extra as _command_tool_head_extra  # noqa: E402
 
 _THEME_SNIPPET = _THEME_SNIPPET + _chrome_snippet()
+_CMD_TOOL_HEAD = _command_tool_head_extra()
 _HTML = _HTML.replace("</head>", _THEME_SNIPPET + "</head>")
 _DATA_HTML = _DATA_HTML.replace("</head>", _THEME_SNIPPET + "</head>")
 _SETTINGS_HTML = _SETTINGS_HTML.replace("</head>", _THEME_SNIPPET + "</head>")
 _AUDIT_HTML = _AUDIT_HTML.replace("</head>", _THEME_SNIPPET + "</head>")
-_PREDICT_HTML = _PREDICT_HTML.replace("</head>", _THEME_SNIPPET + "</head>")
-_MOVES_HTML = _MOVES_HTML.replace("</head>", _THEME_SNIPPET + "</head>")
+_PREDICT_HTML = _PREDICT_HTML.replace("</head>", _THEME_SNIPPET + _CMD_TOOL_HEAD + "</head>")
+_MOVES_HTML = _MOVES_HTML.replace("</head>", _THEME_SNIPPET + _CMD_TOOL_HEAD + "</head>")
 
 
 @web.middleware
