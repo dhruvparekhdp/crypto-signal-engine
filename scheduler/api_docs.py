@@ -75,6 +75,8 @@ ENDPOINTS: tuple[tuple[str, str, str, str, dict], ...] = (
     ("Charts", "GET", "/api/chart/history-signals", "Recent crypto_signal_log entries for chart overlays.", {"symbol": "BTCUSDT", "days": "60", "strategy": ""}),
     ("Charts", "GET", "/api/chart/indicator-catalog", "Indicator catalog stats (full list in chart UI).", {}),
     ("Charts", "GET", "/api/chart/parity", "TradingView parity matrix (markdown JSON).", {}),
+    ("Charts", "GET", "/api/chart/indicator-catalog", "Indicator catalog stats (full list in chart UI).", {}),
+    ("Charts", "GET", "/api/chart/parity", "TradingView parity matrix (markdown JSON).", {}),
     ("Signals", "POST", "/api/crypto/signals/live-check", "Re-check a signal against the live price before acting on it.", {}),
     ("Why no trades", "GET", "/api/pipeline/progress", "Progress of the research pipeline run.", {}),
     ("Simulator", "GET", "/api/simulator/status", "Replay simulator state, trades and cycle results.", {}),
