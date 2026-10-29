@@ -7941,8 +7941,10 @@ async def make_app(runner) -> web.Application:
     app.router.add_get("/pipeline", _pipeline_page)
     from scheduler.chart_page import (
         api_chart_history_signals,
+        api_chart_indicator_catalog,
         api_chart_klines,
         api_chart_overlays,
+        api_chart_parity_doc,
         api_chart_strategies,
         api_chart_strategy_scan,
         chart_page,
@@ -7952,6 +7954,8 @@ async def make_app(runner) -> web.Application:
     app.router.add_get("/api/chart/strategies", _bind(api_chart_strategies))
     app.router.add_get("/api/chart/strategy-scan", _bind(api_chart_strategy_scan))
     app.router.add_get("/api/chart/history-signals", _bind(api_chart_history_signals))
+    app.router.add_get("/api/chart/indicator-catalog", _bind(api_chart_indicator_catalog))
+    app.router.add_get("/api/chart/parity", _bind(api_chart_parity_doc))
     app.router.add_get("/chart", chart_page)
     from scheduler.v2_pages import register as _register_v2_pages
 

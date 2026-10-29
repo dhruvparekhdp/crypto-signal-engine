@@ -141,6 +141,27 @@ async def api_chart_strategy_scan(runner, request: web.Request) -> web.Response:
     )
 
 
+async def api_chart_indicator_catalog(runner, request: web.Request) -> web.Response:
+    """Metadata for all client-side indicators (for mobile apps / external tools)."""
+    # Catalog lives in JS; mirror counts/categories here for API consumers.
+    catalog_path = Path(__file__).resolve().parent / "portal" / "chart-indicators.js"
+    text = catalog_path.read_text(encoding="utf-8") if catalog_path.exists() else ""
+    import re
+
+    names = re.findall(r'name:\s*"([^"]+)"', text)
+    categories = sorted(set(re.findall(r'category:\s*"([^"]+)"', text)))
+    return web.Response(
+        text=json.dumps({"count": len(names), "categories": categories, "note": "Full catalog in chart-indicators.js + Indicators modal"}),
+        content_type="application/json",
+    )
+
+
+async def api_chart_parity_doc(runner, request: web.Request) -> web.Response:
+    p = Path("docs/CHART_TRADINGVIEW_PARITY.md")
+    body = p.read_text(encoding="utf-8") if p.exists() else "# Parity doc missing"
+    return web.Response(text=json.dumps({"markdown": body}), content_type="application/json")
+
+
 async def api_chart_history_signals(runner, request: web.Request) -> web.Response:
     sym = request.query.get("symbol", "BTCUSDT").upper()
     days = int(request.query.get("days", 60))
@@ -244,6 +265,19 @@ select,input[type=range]{background:#0f172a;border:1px solid var(--border);color
 .status{font-size:10px;color:#64748b;margin-left:6px}
 .nav-links a{color:var(--muted);text-decoration:none;font-size:12px;margin-left:10px}
 .nav-links a:hover{color:var(--primary)}
+.ind-chip{display:inline-flex;align-items:center;gap:4px;background:#1e293b;border:1px solid #334155;border-radius:999px;padding:2px 8px;margin:2px;font-size:10px;color:#e2e8f0}
+.ind-chip button{background:none;border:none;color:#94a3b8;cursor:pointer;font-size:14px;line-height:1}
+#ind-modal{position:fixed;inset:0;background:rgba(0,0,0,.7);display:none;align-items:center;justify-content:center;z-index:200;padding:16px}
+#ind-modal.open{display:flex}
+.ind-panel{background:#0f172a;border:1px solid #334155;border-radius:12px;width:min(640px,96vw);max-height:85vh;display:flex;flex-direction:column}
+.ind-panel-head{padding:12px 14px;border-bottom:1px solid #334155;display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.ind-panel-body{overflow:auto;padding:8px 12px 14px}
+.ind-row{display:flex;align-items:center;gap:8px;padding:6px 4px;border-bottom:1px solid #1e293b;font-size:12px;cursor:pointer}
+.ind-row:hover{background:#131d31}
+.ind-cat{margin-left:auto;font-size:10px;color:#64748b}
+.tv-partial{font-size:9px;color:#fbbf24;border:1px solid #92400e;border-radius:4px;padding:1px 4px;margin-left:4px}
+#active-indicators{display:flex;flex-wrap:wrap;gap:2px;padding:4px 12px;border-bottom:1px solid var(--border);min-height:28px}
+.draw-bar{display:flex;gap:4px;flex-wrap:wrap}
 @media(max-width:900px){.layout{grid-template-columns:1fr}.side{display:none}}
 </style>
 </head>
@@ -273,38 +307,73 @@ select,input[type=range]{background:#0f172a;border:1px solid var(--border);color
     <label class="toggle"><input type="checkbox" id="ov-tpsl" checked> Last TP/SL</label>
   </div>
   <div class="tool-block">
-    <span class="tool-label">Indicators</span>
-    <label class="toggle ind-toggle"><input type="checkbox" id="ind-ema20" checked> EMA20</label>
-    <label class="toggle ind-toggle"><input type="checkbox" id="ind-ema50" checked> EMA50</label>
-    <label class="toggle ind-toggle"><input type="checkbox" id="ind-ema200"> EMA200</label>
-    <label class="toggle ind-toggle"><input type="checkbox" id="ind-bb" checked> BB</label>
-    <label class="toggle ind-toggle"><input type="checkbox" id="ind-vwap"> VWAP</label>
-    <label class="toggle ind-toggle"><input type="checkbox" id="ind-vol" checked disabled> Vol</label>
-    <label class="toggle ind-toggle"><input type="checkbox" id="ind-rsi"> RSI</label>
-    <label class="toggle ind-toggle"><input type="checkbox" id="ind-macd"> MACD</label>
+    <button class="pill-btn" id="btn-indicators" type="button">📈 Indicators (50+)</button>
     <button class="pill-btn" id="btn-fit" type="button">Fit</button>
     <button class="pill-btn" id="btn-log" type="button">Log scale</button>
     <span class="status" id="load-status"></span>
   </div>
+  <div class="tool-block">
+    <span class="tool-label">Draw</span>
+    <div id="draw-tools" class="draw-bar"></div>
+    <button class="pill-btn" id="btn-clear-draw" type="button">Clear drawings</button>
+  </div>
 </div>
+<div id="active-indicators"></div>
 <div id="chart-legend" style="padding:4px 12px;font-size:11px;color:var(--muted);border-bottom:1px solid var(--border)">—</div>
 <div class="layout">
-  <div class="chart-stack">
+  <div id="chart-stack" class="chart-stack">
     <div id="tv-chart-root"></div>
-    <div id="pane-rsi" class="sub-pane" style="display:none"></div>
-    <div id="pane-macd" class="sub-pane" style="display:none"></div>
   </div>
   <aside class="side">
-    <h3>How to read this chart</h3>
-    <p><strong style="color:#10b981">H:</strong> markers from your live signal log (last 60 days). <strong style="color:#38bdf8">S:</strong> markers from replaying the selected strategy on visible bars (same code as the market simulator).</p>
-    <p>TP/SL lines use the live swing book: <strong>3R target · 1R stop (3×ATR)</strong> on the most recent marker.</p>
-    <h3>Strategies</h3>
-    <p>Confluence, Bollinger squeeze, volume spike, RSI divergence, trend pullback, range breakout, liquidity sweep, breakout retest — or <em>All</em> (ensemble waterfall).</p>
-    <h3>Shortcuts</h3>
-    <p>Drag to pan · scroll to zoom · crosshair syncs RSI/MACD panes when enabled.</p>
+    <h3>Indicators</h3>
+    <p>Open <strong>Indicators (50+)</strong> — search SuperTrend, moving averages, MACD, etc. Active set is saved in your browser.</p>
+    <h3>Drawings</h3>
+    <p>Trend line, H/V line, ray, rectangle, Fib, text. Stored per symbol+timeframe. Double-click canvas to undo last shape (select tool).</p>
+    <h3>TradingView parity</h3>
+    <p><button type="button" class="pill-btn" id="btn-parity">What we have vs TV →</button></p>
+    <p id="parity-blurb" style="font-size:10px"></p>
+    <h3>Signals</h3>
+    <p><strong>H:</strong> DB history · <strong>S:</strong> strategy rescan · TP/SL = 3R/1R on latest marker.</p>
   </aside>
 </div>
+<div id="ind-modal">
+  <div class="ind-panel">
+    <div class="ind-panel-head">
+      <strong style="color:#38bdf8">Indicator catalog</strong>
+      <input type="search" id="ind-search" placeholder="Search (e.g. SuperTrend, EMA…)" style="flex:1;min-width:140px">
+      <select id="ind-cat"><option value="all">All</option></select>
+      <button type="button" class="pill-btn" id="ind-modal-close">Done</button>
+    </div>
+    <div class="ind-panel-body" id="ind-list"></div>
+  </div>
+</div>
+<div id="parity-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.75);z-index:210;padding:20px;overflow:auto">
+  <div style="max-width:900px;margin:0 auto;background:#0f172a;border:1px solid #334155;border-radius:12px;padding:16px">
+    <div style="display:flex;justify-content:space-between;margin-bottom:12px">
+      <strong style="color:#38bdf8">TradingView parity matrix</strong>
+      <button type="button" class="pill-btn" id="parity-modal-close">Close</button>
+    </div>
+    <pre id="parity-md" style="white-space:pre-wrap;font-size:11px;color:#cbd5e1;line-height:1.5"></pre>
+  </div>
+</div>
+<script src="/portal/static/chart-indicators.js"></script>
+<script src="/portal/static/chart-drawings.js"></script>
 <script src="/portal/static/chart-pro.js"></script>
+<script>
+document.getElementById('btn-parity')?.addEventListener('click', async () => {
+  const res = await fetch('/api/chart/parity');
+  const d = await res.json();
+  document.getElementById('parity-md').textContent = d.markdown || '';
+  document.getElementById('parity-modal').style.display = 'block';
+});
+document.getElementById('parity-modal-close')?.addEventListener('click', () => {
+  document.getElementById('parity-modal').style.display = 'none';
+});
+fetch('/api/chart/indicator-catalog').then(r=>r.json()).then(d=>{
+  const el = document.getElementById('parity-blurb');
+  if(el) el.textContent = d.count + ' indicators · ' + (d.categories||[]).length + ' categories. Full TV library needs commercial widget — see matrix.';
+});
+</script>
 </body>
 </html>"""
     from scheduler.health import _THEME_SNIPPET

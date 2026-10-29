@@ -53,6 +53,7 @@ class TestChartRoutes(AioHTTPTestCase):
         self.assertEqual(resp.status, 200)
         body = await resp.text()
         self.assertIn("chart-pro.js", body)
+        self.assertIn("chart-indicators.js", body)
         self.assertIn("lightweight-charts", body)
         self.assertIn("/portal/static/chrome.js", body)
 
@@ -67,3 +68,15 @@ class TestChartRoutes(AioHTTPTestCase):
         self.assertEqual(resp.status, 200)
         data = json.loads(await resp.text())
         self.assertIn("markers", data)
+
+    async def test_indicator_catalog_api(self):
+        resp = await self.client.get("/api/chart/indicator-catalog")
+        self.assertEqual(resp.status, 200)
+        data = json.loads(await resp.text())
+        self.assertGreaterEqual(data.get("count", 0), 50)
+
+    async def test_parity_doc_api(self):
+        resp = await self.client.get("/api/chart/parity")
+        self.assertEqual(resp.status, 200)
+        data = json.loads(await resp.text())
+        self.assertIn("TradingView", data.get("markdown", ""))
