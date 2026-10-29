@@ -46,7 +46,7 @@ class TestChartRoutes(AioHTTPTestCase):
     async def get_application(self):
         from scheduler.health import make_app
 
-        return make_app(MagicMock())
+        return await make_app(MagicMock())
 
     async def test_chart_page_loads_pro_script(self):
         resp = await self.client.get("/chart")
@@ -80,3 +80,24 @@ class TestChartRoutes(AioHTTPTestCase):
         self.assertEqual(resp.status, 200)
         data = json.loads(await resp.text())
         self.assertIn("TradingView", data.get("markdown", ""))
+
+
+class TestChartDataIsReal(AioHTTPTestCase):
+    """30 Oct 2026 review of the Chart Pro commits: no invented prices, clear errors for bad inputs."""
+
+    async def get_application(self):
+        from scheduler.health import make_app
+
+        return await make_app(MagicMock())
+
+    async def test_a_coin_without_data_gets_an_empty_chart_not_random_prices(self):
+        resp = await self.client.get("/api/chart/klines?symbol=NOSUCHCOINUSDT&tf=1h&limit=100")
+        self.assertEqual(resp.status, 200)
+        self.assertEqual(json.loads(await resp.text()), [])
+        scan = json.loads(await (await self.client.get("/api/chart/strategy-scan?symbol=NOSUCHCOINUSDT&tf=1h")).text())
+        self.assertEqual(scan["markers"], [])
+
+    async def test_bad_numbers_are_a_400_not_a_crash(self):
+        for url in ("/api/chart/klines?limit=abc", "/api/chart/strategy-scan?min_confidence=x",
+                    "/api/chart/history-signals?days=ten"):
+            self.assertEqual((await self.client.get(url)).status, 400, url)

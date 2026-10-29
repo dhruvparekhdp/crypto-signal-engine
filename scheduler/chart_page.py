@@ -9,14 +9,13 @@ Chart Pro (Lightweight Charts):
 """
 from __future__ import annotations
 
+import asyncio
 import json
-import math
 import time
 from pathlib import Path
 from typing import Any
 
 from aiohttp import web
-import numpy as np
 import pandas as pd
 
 from analysis.chart_scan import scan_strategy_markers
@@ -26,40 +25,6 @@ from storage.repository import Repository
 
 OVERLAYS_FILE = Path("data/reports/chart_overlays.json")
 PROGRESS_FILE = Path("data/reports/pipeline_progress.json")
-
-
-def _generate_synthetic_series(symbol: str, tf: str, count: int = 500) -> list[dict]:
-    """Fallback generator for smooth interactive preview when lake data is missing."""
-    np.random.seed(abs(hash(symbol + tf)) % (2**31))
-    base_price = 65000.0 if "BTC" in symbol else (3400.0 if "ETH" in symbol else 160.0)
-    
-    tf_minutes = {
-        "1m": 1, "5m": 5, "15m": 15, "30m": 30,
-        "1h": 60, "4h": 240, "8h": 480, "1d": 1440
-    }.get(tf, 60)
-    
-    import time
-    now_ts = int(time.time()) - (count * tf_minutes * 60)
-    
-    bars = []
-    cur_p = base_price
-    for i in range(count):
-        ret = np.random.normal(0.0002, 0.008)
-        cur_p = max(1.0, cur_p * (1.0 + ret))
-        high = cur_p * (1.0 + np.random.uniform(0.001, 0.008))
-        low = cur_p * (1.0 - np.random.uniform(0.001, 0.008))
-        open_p = cur_p * (1.0 + np.random.uniform(-0.003, 0.003))
-        vol = float(np.random.exponential(scale=250.0))
-        
-        bars.append({
-            "time": now_ts + (i * tf_minutes * 60),
-            "open": round(open_p, 2),
-            "high": round(high, 2),
-            "low": round(low, 2),
-            "close": round(cur_p, 2),
-            "volume": round(vol, 2),
-        })
-    return bars
 
 
 def _load_chart_bars(sym: str, tf: str, limit: int = 600) -> list[dict]:
@@ -105,15 +70,33 @@ def _load_chart_bars(sym: str, tf: str, limit: int = 600) -> list[dict]:
         except Exception:
             pass
 
-    return _generate_synthetic_series(sym, tf, limit)
+    # 30 Oct 2026 review: never invent prices. The old fallback drew random candles (BTC near 65,000) and ran the
+    # strategy scan on them as if they were real; no data now means an empty chart that says so.
+    return []
+
+
+def _q_int(request: web.Request, key: str, default: int) -> int:
+    try:
+        return int(request.query.get(key, default))
+    except (TypeError, ValueError):
+        raise web.HTTPBadRequest(text=json.dumps({"error": f"{key} must be a whole number"}),
+                                 content_type="application/json") from None
+
+
+def _q_float(request: web.Request, key: str, default: float) -> float:
+    try:
+        return float(request.query.get(key, default))
+    except (TypeError, ValueError):
+        raise web.HTTPBadRequest(text=json.dumps({"error": f"{key} must be a number"}),
+                                 content_type="application/json") from None
 
 
 async def api_chart_klines(runner, request: web.Request) -> web.Response:
     """Return historical candlestick bars for requested symbol and timeframe."""
     sym = request.query.get("symbol", "BTCUSDT").upper()
     tf = request.query.get("tf", "1h").lower()
-    limit = int(request.query.get("limit", 600))
-    bars = _load_chart_bars(sym, tf, limit)
+    limit = _q_int(request, "limit", 600)
+    bars = await asyncio.to_thread(_load_chart_bars, sym, tf, limit)      # parquet reads stay off the trading loop
     return web.Response(text=json.dumps(bars), content_type="application/json")
 
 
@@ -125,16 +108,13 @@ async def api_chart_strategy_scan(runner, request: web.Request) -> web.Response:
     sym = request.query.get("symbol", "BTCUSDT").upper()
     tf = request.query.get("tf", "1h").lower()
     strategy = request.query.get("strategy", "all").lower()
-    min_conf = float(request.query.get("min_confidence", "0.60"))
-    limit = int(request.query.get("limit", 800))
+    min_conf = _q_float(request, "min_confidence", 0.60)
+    limit = _q_int(request, "limit", 800)
     t0 = time.perf_counter()
-    bars = _load_chart_bars(sym, tf, limit)
-    markers = scan_strategy_markers(
-        bars,
-        strategy=strategy,
-        min_confidence=min_conf,
-        step=2 if len(bars) > 400 else 1,
-    )
+    bars = await asyncio.to_thread(_load_chart_bars, sym, tf, limit)
+    # the replay is CPU work: run it in a thread so the trading jobs in this process are never held up
+    markers = await asyncio.to_thread(scan_strategy_markers, bars, strategy=strategy, min_confidence=min_conf,
+                                      step=2 if len(bars) > 400 else 1)
     return web.Response(
         text=json.dumps({"symbol": sym, "tf": tf, "strategy": strategy, "markers": markers, "elapsed_ms": int((time.perf_counter() - t0) * 1000)}),
         content_type="application/json",
@@ -149,6 +129,14 @@ async def api_chart_indicator_catalog(runner, request: web.Request) -> web.Respo
     import re
 
     names = re.findall(r'name:\s*"([^"]+)"', text)
+    # moving averages are generated: [periods].forEach(p => { REGISTRY.push(maLine("sma", ...)); ... }) and single
+    # REGISTRY.push(maLine("wma", 20, ...)) lines (30 Oct 2026 review: the regex alone counted 22 of 59)
+    loop = re.search(r"\[([\d,\s]+)\]\.forEach\(p => \{(.*?)\}\);", text, re.S)
+    if loop:
+        periods = [x for x in loop.group(1).split(",") if x.strip()]
+        kinds = re.findall(r'maLine\("(\w+)", p', loop.group(2))
+        names += [f"{k.upper()} {p.strip()}" for p in periods for k in kinds]
+    names += [f"{k.upper()} {n}" for k, n in re.findall(r'REGISTRY\.push\(maLine\("(\w+)", (\d+)', text)]
     categories = sorted(set(re.findall(r'category:\s*"([^"]+)"', text)))
     return web.Response(
         text=json.dumps({"count": len(names), "categories": categories, "note": "Full catalog in chart-indicators.js + Indicators modal"}),
@@ -164,7 +152,7 @@ async def api_chart_parity_doc(runner, request: web.Request) -> web.Response:
 
 async def api_chart_history_signals(runner, request: web.Request) -> web.Response:
     sym = request.query.get("symbol", "BTCUSDT").upper()
-    days = int(request.query.get("days", 60))
+    days = _q_int(request, "days", 60)
     strategy = request.query.get("strategy", "").lower().strip()
     out: list[dict[str, Any]] = []
     try:

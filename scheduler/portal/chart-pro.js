@@ -270,7 +270,8 @@
     await Promise.all([loadKlines(), loadHistorySignals()]);
     await runStrategyScan();
     refreshIndicators();
-    $("load-status").textContent = `${klines.length} bars`;
+    $("load-status").textContent = klines.length ? `${klines.length} bars`
+      : `No price data for ${state.symbol} ${state.tf} on this server (prices are never made up)`;
   }
 
   function initChart() {
