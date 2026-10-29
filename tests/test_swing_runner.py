@@ -30,7 +30,9 @@ async def test_swing_trade_opens_holds_its_stop_and_closes_at_target():
     with patch("scheduler.runner.settings.paper_trading_enabled", True), \
          patch("scheduler.runner.settings.session_filter_enabled", False), \
          patch("scheduler.runner.settings.position_review_enabled", True), \
+         patch("scheduler.runner.settings.swing_trail_after_r", 0.0), \
          patch("scheduler.runner.AsyncSessionFactory", session_maker):
+        # the fixed 3R target (swing_trail_after_r = 0); trailing past 3R is tests/test_trail_past_3r.py
         st = CryptoState(symbol="btcusdt", base_asset="BTC")
         st.current_price = 60000.0
         st.atr_14 = 300.0

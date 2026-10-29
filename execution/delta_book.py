@@ -115,7 +115,8 @@ class DeltaBook:
                  round_up_risk_pct: float = 0.0, entry_guard: bool = False,
                  max_spread_pct: float = 0.5, max_slip_r: float = 0.10, floor_frac: float = 0.0,
                  capital_base_inr: float = 0.0, capital_since: str = "", rules_from_inr: float = 0.0,
-                 kill_after_trades: int = 100, withdraw_share: float = 0.5, kill_ack: str = ""):
+                 kill_after_trades: int = 100, withdraw_share: float = 0.5, kill_ack: str = "",
+                 place_target: bool = True):
         self.client = client
         self.mode = mode
         self.live_orders = live_orders
@@ -146,6 +147,7 @@ class DeltaBook:
         self.kill_after_trades = int(kill_after_trades)
         self.withdraw_share = float(withdraw_share)
         self.kill_ack = str(kill_ack or "").strip()
+        self.place_target = bool(place_target)    # False: no take-profit order (trail past 3R, owner 30 Oct 2026)
 
     @property
     def live(self) -> bool:
@@ -465,11 +467,13 @@ class DeltaBook:
                 return MirrorPlan(False, "stop_rejected_closed", plan.mode, plan.binance_symbol, plan.delta_symbol,
                                   plan.product_id, plan.side, plan.size, plan.entry, plan.stop, plan.target,
                                   plan.notional_usd, plan.risk_inr, plan.inr_available, plan.leverage)
-            try:
-                tp_order = await self.client.place_take_profit_market(plan.product_id, close_side, plan.size, plan.target)
-            except DeltaError as e:                          # the stop protects it; the engine still closes at target
-                tp_order = None
-                row["tp_error"] = str(e)[:150]
+            tp_order = None
+            if self.place_target:
+                try:
+                    tp_order = await self.client.place_take_profit_market(plan.product_id, close_side, plan.size,
+                                                                          plan.target)
+                except DeltaError as e:                      # the stop protects it; the engine still closes at target
+                    row["tp_error"] = str(e)[:150]
             row.update({
                 "placed": True,
                 "entry_order": _trim(entry_order),
@@ -535,8 +539,9 @@ class DeltaBook:
         cand = lock_stop - side * self.backstop_r * risk
         return max(init_stop, cand) if side > 0 else min(init_stop, cand)
 
-    async def on_stop_change(self, binance_symbol: str, lock_stop: float, spec: str = "") -> dict:
-        """The engine moved this trade's stop (ladder). Tighten the exchange backstop if it should move."""
+    async def on_stop_change(self, binance_symbol: str, lock_stop: float, spec: str = "", exact: bool = False) -> dict:
+        """The engine moved this trade's stop (ladder). Tighten the exchange backstop if it should move. exact: the
+        engine's stop is a trailing stop past 3R (fires on a touch), so the exchange stop goes exactly there."""
         delta_sym = binance_to_delta_symbol(binance_symbol)
         state = self._load_state()
         where = "positions" if self.live else "shadow"
@@ -549,7 +554,8 @@ class DeltaBook:
             pos["stop"] = lock_stop               # it kept showing the original stop after the ladder moved)
             state[where][key] = pos
             self._save_state(state)
-        want = round_to_tick(self.backstop_for(side, pos["init_stop"], pos["risk"], lock_stop), pos.get("tick", 0), side)
+        level = lock_stop if exact else self.backstop_for(side, pos["init_stop"], pos["risk"], lock_stop)
+        want = round_to_tick(level, pos.get("tick", 0), side)
         cur = pos["exchange_stop"]
         tighter = want > cur if side > 0 else want < cur
         if not tighter or abs(want - cur) < max(pos.get("tick", 0), 1e-12) / 2:

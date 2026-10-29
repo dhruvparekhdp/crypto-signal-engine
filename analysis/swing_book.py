@@ -468,6 +468,23 @@ def parse_ladder(text: str) -> list[tuple[float, float]]:
     return out
 
 
+def open_ended_target(price: float, side: int, dist: float) -> float:
+    """The 'target' of a trade that has none (trail past 3R, owner 30 Oct 2026): far enough never to be reached
+    (50R), and never at or below zero for a short."""
+    return price + 50 * dist if side > 0 else price - min(50 * dist, 0.9 * price)
+
+
+def trail_past(side: int, entry: float, initial_stop: float, stop: float, best: float, after_r: float,
+               trail_r: float) -> tuple[float, bool]:
+    """(new stop, trailing?) - once the best price is after_r R in profit, the stop trails trail_r R behind it and
+    never moves back. 1R = the initial stop distance."""
+    risk = abs(entry - initial_stop)
+    if after_r <= 0 or risk <= 0 or not best or side * (best - entry) / risk < after_r:
+        return stop, False
+    cand = best - side * trail_r * risk
+    return (max(stop, cand) if side > 0 else min(stop, cand)), True
+
+
 def swing_lock(side: int, entry: float, initial_stop: float, stop: float, peak: float, price: float,
                mode: str, after_r: float, trail_atr: float, ladder: str = DEFAULT_LADDER,
                buffer_r: float = 0.0) -> tuple[float, float]:

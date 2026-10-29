@@ -725,18 +725,26 @@ class AppRunner:
                             settings.swing_lock_after_r, settings.swing_lock_trail_atr, settings.swing_lock_ladder,
                             settings.swing_lock_buffer_r)
                         pos.peak_price = best
+                        trailing = False
+                        if settings.swing_trail_after_r > 0:
+                            new_stop, trailing = sb_mod.trail_past(
+                                side_i, pos.entry_price, pos.initial_stop_price or pos.stop_price, new_stop, best,
+                                settings.swing_trail_after_r, settings.swing_trail_r)
+                        pos._trailing = trailing
                         if new_stop != pos.stop_price:
                             self._tick_notes.append(f"profit lock ({settings.swing_lock_mode}): "
                                                     f"stop {pos.stop_price:.6g} -> {new_stop:.6g}")
                             pos.stop_price = new_stop
-                            await self._delta_call("on_stop_change", pos.symbol, new_stop, self._spec_of_pos(pos))
+                            await self._delta_call("on_stop_change", pos.symbol, new_stop, self._spec_of_pos(pos),
+                                                   trailing)
                             in_profit = (new_stop > pos.entry_price) if side_i > 0 else (new_stop < pos.entry_price)
                             if in_profit or abs(new_stop - pos.entry_price) / pos.entry_price < 0.005:
                                 pos.stop_moved_by_profit_lock = True       # exits are labelled profit_lock, not stop
                     init_stop = pos.initial_stop_price or pos.stop_price
                     side_w = 1 if getattr(pos.side, "value", pos.side) == "long" else -1
                     locked = swing and ((pos.stop_price > init_stop) if side_w > 0 else (pos.stop_price < init_stop))
-                    if locked and settings.swing_lock_confirm_min:
+                    if locked and settings.swing_lock_confirm_min and not getattr(pos, "_trailing", False):
+                        # (past 3R the trailing stop fires on a touch, as tested; below it the 1 h confirmation)
                         # whipsaw guard: a locked stop fires only on a confirmed candle close beyond it; between
                         # closes only the original stop (and the target) can close the trade
                         locked_stop = pos.stop_price
@@ -1561,6 +1569,8 @@ class AppRunner:
             side = 1 if sig.direction == "long" else -1
             dist = abs(sig.current_price - sig.stop_loss)
             stop, target = price - side * dist, price + side * sb.REWARD_RISK * dist
+            if settings.swing_trail_after_r > 0:
+                target = sb.open_ended_target(price, side, dist)           # no target: trails past 3R instead
             equity = cstate.wallet + sum(p.margin for p in cstate.positions)
             trusted = reg_row is not None and reg_row.status == "trusted"
             risk = settings.delta_india_risk_pct if mirror else sb.risk_for(sig.signal_type, sig.timeframe, dd, streak,
@@ -1665,8 +1675,12 @@ class AppRunner:
                 await self.notifier.send_text(
                     f"📝 <b>Swing Trade Opened</b> ({sig.signal_type.replace('swing_', '')})\n"
                     f"<b>{pos.symbol.upper()}</b> · {arrow}\n"
-                    f"Entry <b>${price:,.4f}</b> · Stop <b>${stop:,.4f}</b> · Target <b>${target:,.4f}</b>\n"
-                    f"Risk {risk * 100:.2f}% of wallet · {leverage:.1f}x · closes at stop, target or 7 days"
+                    f"Entry <b>${price:,.4f}</b> · Stop <b>${stop:,.4f}</b> · "
+                    + (f"No target: past {settings.swing_trail_after_r:g}R the stop trails "
+                       f"{settings.swing_trail_r:g}R behind\n" if settings.swing_trail_after_r > 0
+                       else f"Target <b>${target:,.4f}</b>\n")
+                    + f"Risk {risk * 100:.2f}% of wallet · {leverage:.1f}x · closes at stop, "
+                    + ("trailing stop" if settings.swing_trail_after_r > 0 else "target") + " or 7 days"
                     + (f"\nSignal rating <b>{sig.rating['grade']}</b> (backtest {sig.rating['expected_r']:+.2f}R)"
                        if getattr(sig, "rating", None) else ""),
                     parse_mode=ParseMode.HTML)
@@ -1753,6 +1767,7 @@ class AppRunner:
                                  kill_after_trades=int(settings.delta_india_kill_after_trades),
                                  withdraw_share=float(settings.delta_india_withdraw_share),
                                  kill_ack=settings.delta_india_kill_rule_ack or "",
+                                 place_target=not settings.swing_trail_after_r > 0,
                                  shadow_path=Path("data/delta_testnet.jsonl") if testnet else SHADOW_PATH,
                                  state_path=Path("data/delta_testnet_state.json") if testnet else STATE_PATH)
                 out = await getattr(book, method)(*args)
