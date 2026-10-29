@@ -7939,9 +7939,19 @@ async def make_app(runner) -> web.Application:
     app.router.add_get("/api/debug/null-test", _bind(_api_debug_null_test))
     app.router.add_get("/api/pipeline/progress", _bind(_api_pipeline_progress))
     app.router.add_get("/pipeline", _pipeline_page)
-    from scheduler.chart_page import api_chart_klines, api_chart_overlays, chart_page
+    from scheduler.chart_page import (
+        api_chart_history_signals,
+        api_chart_klines,
+        api_chart_overlays,
+        api_chart_strategies,
+        api_chart_strategy_scan,
+        chart_page,
+    )
     app.router.add_get("/api/chart/klines", _bind(api_chart_klines))
     app.router.add_get("/api/chart/overlays", _bind(api_chart_overlays))
+    app.router.add_get("/api/chart/strategies", _bind(api_chart_strategies))
+    app.router.add_get("/api/chart/strategy-scan", _bind(api_chart_strategy_scan))
+    app.router.add_get("/api/chart/history-signals", _bind(api_chart_history_signals))
     app.router.add_get("/chart", chart_page)
     from scheduler.v2_pages import register as _register_v2_pages
 
