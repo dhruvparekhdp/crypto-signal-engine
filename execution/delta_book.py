@@ -114,7 +114,8 @@ class DeltaBook:
                  daily_loss_pct: float = 0.0, min_wallet_inr: float = 0.0, min_leverage: int = MIN_LEVERAGE,
                  round_up_risk_pct: float = 0.0, entry_guard: bool = False,
                  max_spread_pct: float = 0.5, max_slip_r: float = 0.10, floor_frac: float = 0.0,
-                 capital_base_inr: float = 0.0, capital_since: str = ""):
+                 capital_base_inr: float = 0.0, capital_since: str = "", rules_from_inr: float = 0.0,
+                 kill_after_trades: int = 100, withdraw_share: float = 0.5, kill_ack: str = ""):
         self.client = client
         self.mode = mode
         self.live_orders = live_orders
@@ -139,6 +140,12 @@ class DeltaBook:
         self.floor_frac = float(floor_frac)
         self.capital_base_inr = float(capital_base_inr or 0)   # put in before the history Delta shows
         self.capital_since_us = _day_us(capital_since)         # flows before this are inside the base
+        # kill rule and profit-withdrawal rule (execution/capital_rules.py; owner 30 Oct 2026): enforce from this much
+        # money put in; 0 = off. Below it they only report what they would do.
+        self.rules_from_inr = float(rules_from_inr or 0)
+        self.kill_after_trades = int(kill_after_trades)
+        self.withdraw_share = float(withdraw_share)
+        self.kill_ack = str(kill_ack or "").strip()
 
     @property
     def live(self) -> bool:
@@ -182,6 +189,12 @@ class DeltaBook:
         except DeltaError as e:
             return MirrorPlan(False, f"wallet_{e}", self.mode, binance_symbol, delta_sym)
         side = "buy" if side_word.lower() in ("long", "buy") else "sell"
+        if self.rules_from_inr > 0 and self.mode == "live":
+            # profit due to be withdrawn is not traded with (enforcing only; 0 in test mode)
+            from execution.capital_rules import reserve_inr
+            held = reserve_inr(self._load_state().get("capital_rules"))
+            if held > 0:
+                total, inr = max(0.0, total - held), max(0.0, inr - held)
         # Shadow with an empty INR wallet still sizes against a ₹5,000 notional so the
         # log shows a realistic order; live mode always uses the real balance.
         sizing_equity = max(total, inr) if self.mode == "live" else max(inr, 5000.0)
@@ -232,6 +245,11 @@ class DeltaBook:
     async def _loss_guard(self) -> str:
         """'' when new orders may go out, else the reason they may not. The day's starting wallet (UTC) is stored
         in the state file; an unreadable wallet blocks new orders (fail closed) but never touches open ones."""
+        from execution.capital_rules import blocks_entries
+        if self.rules_from_inr > 0:
+            why = blocks_entries(self._load_state().get("capital_rules"))
+            if why:
+                return why
         floor = self.floor_inr()
         if self.daily_loss_pct <= 0 and floor <= 0:
             return ""
@@ -304,6 +322,39 @@ class DeltaBook:
             return None
         return {"event": "floor_updated", "floor_inr": cap["floor_inr"], "was_inr": old, "net_deposits_inr": cap["net_inr"],
                 "new_flows": [{"type": v["type"], "inr": v["inr"]} for v in new]}
+
+    async def check_capital_rules(self) -> list[dict]:
+        """Kill rule and profit rule (execution/capital_rules.py), once money put in is known. Events to report."""
+        if not self.live or self.rules_from_inr <= 0 or not hasattr(self.client, "wallet_total_inr"):
+            return []
+        from execution.capital_rules import evaluate
+        state = self._load_state()
+        net = float((state.get("capital") or {}).get("net_inr") or 0)
+        if net <= 0:
+            return []
+        try:
+            wallet = await self.client.wallet_total_inr()
+        except DeltaError:
+            return []
+        if "capital_rules_trades" not in state:                # first run: count live entries already made
+            n = 0
+            try:
+                for ln in self.shadow_path.read_text().splitlines():
+                    try:
+                        r = json.loads(ln)
+                    except ValueError:
+                        continue
+                    if r.get("mode") == "live" and r.get("placed") and not r.get("event") and r.get("size"):
+                        n += 1
+            except OSError:
+                pass
+            state["capital_rules_trades"] = n
+        rules, events = evaluate(state.get("capital_rules"), wallet_inr=wallet, net_inr=net,
+                                 live_trades=int(state["capital_rules_trades"]), active_from_inr=self.rules_from_inr,
+                                 kill_after=self.kill_after_trades, withdraw_share=self.withdraw_share, ack=self.kill_ack)
+        state["capital_rules"] = rules
+        self._save_state(state)
+        return events
 
     async def on_paper_open(self, binance_symbol: str, side_word: str, entry: float,
                             stop: float, target: float, signal_type: str = "", spec: str = "",
@@ -428,6 +479,9 @@ class DeltaBook:
             record.update(stop_order_id=_oid(stop_order), tp_order_id=_oid(tp_order) if tp_order else None,
                           pending=False)
             self._update_record(key, record)
+            st = self._load_state()                          # live trades counted for the kill rule
+            st["capital_rules_trades"] = int(st.get("capital_rules_trades") or 0) + 1
+            self._save_state(st)
             # the exchange's own liquidation price must sit beyond the stop; if not, get out now
             liq = None
             if hasattr(self.client, "liquidation_price"):
@@ -598,8 +652,9 @@ class DeltaBook:
             except DeltaError:
                 pass
         floor_event = await self.refresh_capital()          # deposits / withdrawals -> the floor (after the rate)
-        state = self._load_state()
         events = [floor_event] if floor_event else []
+        events += await self.check_capital_rules()
+        state = self._load_state()
         groups: dict[str, list] = {}
         for key, pos in (state.get("positions") or {}).items():
             groups.setdefault(_coin_of(key, pos), []).append(key)

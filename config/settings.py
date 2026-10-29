@@ -359,6 +359,15 @@ class Settings(BaseSettings):
     # be inside this base and ignored, so nothing is counted twice
     delta_india_capital_base_inr: float = 0.0
     delta_india_capital_since: str = ""
+    # Kill rule + profit-withdrawal rule (execution/capital_rules.py; owner 30 Oct 2026: "this will come after i add
+    # more than 10k ... with 500-800 i am testing it"): ENFORCE once money put in >= delta_india_rules_from_inr;
+    # below it they only report (test mode). Kill: after delta_india_kill_after_trades live trades with the book's
+    # profit (wallet - money put in) below zero, no new live entries until delta_india_kill_rule_ack = the trip id.
+    # Profit: each month half of last month's profit is due to be withdrawn and is not traded with until it is.
+    delta_india_rules_from_inr: float = 10000.0
+    delta_india_kill_after_trades: int = 100
+    delta_india_withdraw_share: float = 0.5
+    delta_india_kill_rule_ack: str = ""
     # Leverage set on Delta before every live entry: the highest that keeps liquidation >= 2x the stop distance away,
     # never below this (owner, 17 Oct 2026) and never above 10x. Swing stops <= 8% -> 6-10x in practice.
     delta_india_min_leverage: int = 5

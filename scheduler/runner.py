@@ -1749,6 +1749,10 @@ class AppRunner:
                                  floor_frac=0.0 if testnet else float(settings.delta_india_floor_frac),
                                  capital_base_inr=0.0 if testnet else float(settings.delta_india_capital_base_inr or 0),
                                  capital_since="" if testnet else (settings.delta_india_capital_since or ""),
+                                 rules_from_inr=0.0 if testnet else float(settings.delta_india_rules_from_inr or 0),
+                                 kill_after_trades=int(settings.delta_india_kill_after_trades),
+                                 withdraw_share=float(settings.delta_india_withdraw_share),
+                                 kill_ack=settings.delta_india_kill_rule_ack or "",
                                  shadow_path=Path("data/delta_testnet.jsonl") if testnet else SHADOW_PATH,
                                  state_path=Path("data/delta_testnet_state.json") if testnet else STATE_PATH)
                 out = await getattr(book, method)(*args)
@@ -1776,6 +1780,14 @@ class AppRunner:
                 if e.get("event") == "reconcile_error" and seen.get((target, e.get("delta_symbol")), 0) < 2:
                     continue
                 label = "Delta India LIVE ₹" if target == "live" else "Delta DEMO" if target == "testnet" else "Delta shadow"
+                if e.get("event") in ("kill_rule_tripped", "kill_rule_cleared", "profit_withdrawal_due",
+                                      "profit_withdrawn", "capital_rules_mode"):
+                    from execution.capital_rules import alert_text as rules_text
+                    try:
+                        await self.notifier.send_text(rules_text(e))
+                    except Exception:  # noqa: BLE001
+                        pass
+                    continue
                 if e.get("event") == "floor_updated":
                     flows = ", ".join(f"{f['type']} ₹{f['inr']:+,.2f}" for f in e.get("new_flows") or [])
                     try:

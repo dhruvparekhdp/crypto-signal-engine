@@ -353,6 +353,18 @@ FIELDS: tuple[Field, ...] = (
     Field("delta_india_capital_since", "delta", "Count deposits from (YYYY-MM-DD)",
           "Deposits and withdrawals before this date are inside the opening capital above and are not counted again.",
           kind="str"),
+    Field("delta_india_rules_from_inr", "delta", "Kill + profit rules enforce from (Rs put in)",
+          "Below this much money put in, the kill rule and the profit-withdrawal rule only report what they would do. "
+          "0 turns both off.", kind="float", lo=0.0, hi=100_000_000.0),
+    Field("delta_india_kill_after_trades", "delta", "Kill rule: judge after this many live trades",
+          "After this many live trades, if the book's profit (wallet minus money put in) is below zero, new live "
+          "entries stop until you acknowledge.", kind="int", lo=20, hi=1000),
+    Field("delta_india_withdraw_share", "delta", "Profit rule: share of last month's profit to withdraw",
+          "Asked on the 1st of each month; not traded with until withdrawn (when enforcing).",
+          kind="float", lo=0.0, hi=1.0),
+    Field("delta_india_kill_rule_ack", "delta", "Kill rule acknowledgement",
+          "Paste the trip id from the kill-rule alert (e.g. KILL-20270115-0905) after reviewing, to allow live entries "
+          "again.", kind="str"),
     Field("delta_india_live_orders", "delta", "Allow live Delta orders (second gate)",
           "Even when mode is live, orders are blocked until this is ON. Keep OFF until you "
           "explicitly want real INR futures fills.", kind="bool"),
@@ -463,7 +475,7 @@ MAIN_SECTIONS: dict[str, tuple[str, ...]] = {
                   "move_attribution_enabled", "groq_postmortem_enabled"),
 }
 ADVANCED = frozenset({
-    "delta_india_floor_frac", "delta_india_capital_base_inr", "delta_india_capital_since", "delta_india_base_url", "delta_only_mode", "delta_india_data_enabled", "delta_klines_seconds",
+    "delta_india_floor_frac", "delta_india_capital_base_inr", "delta_india_capital_since", "delta_india_rules_from_inr", "delta_india_kill_after_trades", "delta_india_withdraw_share", "delta_india_kill_rule_ack", "delta_india_base_url", "delta_only_mode", "delta_india_data_enabled", "delta_klines_seconds",
     "binance_only_mode", "binance_klines_enabled", "binance_klines_seconds", "binance_ws_enabled",
     "binance_oi_enabled", "coindcx_enabled", "coingecko_enabled", "twelvedata_enabled", "db_retention_days",
     "intraday_min_confidence", "intraday_min_timeframe_minutes", "intraday_max_open", "intraday_margin_cap_frac",
