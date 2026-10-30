@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import unittest
+from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from aiohttp.test_utils import AioHTTPTestCase
@@ -32,6 +33,14 @@ def _sample_bars(n: int = 120):
     return bars
 
 
+class TestChartMobileLayout(unittest.TestCase):
+    def test_command_tools_css_reserves_chart_height_on_phone(self):
+        css = Path("scheduler/portal/command-tools.css").read_text(encoding="utf-8")
+        self.assertIn("max-width:767px", css)
+        self.assertIn("min-height:55vh", css)
+        self.assertIn("chart-tools-toggle", css)
+
+
 class TestChartScan(unittest.TestCase):
     def test_scan_strategy_markers_returns_list(self):
         markers = scan_strategy_markers(_sample_bars(150), strategy="confluence", step=5, max_markers=10)
@@ -58,6 +67,8 @@ class TestChartRoutes(AioHTTPTestCase):
         self.assertIn('integrity="', body)
         self.assertIn('crossorigin="anonymous"', body)
         self.assertIn("/portal/static/chrome.js", body)
+        self.assertIn("btn-tools-toggle", body)
+        self.assertIn("chart-toolbar-wrap", body)
         self.assertIn("intraday detectors, no proven edge", body.lower())
 
     async def test_chart_strategies_api(self):

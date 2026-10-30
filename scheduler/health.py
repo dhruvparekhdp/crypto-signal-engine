@@ -6928,7 +6928,16 @@ td.num,th.num{text-align:right;font-variant-numeric:tabular-nums}
 </main>
 <script>
 const LOAD_MS=10000;
+const PREDICT_COLS=9;
 function withTimeout(p,ms){return Promise.race([p,new Promise((_,rej)=>setTimeout(()=>rej(new Error('timeout')),ms))]);}
+function predictPanelInRow(build){
+  const tb=document.getElementById('rows');
+  const slot=document.createElement('div');
+  build(slot);
+  tb.innerHTML='<tr><td colspan="'+PREDICT_COLS+'" style="padding:0">'+slot.innerHTML+'</td></tr>';
+  const btn=tb.querySelector('.pnl-r');
+  if(btn) btn.addEventListener('click', load);
+}
 const esc=s=>String(s==null?'':s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 function px(v){
   if(v==null) return '—';
@@ -6964,7 +6973,7 @@ async function load(){
     // The ticker line alone left the table sitting on "loading…", which
     // reads as a quiet market rather than a dead request.
     document.getElementById('tick').textContent = 'failed to update';
-    Panel.error(document.getElementById('rows'), 'the outlook', e, load);
+    predictPanelInRow(el=>Panel.error(el,'the outlook',e));
     return;
   }
 

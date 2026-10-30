@@ -54,6 +54,8 @@ html.pc-on body.cmd-tool .nav-links{display:none!important}
 .cmd-tool table.tbl th,.cmd-tool table.tbl td{padding:10px 12px;text-align:left;border-bottom:1px solid var(--line2)}
 .cmd-tool table.tbl th{font:700 10px var(--mono);letter-spacing:.08em;text-transform:uppercase;color:var(--dim);background:var(--panel)}
 .cmd-tool table.tbl td.num,.cmd-tool table.tbl th.num{text-align:right;font-variant-numeric:tabular-nums}
+.cmd-tool table.tbl td[colspan]{white-space:normal}
+.cmd-tool table.tbl td:has(.pnl)::before{content:none}
 .cmd-tool .pos{color:var(--up)}.cmd-tool .neg{color:var(--dn)}.cmd-tool .muted{color:var(--dim)}
 
 .cmd-tool .empty-state{padding:28px 16px;text-align:center;font:13px var(--mono);color:var(--dim);border:2px dashed var(--line2)}
@@ -81,6 +83,28 @@ body.cmd-tool-chart .side-panel{display:none}
 }
 @media(max-width:899px){
   body.cmd-tool-chart .chart-layout{flex:1;display:flex;flex-direction:column;min-height:0}
+}
+
+/* Phone: collapse toolbar; chart ≥55% of viewport (375×812 target) */
+body.cmd-tool-chart .chart-tools-toggle{display:none}
+@media(max-width:767px){
+  body.cmd-tool-chart .wrap{gap:8px;padding:8px 12px 12px}
+  body.cmd-tool-chart .tool-head h2{font-size:17px}
+  body.cmd-tool-chart .flag-research{font-size:11px;padding:8px 10px;box-shadow:3px 3px 0 var(--acc)}
+  body.cmd-tool-chart .chart-tools-toggle{display:inline-flex;width:100%;margin:0}
+  body.cmd-tool-chart .chart-toolbar-wrap{flex:none;border-bottom:3px solid var(--line)}
+  body.cmd-tool-chart .chart-toolbar{display:none;flex-direction:column;align-items:stretch;max-height:42vh;overflow-y:auto;padding:8px 10px 10px}
+  body.cmd-tool-chart .chart-toolbar-wrap.tools-open .chart-toolbar{display:flex}
+  body.cmd-tool-chart .chart-tools-extra{display:none}
+  body.cmd-tool-chart .chart-toolbar-wrap.tools-open .chart-tools-extra{display:block;padding:0 10px 8px;border-bottom:2px solid var(--line2);max-height:20vh;overflow-y:auto}
+  body.cmd-tool-chart .chart-legend{padding:4px 10px;font-size:10px}
+  body.cmd-tool-chart .chart-panel{flex:1 1 auto;min-height:0}
+  body.cmd-tool-chart .chart-layout{flex:1 1 auto;min-height:55vh}
+  body.cmd-tool-chart #chart-stack{flex:1 1 55vh;min-height:55vh}
+  body.cmd-tool-chart #tv-chart-root{min-height:calc(55vh - 48px)}
+}
+@media(min-width:768px){
+  body.cmd-tool-chart .chart-toolbar-wrap.tools-open .chart-toolbar{display:flex}
 }
 
 @media(max-width:640px){

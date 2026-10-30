@@ -290,7 +290,9 @@ async def chart_page(request: web.Request) -> web.Response:
   </div>
   <div class="flag-research" role="note">Research: strategy-scan markers (S:) replay intraday detectors on visible bars — no proven edge. Live swing signals use the Book, not this scan.</div>
   <div class="panel chart-panel">
-<div class="chart-toolbar">
+<div class="chart-toolbar-wrap" id="chart-toolbar-wrap">
+  <button type="button" class="pill-btn chart-tools-toggle" id="btn-tools-toggle" aria-expanded="false" aria-controls="chart-toolbar">Tools</button>
+<div class="chart-toolbar" id="chart-toolbar">
   <div class="tool-block"><span class="tool-label">Symbol</span><div id="sym-row" style="display:flex;flex-wrap:wrap;gap:4px"></div></div>
   <div class="tool-block"><span class="tool-label">TF</span><div id="tf-row" style="display:flex;flex-wrap:wrap;gap:4px"></div></div>
   <div class="tool-block">
@@ -321,7 +323,8 @@ async def chart_page(request: web.Request) -> web.Response:
     <button class="pill-btn" id="btn-clear-draw" type="button">Clear drawings</button>
   </div>
 </div>
-<div id="active-indicators"></div>
+<div id="active-indicators" class="chart-tools-extra"></div>
+</div>
 <div class="chart-legend" id="chart-legend">—</div>
 <div class="chart-layout">
   <div id="chart-stack" class="chart-stack">
@@ -375,6 +378,16 @@ fetch('/api/chart/indicator-catalog').then(r=>r.json()).then(d=>{
   const el = document.getElementById('parity-blurb');
   if(el) el.textContent = d.count + ' indicators · ' + (d.categories||[]).length + ' categories.';
 }).catch(()=>{});
+(function(){
+  const wrap = document.getElementById('chart-toolbar-wrap');
+  const btn = document.getElementById('btn-tools-toggle');
+  if(!wrap || !btn) return;
+  btn.addEventListener('click', () => {
+    const open = wrap.classList.toggle('tools-open');
+    btn.setAttribute('aria-expanded', open ? 'true' : 'false');
+    btn.textContent = open ? 'Hide tools' : 'Tools';
+  });
+})();
 </script>
 </body>
 </html>"""
