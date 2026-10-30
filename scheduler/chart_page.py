@@ -27,52 +27,82 @@ OVERLAYS_FILE = Path("data/reports/chart_overlays.json")
 PROGRESS_FILE = Path("data/reports/pipeline_progress.json")
 
 
-def _load_chart_bars(sym: str, tf: str, limit: int = 600) -> list[dict]:
-    """Shared kline loader for chart APIs."""
+def _lake_bars(sym: str, tf: str, limit: int) -> list[dict]:
+    """Older history from lake parquet only (W19 #7)."""
     sym = sym.upper()
     tf = tf.lower()
-    limit = max(50, min(int(limit), 2000))
-
-    if OVERLAYS_FILE.exists():
-        try:
-            data = json.loads(OVERLAYS_FILE.read_text())
-            cached = data.get("klines", {}).get(sym, {}).get(tf)
-            if cached and len(cached) > 0:
-                return cached[-limit:]
-        except Exception:
-            pass
-
     lake_5m = Path(f"data/lake/um/klines/{sym}/5m")
-    if lake_5m.exists() and list(lake_5m.glob("*.parquet")):
+    if not lake_5m.exists() or not list(lake_5m.glob("*.parquet")):
+        return []
+    try:
+        parquets = sorted(list(lake_5m.glob("*.parquet")))[-12:]
+        dfs = [pd.read_parquet(p) for p in parquets]
+        merged = pd.concat(dfs, ignore_index=True)
+        if "open_time" in merged.columns:
+            merged["datetime"] = pd.to_datetime(merged["open_time"], unit="ms", utc=True)
+            merged = merged.set_index("datetime").sort_index()
+
+        from scripts.backtest_multi_year_pipeline import resample_klines
+
+        resampled = resample_klines(merged, tf) if tf != "5m" else merged
+        tail_df = resampled.tail(limit)
+        return [
+            {
+                "time": int(ts.timestamp()),
+                "open": round(float(r["open"]), 6),
+                "high": round(float(r["high"]), 6),
+                "low": round(float(r["low"]), 6),
+                "close": round(float(r["close"]), 6),
+                "volume": round(float(r["volume"]), 2),
+            }
+            for ts, r in tail_df.iterrows()
+        ]
+    except Exception:
+        return []
+
+
+def _merge_bars(lake: list[dict], recent: list[dict], limit: int) -> list[dict]:
+    by_time: dict[int, dict] = {int(b["time"]): b for b in lake}
+    for b in recent:
+        by_time[int(b["time"])] = b
+    return sorted(by_time.values(), key=lambda x: int(x["time"]))[-limit:]
+
+
+async def _load_chart_bars_async(runner, sym: str, tf: str, limit: int = 600) -> list[dict]:
+    """Recent candles from Delta (collectors/delta_market.fetch_candles); lake for older bars."""
+    sym_u = sym.upper()
+    tf_l = tf.lower()
+    limit = max(50, min(int(limit), 2000))
+    recent: list[dict] = []
+
+    from collectors.delta_market import TF_TO_RES
+
+    res = TF_TO_RES.get(tf_l)
+    dm = getattr(runner, "delta_market", None) if runner is not None else None
+    if dm is not None and res is not None and callable(getattr(dm, "fetch_candles", None)):
         try:
-            parquets = sorted(list(lake_5m.glob("*.parquet")))[-6:]
-            dfs = [pd.read_parquet(p) for p in parquets]
-            merged = pd.concat(dfs, ignore_index=True)
-            if "open_time" in merged.columns:
-                merged["datetime"] = pd.to_datetime(merged["open_time"], unit="ms", utc=True)
-                merged = merged.set_index("datetime").sort_index()
-
-            from scripts.backtest_multi_year_pipeline import resample_klines
-
-            resampled = resample_klines(merged, tf) if tf != "5m" else merged
-            tail_df = resampled.tail(limit)
-            return [
-                {
-                    "time": int(ts.timestamp()),
-                    "open": round(float(r["open"]), 2),
-                    "high": round(float(r["high"]), 2),
-                    "low": round(float(r["low"]), 2),
-                    "close": round(float(r["close"]), 2),
-                    "volume": round(float(r["volume"]), 2),
-                }
-                for ts, r in tail_df.iterrows()
-            ]
+            raw = await dm.fetch_candles(sym_u, res, limit=min(limit, 2000))
+        except TypeError:
+            raw = []
         except Exception:
-            pass
+            raw = []
+        recent = [
+            {
+                "time": int(b["timestamp"].timestamp()),
+                "open": round(float(b["open"]), 6),
+                "high": round(float(b["high"]), 6),
+                "low": round(float(b["low"]), 6),
+                "close": round(float(b["close"]), 6),
+                "volume": round(float(b.get("volume") or 0.0), 2),
+            }
+            for b in raw
+        ]
 
-    # 30 Oct 2026 review: never invent prices. The old fallback drew random candles (BTC near 65,000) and ran the
-    # strategy scan on them as if they were real; no data now means an empty chart that says so.
-    return []
+    if len(recent) >= limit:
+        return recent[-limit:]
+
+    lake = await asyncio.to_thread(_lake_bars, sym_u, tf_l, limit)
+    return _merge_bars(lake, recent, limit)
 
 
 def _q_int(request: web.Request, key: str, default: int) -> int:
@@ -96,7 +126,7 @@ async def api_chart_klines(runner, request: web.Request) -> web.Response:
     sym = request.query.get("symbol", "BTCUSDT").upper()
     tf = request.query.get("tf", "1h").lower()
     limit = _q_int(request, "limit", 600)
-    bars = await asyncio.to_thread(_load_chart_bars, sym, tf, limit)      # parquet reads stay off the trading loop
+    bars = await _load_chart_bars_async(runner, sym, tf, limit)
     return web.Response(text=json.dumps(bars), content_type="application/json")
 
 
@@ -111,7 +141,7 @@ async def api_chart_strategy_scan(runner, request: web.Request) -> web.Response:
     min_conf = _q_float(request, "min_confidence", 0.60)
     limit = _q_int(request, "limit", 800)
     t0 = time.perf_counter()
-    bars = await asyncio.to_thread(_load_chart_bars, sym, tf, limit)
+    bars = await _load_chart_bars_async(runner, sym, tf, limit)
     # the replay is CPU work: run it in a thread so the trading jobs in this process are never held up
     markers = await asyncio.to_thread(scan_strategy_markers, bars, strategy=strategy, min_confidence=min_conf,
                                       step=2 if len(bars) > 400 else 1)
@@ -222,59 +252,47 @@ async def api_chart_overlays(runner, request: web.Request) -> web.Response:
 
 async def chart_page(request: web.Request) -> web.Response:
     """TradingView Lightweight Charts + engine strategy scanner."""
+    from scheduler.health import _THEME_SNIPPET
+    from scheduler.portal import asset_url, command_tool_head_extra
+
+    ci = asset_url("chart-indicators.js")
+    cd = asset_url("chart-drawings.js")
+    cp = asset_url("chart-pro.js")
     html = """<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Chart Pro — Multi-TF · Strategies · Indicators</title>
-<script src="https://unpkg.com/lightweight-charts@4.2.0/dist/lightweight-charts.standalone.production.js"></script>
+<title>Chart — Command</title>
 <style>
-:root{--bg:#0b1120;--panel:#131d31;--border:#223049;--text:#f1f5f9;--muted:#94a3b8;--primary:#38bdf8}
-*{box-sizing:border-box;margin:0;padding:0}
-body{background:var(--bg);color:var(--text);font-family:system-ui,-apple-system,sans-serif;height:100vh;display:flex;flex-direction:column;overflow:hidden}
-.header{background:var(--panel);border-bottom:1px solid var(--border);padding:8px 14px;display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px}
-.brand{font-weight:700;color:var(--primary);font-size:14px}
-.toolbar{background:#0f172a;border-bottom:1px solid var(--border);padding:6px 12px;display:flex;flex-wrap:wrap;gap:10px;align-items:center;max-height:42vh;overflow-y:auto}
-.tool-block{display:flex;flex-wrap:wrap;align-items:center;gap:6px;padding:4px 8px;background:rgba(15,23,42,0.6);border:1px solid var(--border);border-radius:8px}
-.tool-label{font-size:10px;text-transform:uppercase;color:var(--muted);letter-spacing:.06em;margin-right:4px}
-.pill-btn{background:var(--panel);border:1px solid var(--border);color:var(--muted);padding:3px 8px;border-radius:6px;font-size:11px;font-weight:600;cursor:pointer}
-.pill-btn.active,.pill-btn:hover{color:var(--primary);border-color:var(--primary)}
-.toggle{font-size:11px;color:var(--muted);display:flex;align-items:center;gap:4px;cursor:pointer;white-space:nowrap}
-.toggle input{accent-color:var(--primary)}
-select,input[type=range]{background:#0f172a;border:1px solid var(--border);color:var(--text);border-radius:6px;padding:4px 8px;font-size:11px}
-.layout{flex:1;display:grid;grid-template-columns:1fr 280px;min-height:0}
-.chart-stack{display:flex;flex-direction:column;min-height:0;border-right:1px solid var(--border)}
-#tv-chart-root{flex:1;min-height:200px}
-.sub-pane{height:100px;border-top:1px solid var(--border)}
-.side{background:#0a1020;padding:10px 12px;overflow-y:auto;font-size:11px;line-height:1.5;color:var(--muted)}
-.side h3{font-size:12px;color:var(--primary);margin:8px 0 6px}
-.side p{margin-bottom:8px}
-.status{font-size:10px;color:#64748b;margin-left:6px}
-.nav-links a{color:var(--muted);text-decoration:none;font-size:12px;margin-left:10px}
-.nav-links a:hover{color:var(--primary)}
-.ind-chip{display:inline-flex;align-items:center;gap:4px;background:#1e293b;border:1px solid #334155;border-radius:999px;padding:2px 8px;margin:2px;font-size:10px;color:#e2e8f0}
-.ind-chip button{background:none;border:none;color:#94a3b8;cursor:pointer;font-size:14px;line-height:1}
-#ind-modal{position:fixed;inset:0;background:rgba(0,0,0,.7);display:none;align-items:center;justify-content:center;z-index:200;padding:16px}
+.ind-chip{display:inline-flex;align-items:center;gap:4px;border:2px solid var(--line2);padding:2px 8px;margin:2px;font:11px var(--mono)}
+.ind-chip button{background:none;border:none;color:var(--dim);cursor:pointer;font-size:14px}
+#ind-modal{position:fixed;inset:0;background:rgba(0,0,0,.75);display:none;align-items:center;justify-content:center;z-index:200;padding:16px}
 #ind-modal.open{display:flex}
-.ind-panel{background:#0f172a;border:1px solid #334155;border-radius:12px;width:min(640px,96vw);max-height:85vh;display:flex;flex-direction:column}
-.ind-panel-head{padding:12px 14px;border-bottom:1px solid #334155;display:flex;gap:8px;align-items:center;flex-wrap:wrap}
-.ind-panel-body{overflow:auto;padding:8px 12px 14px}
-.ind-row{display:flex;align-items:center;gap:8px;padding:6px 4px;border-bottom:1px solid #1e293b;font-size:12px;cursor:pointer}
-.ind-row:hover{background:#131d31}
-.ind-cat{margin-left:auto;font-size:10px;color:#64748b}
-.tv-partial{font-size:9px;color:#fbbf24;border:1px solid #92400e;border-radius:4px;padding:1px 4px;margin-left:4px}
-#active-indicators{display:flex;flex-wrap:wrap;gap:2px;padding:4px 12px;border-bottom:1px solid var(--border);min-height:28px}
-.draw-bar{display:flex;gap:4px;flex-wrap:wrap}
-@media(max-width:900px){.layout{grid-template-columns:1fr}.side{display:none}}
+.ind-panel{background:var(--panel);border:3px solid var(--line);box-shadow:8px 8px 0 var(--acc);width:min(640px,96vw);max-height:85vh;display:flex;flex-direction:column}
+.ind-panel-head{padding:12px 14px;border-bottom:2px solid var(--line2);display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.ind-panel-body{overflow:auto;padding:8px 12px 14px;max-height:60vh}
+.ind-row{display:flex;align-items:center;gap:8px;padding:8px 4px;border-bottom:1px solid var(--line2);font:12px var(--mono);cursor:pointer;min-height:44px}
+.ind-cat{margin-left:auto;font-size:10px;color:var(--dim)}
+.tv-partial{font-size:9px;color:var(--dn);border:2px solid var(--line2);padding:1px 4px;margin-left:4px}
+#chart-empty{display:none;position:absolute;inset:0;align-items:center;justify-content:center;padding:24px;text-align:center;z-index:2;pointer-events:none}
+#chart-empty.on{display:flex}
+.status{font:10px var(--mono);color:var(--dim);margin-left:6px}
+#parity-modal{display:none;position:fixed;inset:0;background:rgba(0,0,0,.8);z-index:210;padding:16px;overflow:auto}
+#parity-modal.open{display:block}
 </style>
 </head>
-<body>
-<div class="header">
-  <div class="brand">📊 Chart Pro <span style="font-weight:400;color:var(--muted);font-size:11px">Lightweight Charts · live engine strategies</span></div>
-  <div class="nav-links"><a href="/">Dashboard</a><a href="/pipeline">Pipeline</a><a href="/classic#simulator">Simulator</a></div>
-</div>
-<div class="toolbar">
+<body class="cmd-tool cmd-tool-chart">
+<div class="wrap">
+  <div class="tool-head">
+    <h2>Chart</h2>
+    <span class="dim" id="load-status">Loading…</span>
+  </div>
+  <div class="flag-research" role="note">Research: strategy-scan markers (S:) replay intraday detectors on visible bars — no proven edge. Live swing signals use the Book, not this scan.</div>
+  <div class="panel chart-panel">
+<div class="chart-toolbar-wrap" id="chart-toolbar-wrap">
+  <button type="button" class="pill-btn chart-tools-toggle" id="btn-tools-toggle" aria-expanded="false" aria-controls="chart-toolbar">Tools</button>
+<div class="chart-toolbar" id="chart-toolbar">
   <div class="tool-block"><span class="tool-label">Symbol</span><div id="sym-row" style="display:flex;flex-wrap:wrap;gap:4px"></div></div>
   <div class="tool-block"><span class="tool-label">TF</span><div id="tf-row" style="display:flex;flex-wrap:wrap;gap:4px"></div></div>
   <div class="tool-block">
@@ -291,14 +309,13 @@ select,input[type=range]{background:#0f172a;border:1px solid var(--border);color
   <div class="tool-block">
     <span class="tool-label">Overlays</span>
     <label class="toggle"><input type="checkbox" id="ov-history" checked> DB history (H:)</label>
-    <label class="toggle"><input type="checkbox" id="ov-scan" checked> Strategy scan (S:)</label>
+    <label class="toggle"><input type="checkbox" id="ov-scan" checked> S: research scan (intraday detectors, no proven edge)</label>
     <label class="toggle"><input type="checkbox" id="ov-tpsl" checked> Last TP/SL</label>
   </div>
   <div class="tool-block">
     <button class="pill-btn" id="btn-indicators" type="button">📈 Indicators (50+)</button>
     <button class="pill-btn" id="btn-fit" type="button">Fit</button>
     <button class="pill-btn" id="btn-log" type="button">Log scale</button>
-    <span class="status" id="load-status"></span>
   </div>
   <div class="tool-block">
     <span class="tool-label">Draw</span>
@@ -306,23 +323,23 @@ select,input[type=range]{background:#0f172a;border:1px solid var(--border);color
     <button class="pill-btn" id="btn-clear-draw" type="button">Clear drawings</button>
   </div>
 </div>
-<div id="active-indicators"></div>
-<div id="chart-legend" style="padding:4px 12px;font-size:11px;color:var(--muted);border-bottom:1px solid var(--border)">—</div>
-<div class="layout">
+<div id="active-indicators" class="chart-tools-extra"></div>
+</div>
+<div class="chart-legend" id="chart-legend">—</div>
+<div class="chart-layout">
   <div id="chart-stack" class="chart-stack">
+    <div id="chart-empty" class="empty-state">No candle data for this symbol and timeframe. Delta India did not return recent bars and the local lake has no history to show.</div>
     <div id="tv-chart-root"></div>
   </div>
-  <aside class="side">
-    <h3>Indicators</h3>
-    <p>Open <strong>Indicators (50+)</strong> — search SuperTrend, moving averages, MACD, etc. Active set is saved in your browser.</p>
-    <h3>Drawings</h3>
-    <p>Trend line, H/V line, ray, rectangle, Fib, text. Stored per symbol+timeframe. Double-click canvas to undo last shape (select tool).</p>
-    <h3>TradingView parity</h3>
-    <p><button type="button" class="pill-btn" id="btn-parity">What we have vs TV →</button></p>
-    <p id="parity-blurb" style="font-size:10px"></p>
-    <h3>Signals</h3>
-    <p><strong>H:</strong> DB history · <strong>S:</strong> strategy rescan · TP/SL = 3R/1R on latest marker.</p>
+  <aside class="side-panel panel-body">
+    <div class="panel-title">Indicators &amp; drawings</div>
+    <p>Open <strong>Indicators (50+)</strong> in the toolbar. Drawings save per symbol+TF in this browser.</p>
+    <p><button type="button" class="pill-btn" id="btn-parity">TradingView parity matrix</button></p>
+    <p id="parity-blurb" class="dim tiny"></p>
+    <p class="tiny"><strong>H:</strong> signal log · <strong>S:</strong> research scan only</p>
   </aside>
+</div>
+  </div>
 </div>
 <div id="ind-modal">
   <div class="ind-panel">
@@ -335,34 +352,51 @@ select,input[type=range]{background:#0f172a;border:1px solid var(--border);color
     <div class="ind-panel-body" id="ind-list"></div>
   </div>
 </div>
-<div id="parity-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.75);z-index:210;padding:20px;overflow:auto">
-  <div style="max-width:900px;margin:0 auto;background:#0f172a;border:1px solid #334155;border-radius:12px;padding:16px">
-    <div style="display:flex;justify-content:space-between;margin-bottom:12px">
-      <strong style="color:#38bdf8">TradingView parity matrix</strong>
+<div id="parity-modal">
+  <div class="panel" style="max-width:900px;margin:16px auto;padding:16px">
+    <div class="tool-head" style="margin-bottom:12px">
+      <h2 style="font-size:16px">TradingView parity</h2>
       <button type="button" class="pill-btn" id="parity-modal-close">Close</button>
     </div>
-    <pre id="parity-md" style="white-space:pre-wrap;font-size:11px;color:#cbd5e1;line-height:1.5"></pre>
+    <pre id="parity-md" class="mono tiny" style="white-space:pre-wrap;line-height:1.5;color:var(--ink)"></pre>
   </div>
 </div>
-<script src="/portal/static/chart-indicators.js"></script>
-<script src="/portal/static/chart-drawings.js"></script>
-<script src="/portal/static/chart-pro.js"></script>
+<script src="__CHART_INDICATORS__"></script>
+<script src="__CHART_DRAWINGS__"></script>
+<script src="__CHART_PRO__"></script>
 <script>
 document.getElementById('btn-parity')?.addEventListener('click', async () => {
   const res = await fetch('/api/chart/parity');
   const d = await res.json();
   document.getElementById('parity-md').textContent = d.markdown || '';
-  document.getElementById('parity-modal').style.display = 'block';
+  document.getElementById('parity-modal').classList.add('open');
 });
 document.getElementById('parity-modal-close')?.addEventListener('click', () => {
-  document.getElementById('parity-modal').style.display = 'none';
+  document.getElementById('parity-modal').classList.remove('open');
 });
 fetch('/api/chart/indicator-catalog').then(r=>r.json()).then(d=>{
   const el = document.getElementById('parity-blurb');
-  if(el) el.textContent = d.count + ' indicators · ' + (d.categories||[]).length + ' categories. Full TV library needs commercial widget — see matrix.';
-});
+  if(el) el.textContent = d.count + ' indicators · ' + (d.categories||[]).length + ' categories.';
+}).catch(()=>{});
+(function(){
+  const wrap = document.getElementById('chart-toolbar-wrap');
+  const btn = document.getElementById('btn-tools-toggle');
+  if(!wrap || !btn) return;
+  btn.addEventListener('click', () => {
+    const open = wrap.classList.toggle('tools-open');
+    btn.setAttribute('aria-expanded', open ? 'true' : 'false');
+    btn.textContent = open ? 'Hide tools' : 'Tools';
+  });
+})();
 </script>
 </body>
 </html>"""
-    from scheduler.health import _THEME_SNIPPET
-    return web.Response(text=html.replace("</head>", _THEME_SNIPPET + "</head>"), content_type="text/html")
+    html = html.replace("__CHART_INDICATORS__", ci).replace("__CHART_DRAWINGS__", cd).replace("__CHART_PRO__", cp)
+    lw = "https://cdn.jsdelivr.net/npm/lightweight-charts@4.2.0/dist/lightweight-charts.standalone.production.js"
+    sri = "sha384-OK7vELvjHdhUFi31JYioPIcRHTROLdcDa6ZsNWgvgLaKj+9JqhU0Ad8g4wz3CXjA"
+    head = (
+        _THEME_SNIPPET
+        + command_tool_head_extra()
+        + f'<script src="{lw}" integrity="{sri}" crossorigin="anonymous"></script>'
+    )
+    return web.Response(text=html.replace("</head>", head + "</head>"), content_type="text/html")

@@ -35,9 +35,13 @@ HUBS = ("command", "book", "evidence", "system")
 ASSETS = {
     "portal.css": "text/css",
     "chrome.css": "text/css",
+    "command-tools.css": "text/css",
     "nav.js": "application/javascript",
     "core.js": "application/javascript",
     "chrome.js": "application/javascript",
+    "chart-pro.js": "application/javascript",
+    "chart-indicators.js": "application/javascript",
+    "chart-drawings.js": "application/javascript",
     "hubs/command.js": "application/javascript",
     "hubs/book.js": "application/javascript",
     "hubs/evidence.js": "application/javascript",
@@ -78,9 +82,15 @@ def asset_url(name: str) -> str:
 def chrome_snippet() -> str:
     """Head tags that give a server-rendered page the portal header and skin. Not deferred on
     purpose: chrome.js forwards retired addresses before the old page starts loading its data."""
-    return (f'<link rel="stylesheet" href="{asset_url("chrome.css")}">'
+    return (f'<link rel="stylesheet" href="{asset_url("portal.css")}">'
+            f'<link rel="stylesheet" href="{asset_url("chrome.css")}">'
             f'<script src="{asset_url("nav.js")}"></script>'
             f'<script src="{asset_url("chrome.js")}"></script>')
+
+
+def command_tool_head_extra() -> str:
+    """Portal tokens + Command tool layout for /predict, /moves, /chart."""
+    return f'<link rel="stylesheet" href="{asset_url("command-tools.css")}">'
 
 
 def _render_shell() -> str:

@@ -3,7 +3,8 @@ from __future__ import annotations
 
 import json
 import unittest
-from unittest.mock import MagicMock
+from pathlib import Path
+from unittest.mock import AsyncMock, MagicMock, patch
 
 from aiohttp.test_utils import AioHTTPTestCase
 
@@ -32,6 +33,14 @@ def _sample_bars(n: int = 120):
     return bars
 
 
+class TestChartMobileLayout(unittest.TestCase):
+    def test_command_tools_css_reserves_chart_height_on_phone(self):
+        css = Path("scheduler/portal/command-tools.css").read_text(encoding="utf-8")
+        self.assertIn("max-width:767px", css)
+        self.assertIn("min-height:55vh", css)
+        self.assertIn("chart-tools-toggle", css)
+
+
 class TestChartScan(unittest.TestCase):
     def test_scan_strategy_markers_returns_list(self):
         markers = scan_strategy_markers(_sample_bars(150), strategy="confluence", step=5, max_markers=10)
@@ -55,7 +64,12 @@ class TestChartRoutes(AioHTTPTestCase):
         self.assertIn("chart-pro.js", body)
         self.assertIn("chart-indicators.js", body)
         self.assertIn("lightweight-charts", body)
+        self.assertIn('integrity="', body)
+        self.assertIn('crossorigin="anonymous"', body)
         self.assertIn("/portal/static/chrome.js", body)
+        self.assertIn("btn-tools-toggle", body)
+        self.assertIn("chart-toolbar-wrap", body)
+        self.assertIn("intraday detectors, no proven edge", body.lower())
 
     async def test_chart_strategies_api(self):
         resp = await self.client.get("/api/chart/strategies")
@@ -80,6 +94,35 @@ class TestChartRoutes(AioHTTPTestCase):
         self.assertEqual(resp.status, 200)
         data = json.loads(await resp.text())
         self.assertIn("TradingView", data.get("markdown", ""))
+
+
+class TestChartBarMerge(unittest.TestCase):
+    def test_merge_prefers_recent_over_lake_at_same_time(self):
+        from scheduler.chart_page import _merge_bars
+
+        lake = [{"time": 100, "open": 1, "high": 1, "low": 1, "close": 1, "volume": 1}]
+        recent = [{"time": 100, "open": 2, "high": 2, "low": 2, "close": 2, "volume": 2}, {"time": 200, "open": 3, "high": 3, "low": 3, "close": 3, "volume": 3}]
+        merged = _merge_bars(lake, recent, 10)
+        self.assertEqual(merged[0]["close"], 2)
+        self.assertEqual(len(merged), 2)
+
+class TestChartDeltaBars(unittest.IsolatedAsyncioTestCase):
+    async def test_klines_uses_delta_when_runner_has_it(self):
+        from unittest.mock import AsyncMock, MagicMock
+        from datetime import datetime, timezone
+
+        from scheduler.chart_page import _load_chart_bars_async
+
+        runner = MagicMock()
+        ts = datetime(2026, 1, 1, tzinfo=timezone.utc)
+        runner.delta_market.fetch_candles = AsyncMock(
+            return_value=[{"timestamp": ts, "open": 1.0, "high": 1.1, "low": 0.9, "close": 1.05, "volume": 10.0}]
+        )
+        with patch("scheduler.chart_page._lake_bars", return_value=[]):
+            bars = await _load_chart_bars_async(runner, "BTCUSDT", "1h", 50)
+        self.assertEqual(len(bars), 1)
+        self.assertEqual(bars[0]["close"], 1.05)
+        runner.delta_market.fetch_candles.assert_awaited_once()
 
 
 class TestChartDataIsReal(AioHTTPTestCase):

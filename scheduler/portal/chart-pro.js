@@ -55,7 +55,8 @@
       });
     };
     if (state.showHistory) historySignals.forEach(m => add(m, "H:"));
-    if (state.showScan) scanMarkers.forEach(m => add(m, "S:"));
+    const scanLabel = "research: intraday detectors, no proven edge · ";
+    if (state.showScan) scanMarkers.forEach(m => add(m, scanLabel));
     return out.sort((a, b) => a.time - b.time);
   }
 
@@ -134,8 +135,20 @@
       .filter(d => d.value != null && !Number.isNaN(d.value));
   }
 
+  function setChartEmpty(on) {
+    const el = $("chart-empty");
+    if (el) el.classList.toggle("on", !!on);
+  }
+
   function refreshIndicators() {
-    if (!klines.length || !candleSeries) return;
+    if (!candleSeries) return;
+    if (!klines.length) {
+      setChartEmpty(true);
+      candleSeries.setData([]);
+      volSeries?.setData([]);
+      return;
+    }
+    setChartEmpty(false);
     const lib = Lib();
     if (!lib) return;
 
@@ -264,14 +277,28 @@
     refreshIndicators();
   }
 
+  const LOAD_MS = 10000;
+  function withTimeout(p, ms) {
+    return Promise.race([p, new Promise((_, rej) => setTimeout(() => rej(new Error("timeout after 10s")), ms))]);
+  }
+
   async function reloadAll() {
     $("load-status").textContent = "Loading…";
     window.ChartDrawings?.setStorageKey(`chart-draw-${state.symbol}-${state.tf}`);
-    await Promise.all([loadKlines(), loadHistorySignals()]);
-    await runStrategyScan();
+    try {
+      await withTimeout((async () => {
+        await Promise.all([loadKlines(), loadHistorySignals()]);
+        await runStrategyScan();
+      })(), LOAD_MS);
+      $("load-status").textContent = klines.length ? `${klines.length} bars`
+        : `No price data for ${state.symbol} ${state.tf} on this server (prices are never made up)`;
+    } catch (e) {
+      klines = [];
+      scanMarkers = [];
+      $("load-status").textContent = "Load failed — " + (e.message || "error");
+      setChartEmpty(true);
+    }
     refreshIndicators();
-    $("load-status").textContent = klines.length ? `${klines.length} bars`
-      : `No price data for ${state.symbol} ${state.tf} on this server (prices are never made up)`;
   }
 
   function initChart() {
@@ -279,12 +306,17 @@
     const stack = $("chart-stack");
     if (!container || !stack) return;
 
+    const css = (v, fb) => getComputedStyle(document.documentElement).getPropertyValue(v).trim() || fb;
+    const bg = css("--bg", "#0b1120");
+    const ink = css("--ink", "#e2e8f0");
+    const dim = css("--dim", "#94a3b8");
+    const line = css("--line", "#334155");
     chart = LightweightCharts.createChart(container, {
-      layout: { background: { color: "#0b1120" }, textColor: "#94a3b8" },
-      grid: { vertLines: { color: "#1e293b" }, horzLines: { color: "#1e293b" } },
+      layout: { background: { color: bg }, textColor: dim },
+      grid: { vertLines: { color: line }, horzLines: { color: line } },
       crosshair: { mode: LightweightCharts.CrosshairMode.Normal },
-      rightPriceScale: { borderColor: "#334155" },
-      timeScale: { borderColor: "#334155", timeVisible: true, secondsVisible: false },
+      rightPriceScale: { borderColor: line },
+      timeScale: { borderColor: line, timeVisible: true, secondsVisible: false },
       width: container.clientWidth,
       height: container.clientHeight,
     });

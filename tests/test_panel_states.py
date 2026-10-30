@@ -57,7 +57,13 @@ class TestFailuresReachTheContentNotJustAHeader(unittest.TestCase):
         self.assertIn("Could not load the audit", PAGES["audit"])
 
     def test_predict_puts_the_error_in_the_rows(self):
-        self.assertIn("Panel.error(document.getElementById('rows')", PAGES["predict"])
+        self.assertIn("predictPanelInRow", PAGES["predict"])
+        self.assertIn("colspan=\"'+PREDICT_COLS+'\"", PAGES["predict"])
+        self.assertIn("Panel.error(el,'the outlook'", PAGES["predict"])
+
+    def test_predict_error_keeps_its_try_again_button(self):
+        # review of PR #44 (30 Oct 2026): the full-width error lost its retry when `load` was dropped
+        self.assertIn("Panel.error(el,'the outlook',e,load)", PAGES["predict"])
 
     def test_data_offers_a_retry_rather_than_a_dead_end(self):
         self.assertIn("Panel.error(document.getElementById('tables'), 'the tables', e, load)",
