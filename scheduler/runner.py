@@ -2011,6 +2011,12 @@ class AppRunner:
         book["impulse_line"] = len(lines)
         return n
 
+    async def _news_engine_job(self) -> dict:
+        """Collectors → news_documents / calendar → resolver (all default-off)."""
+        from scheduler.news_engine_job import run_news_engine_cycle
+
+        return await run_news_engine_cycle()
+
     async def _impulse_job(self) -> dict:
         """Every minute: the live move detector (analysis/impulse.py; owner 30 Oct 2026, alerts and paper only). Each
         watchlist coin's last 15 minutes against its last 24 h (Binance futures bars, like the lab); a move gets one
@@ -4694,6 +4700,9 @@ class AppRunner:
         self.scheduler.add_job(
             self._impulse_job, "interval", minutes=1, id="impulse", max_instances=1,
             next_run_time=datetime.now(UTC) + timedelta(minutes=2))
+        self.scheduler.add_job(
+            self._news_engine_job, "interval", minutes=5, id="news_engine", max_instances=1,
+            next_run_time=datetime.now(UTC) + timedelta(minutes=3))
         self.scheduler.add_job(
             self._candidate_book_job, "interval", minutes=2, id="candidate_book", max_instances=1,
             next_run_time=datetime.now(UTC) + timedelta(seconds=105))

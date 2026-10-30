@@ -6,9 +6,11 @@ the scheduler — the owner switches parts on from /settings (Oct 2026).
 """
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
+
+from analysis.news.sanitize import sanitize_error_message
 
 
 @dataclass
@@ -53,7 +55,7 @@ class NewsCollector:
     def _mark_ok(self, items: int, message: str = "") -> PollResult:
         now = datetime.now(UTC).replace(tzinfo=None)
         self._health.status = "ok"
-        self._health.message = message
+        self._health.message = sanitize_error_message(message)
         self._health.items_last_run = items
         self._health.last_ok_at = now
         return PollResult(items=items, message=message)
@@ -67,10 +69,29 @@ class NewsCollector:
     def _mark_error(self, err: str) -> PollResult:
         now = datetime.now(UTC).replace(tzinfo=None)
         self._health.status = "error"
-        self._health.message = err[:500]
+        self._health.message = sanitize_error_message(err)
         self._health.items_last_run = 0
         self._health.last_error_at = now
         return PollResult(items=0, message=self._health.message)
 
+    async def ingest(self, session) -> int:
+        """Write fetched rows to the DB. Subclasses implement."""
+        raise NotImplementedError
+
+    async def poll_and_store(self, session) -> PollResult:
+        try:
+            n = await self.ingest(session)
+            return self._mark_ok(n, f"stored {n} rows")
+        except Exception as e:
+            return self._mark_error(str(e))
+
     async def poll(self) -> PollResult:
+        """Health check / tests: fetch without requiring a session."""
+        try:
+            n = await self._fetch_count()
+            return self._mark_ok(n, f"{n} items")
+        except Exception as e:
+            return self._mark_error(str(e))
+
+    async def _fetch_count(self) -> int:
         raise NotImplementedError

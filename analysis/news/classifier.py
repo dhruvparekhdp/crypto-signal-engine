@@ -5,41 +5,46 @@ LLM check only for severity >= 3 via collectors/llm_client (async, optional).
 """
 from __future__ import annotations
 
-import json
 import re
 
+from analysis.news.countries import load_countries
 from analysis.news.event_types import load_event_types
 from analysis.news.institutions import load_institutions
+from analysis.news.matchers import institution_in_text, iso_country_in_text, search_wb
 from analysis.news.severity import classify_severity
 
 
 def classify_rule_based(title: str, body: str = "") -> dict:
     t = f"{title} {body}".lower()
     event_type = "other"
-    if re.search(r"fomc|fed |ecb |boe |rate decision|central bank", t):
+    if search_wb(t, "fomc|fed|ecb|boe|boj|pboc|rate decision|central bank|mpc decision"):
         event_type = "central_bank"
-    elif re.search(r"cpi|inflation|jobs|payroll|gdp", t):
+    elif search_wb(t, "cpi|inflation|jobs report|nonfarm|payrolls|gdp"):
         event_type = "macro"
-    elif re.search(r"treasury|deficit|debt ceiling|fiscal", t):
+    elif search_wb(t, "treasury|deficit|debt ceiling|fiscal"):
         event_type = "fiscal"
-    elif re.search(r"war|invasion|missile|sanction", t):
+    elif search_wb(t, "war|invasion|missile|sanction"):
         event_type = "geopolitical"
-    elif re.search(r"sec |cftc|regulat|etf", t):
+    elif search_wb(t, "sec|cftc|regulat|etf"):
         event_type = "regulation"
-    elif re.search(r"bitcoin|ethereum|crypto|defi|hack|exploit", t):
+    elif search_wb(t, "bitcoin|ethereum|crypto|defi|hack|exploit|binance"):
         event_type = "crypto_native"
     if event_type not in load_event_types():
         event_type = "other"
 
     countries: list[str] = []
-    for c in ("US", "EU", "CN", "GB", "JP", "IN"):
-        if c.lower() in t or c in title.upper():
-            countries.append(c)
+    for c in load_countries():
+        iso = c.get("iso2", "")
+        name = c.get("name", "")
+        if iso and iso_country_in_text(f"{title} {body}", iso):
+            countries.append(iso)
+        elif name and search_wb(t, name):
+            countries.append(iso)
 
     institutions: list[str] = []
     for inst in load_institutions():
         for alias in [inst["code"], inst["name"], *inst.get("aliases", [])]:
-            if alias and alias.lower() in t:
+            if alias and institution_in_text(t, alias):
                 institutions.append(inst["code"])
                 break
 

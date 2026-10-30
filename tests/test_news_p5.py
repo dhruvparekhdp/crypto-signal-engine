@@ -17,7 +17,8 @@ class TestNewsP5(unittest.TestCase):
 
     def test_fed_reaction_needs_central_bank(self):
         self.assertEqual(fed_reaction_side("other", 4), 0)
-        self.assertEqual(fed_reaction_side("central_bank", 4), 1)
+        self.assertEqual(fed_reaction_side("central_bank", 4, title="FOMC holds rates"), 0)
+        self.assertEqual(fed_reaction_side("central_bank", 4, title="Fed cuts rates"), 1)
 
     def test_candidate_book_registers_w11_tracks(self):
         self.assertEqual(CONTROL["stop_reverse_2r"], "stop_same_side_2r")

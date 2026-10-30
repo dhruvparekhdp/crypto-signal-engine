@@ -9,6 +9,7 @@ from functools import lru_cache
 from pathlib import Path
 
 from analysis.news.event_types import event_type_severity_floor
+from analysis.news.matchers import boundary_pattern
 
 _RULES_PATH = Path(__file__).resolve().parents[2] / "config" / "news_severity_rules.json"
 
@@ -27,8 +28,8 @@ def classify_severity(title: str, event_type: str = "other", *, actual_deviation
     base = event_type_severity_floor(event_type)
     score = base
     for rule in load_severity_rules():
-        pat = rule.get("match")
-        if pat and re.search(pat, t, re.I):
+        raw = rule.get("match")
+        if raw and re.search(boundary_pattern(raw), t, re.I):
             score = max(score, int(rule.get("severity", base)))
     if actual_deviation is not None and abs(actual_deviation) >= 2.0:
         score = max(score, 4)

@@ -40,6 +40,6 @@ def events_open_at(events: list[dict], at: datetime, *, window_min: int = 60) ->
             start = datetime.fromisoformat(ev["started_at"])
         except (TypeError, ValueError, KeyError):
             continue
-        if start <= at <= start + timedelta(minutes=window_min * 24):
+        if start <= at <= start + timedelta(minutes=window_min):
             out.append(int(ev["id"]))
     return out
