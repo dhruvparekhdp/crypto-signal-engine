@@ -57,14 +57,13 @@ def test_the_setting_defaults_to_trailing():
 
 
 @pytest.mark.asyncio
-async def test_a_new_paper_swing_trade_opens_without_a_3r_target(monkeypatch):
+async def test_a_new_paper_swing_trade_opens_with_the_normal_3r_target(monkeypatch):
+    # owner 30 Oct 2026: "keep 3r normal swing target only" - trailing past 3R no longer removes the target
     from config.settings import settings
     from tests.test_phase1 import _swing
     monkeypatch.setattr(settings, "paper_mirrors_live", False)
-    rows, _, _ = await _swing([("BTCUSDT", "donchian", 1, 60000.0)])
-    risk = abs(rows[0].entry_price - rows[0].stop_price)
-    assert (rows[0].target_price - rows[0].entry_price) / risk == pytest.approx(50, rel=0.01)
-    monkeypatch.setattr(settings, "swing_trail_after_r", 0.0)
-    rows, _, _ = await _swing([("BTCUSDT", "donchian", 1, 60000.0)])
-    risk = abs(rows[0].entry_price - rows[0].stop_price)
-    assert (rows[0].target_price - rows[0].entry_price) / risk == pytest.approx(3, rel=0.01)
+    for trail in (3.0, 0.0):
+        monkeypatch.setattr(settings, "swing_trail_after_r", trail)
+        rows, _, _ = await _swing([("BTCUSDT", "donchian", 1, 60000.0)])
+        risk = abs(rows[0].entry_price - rows[0].stop_price)
+        assert (rows[0].target_price - rows[0].entry_price) / risk == pytest.approx(3, rel=0.01)

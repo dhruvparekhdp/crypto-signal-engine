@@ -147,7 +147,7 @@ class DeltaBook:
         self.kill_after_trades = int(kill_after_trades)
         self.withdraw_share = float(withdraw_share)
         self.kill_ack = str(kill_ack or "").strip()
-        self.place_target = bool(place_target)    # False: no take-profit order (trail past 3R, owner 30 Oct 2026)
+        self.place_target = bool(place_target)    # False: no take-profit order
 
     @property
     def live(self) -> bool:
@@ -484,7 +484,7 @@ class DeltaBook:
                 "tp_order": _trim(tp_order) if tp_order else None,
             })
             record.update(stop_order_id=_oid(stop_order), tp_order_id=_oid(tp_order) if tp_order else None,
-                          pending=False)
+                          exchange_target=plan.target if tp_order else None, pending=False)
             self._update_record(key, record)
             st = self._load_state()                          # live trades counted for the kill rule
             st["capital_rules_trades"] = int(st.get("capital_rules_trades") or 0) + 1
@@ -600,6 +600,54 @@ class DeltaBook:
         self._save_state(state)
         self._append_shadow(row)
         return {"ok": True, "reason": "amended", "exchange_stop": want}
+
+    async def on_target_change(self, binance_symbol: str, target: float, spec: str = "") -> dict:
+        """The engine moved this trade's target (owner 30 Oct 2026: "target should always be there", 3R, moving out from
+        2.5R). Move the take-profit order on Delta to it, or place one if the trade has none. Only ever further out."""
+        delta_sym = binance_to_delta_symbol(binance_symbol)
+        state = self._load_state()
+        where = "positions" if self.live else "shadow"
+        key = _find_key(state.get(where) or {}, delta_sym, spec)
+        pos = (state.get(where) or {}).get(key) if key else None
+        if not pos:
+            return {"ok": False, "reason": "not_open_on_delta"}
+        side = 1 if pos["side"] == "buy" else -1
+        want = round_to_tick(target, pos.get("tick", 0), side)
+        cur = ((pos.get("exchange_target") or pos.get("target")) if pos.get("tp_order_id") else None)
+        if cur is not None and (side * (want - cur) <= 0 or abs(want - cur) < max(pos.get("tick", 0), 1e-12) / 2):
+            return {"ok": True, "reason": "unchanged", "exchange_target": cur}
+        row = {"t": int(time.time() * 1000), "event": "amend_target" if cur is not None else "place_target",
+               "delta_symbol": delta_sym, "key": key, "from": cur, "to": want, "mode": self.mode, "placed": False}
+        if self.live:
+            close_side = "sell" if side > 0 else "buy"
+            try:
+                if cur is None:
+                    pos["tp_order_id"] = _oid(await self.client.place_take_profit_market(
+                        pos["product_id"], close_side, pos["size"], want))
+                else:
+                    try:
+                        await self.client.edit_stop(pos["tp_order_id"], pos["product_id"], pos["size"], want)
+                    except DeltaError as first:
+                        # new target first, then cancel the old one (both reduce-only, so two for a moment is harmless)
+                        row["edit_error"] = str(first)[:160]
+                        new = await self.client.place_take_profit_market(pos["product_id"], close_side, pos["size"],
+                                                                         want)
+                        old_id, pos["tp_order_id"] = pos["tp_order_id"], _oid(new)
+                        try:
+                            await self.client.cancel_order(old_id, pos["product_id"])
+                        except DeltaError as e:
+                            row["old_target_cancel_error"] = str(e)[:160]
+                row["placed"] = True
+            except DeltaError as e:
+                row["error"] = str(e)[:200]
+                self._append_shadow(row)
+                return {"ok": False, "reason": f"target_failed_{e}"}
+        pos["target"] = target
+        pos["exchange_target"] = want
+        state[where][key] = pos
+        self._save_state(state)
+        self._append_shadow(row)
+        return {"ok": True, "reason": row["event"], "exchange_target": want}
 
     async def on_paper_close(self, binance_symbol: str, reason: str = "", spec: str = "") -> dict:
         """The engine closed this trade (target, confirmed lock, time, stop). Flatten on Delta, cancel leftovers.

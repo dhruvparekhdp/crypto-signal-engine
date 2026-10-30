@@ -239,13 +239,18 @@ class Settings(BaseSettings):
     # instant). 12m x2.62 / 24m x4.50 / worst fall 28% vs the wick-triggered ladder x2.33 / x3.96 / 31%.
     swing_lock_buffer_r: float = 0.25
     swing_lock_confirm_min: int = 60          # 0 = locked stops fire on any touch
-    # Trail past 3R instead of a fixed 3R target (owner 30 Oct 2026, "yes switch to trailing past 3R"): new swing trades
-    # open with no target (no take-profit order on Delta); once the best price is swing_trail_after_r R in profit the
+    # Trail past 3R (owner 30 Oct 2026, "yes switch to trailing past 3R"): once the best price is swing_trail_after_r R in profit the
     # stop trails swing_trail_r R behind it, on a touch (no 1 h confirmation) and as the exact Delta stop. Lab
     # (trial ledger family exit_spikes, 4,613 trades): +0.210 / +0.249R -> +0.231 / +0.302R; live sim at Rs800 avg R
     # 0.32 / 0.42 -> 0.36 / 0.43, deepest drop 42 / 33% -> 50 / 35%. 0 = the old fixed 3R target.
     swing_trail_after_r: float = 3.0
     swing_trail_r: float = 1.0
+    # The target always rests on Delta (owner 30 Oct 2026: "keep 3r normal swing target only, increase when it reaches
+    # 2.5R +"): every trade opens with the normal 3R target; once the best price is swing_target_chase_after_r R in
+    # profit, the target stays swing_target_chase_gap_r R beyond the best price and only ever moves further out, so a
+    # sudden spike is booked on the exchange while a steady trend keeps running on the trailing stop. 0 = fixed 3R.
+    swing_target_chase_after_r: float = 2.5
+    swing_target_chase_gap_r: float = 0.5
     swing_lock_after_r: float = 2.0
     swing_lock_trail_atr: float = 3.0
     swing_hold_minutes: int = 10080

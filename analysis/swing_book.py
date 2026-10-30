@@ -474,6 +474,23 @@ def open_ended_target(price: float, side: int, dist: float) -> float:
     return price + 50 * dist if side > 0 else price - min(50 * dist, 0.9 * price)
 
 
+def chase_target(side: int, entry: float, initial_stop: float, target: float, best: float, after_r: float,
+                 gap_r: float, reward_r: float = REWARD_RISK) -> float:
+    """The trade's target (owner 30 Oct 2026: "keep 3r normal swing target only, increase when it reaches 2.5R +"):
+    the normal reward_r target, and once the best price is after_r R in profit, gap_r R beyond the best price. It never
+    moves back. A target further than 10R away (a trade opened while trades had none) counts as the normal one."""
+    risk = abs(entry - initial_stop)
+    if risk <= 0:
+        return target
+    normal = entry + side * reward_r * risk
+    if not target or abs(target - entry) > 10 * risk or side * (target - entry) <= 0:
+        target = normal
+    if after_r > 0 and best and side * (best - entry) / risk >= after_r:
+        cand = best + side * gap_r * risk
+        target = max(target, cand) if side > 0 else min(target, cand)
+    return target
+
+
 def trail_past(side: int, entry: float, initial_stop: float, stop: float, best: float, after_r: float,
                trail_r: float) -> tuple[float, bool]:
     """(new stop, trailing?) - once the best price is after_r R in profit, the stop trails trail_r R behind it and
