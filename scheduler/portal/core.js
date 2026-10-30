@@ -140,6 +140,7 @@
   Store.def("research", "/api/research", 300000);
   Store.def("v2", "/api/v2/shadow", 300000);
   Store.def("events", "/api/events", 120000);
+  Store.def("news", "/api/portal/news", 60000);
   Store.def("tables", "/api/tables?limit=50", 0);
   Store.def("debug", "/api/debug", 30000);
   Store.def("perf", "/api/debug/perf", 60000);

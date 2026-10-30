@@ -14,7 +14,10 @@
       { id: "watchlist", label: "Watchlist", native: true, aliases: ["/classic#watchlist"] },
       { id: "outlook", label: "Price outlook", url: "/predict" },
       { id: "moves", label: "Market moves", url: "/moves" },
-      { id: "chart", label: "Chart", url: "/chart" }
+      { id: "chart", label: "Chart", url: "/chart" },
+      { id: "world", label: "World", native: true },
+      { id: "events", label: "Events", native: true },
+      { id: "calendar", label: "Calendar", native: true }
     ] },
     { id: "book", label: "Book", tabs: [
       { id: "swing", label: "Swing book", native: true },
@@ -30,6 +33,7 @@
       { id: "accuracy", label: "Accuracy", native: true, aliases: ["/classic#accuracy"] },
       { id: "history", label: "History", native: true, aliases: ["/classic#historic"] },
       { id: "research", label: "Research", native: true },
+      { id: "news-study", label: "News study", native: true },
       { id: "audit", label: "Audit", url: "/audit" },
       { id: "mirror", label: "Mirror", url: "/classic#mirror" },
       { id: "pipeline", label: "Pipeline", url: "/pipeline" },

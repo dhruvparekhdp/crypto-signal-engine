@@ -442,4 +442,49 @@
     render: function () {}
   });
   UI.view("command/watchlist", [[{ w: "watch-list", size: "grow" }, { w: "watch-add", size: "side" }]]);
+
+  // ── News engine (W12) ──
+  UI.widget("news-world", {
+    title: "WORLD SENTIMENT",
+    uses: ["news"],
+    mount: function (el) { el.innerHTML = '<div class="panel-body" data-r="body"></div>'; },
+    render: function (el, D) {
+      var n = D.news || {};
+      var box = el.querySelector("[data-r=body]");
+      if (!n.enabled) { box.innerHTML = C.empty(n.message || "News engine is off."); return; }
+      var idx = (n.indices || []).filter(function (i) { return i.scope === "world"; })[0];
+      box.innerHTML = idx
+        ? "<p class=\"big-price\">" + (idx.score >= 0 ? "+" : "") + idx.score.toFixed(2) + "</p><p class=\"dim mono\">confidence " + Math.round(idx.confidence * 100) + "%</p>"
+        : C.empty("No world index yet — enable collectors and wait for events.");
+    }
+  });
+  UI.widget("news-events", {
+    title: "EVENTS",
+    uses: ["news"],
+    mount: function (el) { el.innerHTML = '<div class="tbl-scroll"><table class="tbl"><thead><tr><th>When</th><th>Event</th><th>Sev</th></tr></thead><tbody data-r="rows"></tbody></table></div>'; },
+    render: function (el, D) {
+      var n = D.news || {}, rows = el.querySelector("[data-r=rows]");
+      if (!n.enabled) { rows.innerHTML = "<tr><td colspan=\"3\">" + C.empty(n.message || "Off") + "</td></tr>"; return; }
+      var ev = n.events || [];
+      rows.innerHTML = ev.length ? ev.map(function (ev) {
+        return "<tr><td class=\"mono dim\">" + e(ev.at) + "</td><td>" + e(ev.title) + "</td><td class=\"num\">" + ev.severity + "</td></tr>";
+      }).join("") : "<tr><td colspan=\"3\">" + C.empty("No events in the store yet.") + "</td></tr>";
+    }
+  });
+  UI.widget("news-calendar", {
+    title: "CALENDAR",
+    uses: ["news"],
+    mount: function (el) { el.innerHTML = '<div class="tbl-scroll"><table class="tbl"><thead><tr><th>When</th><th>Release</th><th>Cons / Act</th></tr></thead><tbody data-r="rows"></tbody></table></div>'; },
+    render: function (el, D) {
+      var n = D.news || {}, rows = el.querySelector("[data-r=rows]");
+      if (!n.enabled) { rows.innerHTML = "<tr><td colspan=\"3\">" + C.empty(n.message || "Off") + "</td></tr>"; return; }
+      var cal = n.calendar || [];
+      rows.innerHTML = cal.length ? cal.map(function (c) {
+        return "<tr><td class=\"mono dim\">" + e(c.at) + "</td><td>" + e(c.title) + " <span class=\"dim\">" + e(c.country) + "</span></td><td class=\"mono\">" + e(c.consensus || "—") + " / " + e(c.actual || "—") + "</td></tr>";
+      }).join("") : "<tr><td colspan=\"3\">" + C.empty("No calendar rows yet.") + "</td></tr>";
+    }
+  });
+  UI.view("command/world", [["news-world"]]);
+  UI.view("command/events", [["news-events"]]);
+  UI.view("command/calendar", [["news-calendar"]]);
 })();
