@@ -786,6 +786,35 @@ class Settings(BaseSettings):
     use_finbert: bool = False
     crypto_auto_execute: bool = False
 
+    # ── World news + sentiment engine (plan W14, Oct 2026) — master + parts DEFAULT OFF ──
+    news_engine_enabled: bool = False
+    news_collector_economic_calendar_enabled: bool = False
+    news_collector_central_bank_rss_enabled: bool = False
+    news_collector_us_treasury_fred_enabled: bool = False
+    news_collector_polymarket_odds_enabled: bool = False
+    news_collector_kalshi_odds_enabled: bool = False
+    news_collector_binance_liquidations_enabled: bool = False
+    news_collector_defillama_enabled: bool = False
+    news_collector_cross_asset_prices_enabled: bool = False
+    news_collector_regional_rss_enabled: bool = False
+    news_collector_gdelt_15m_enabled: bool = False
+    news_event_resolver_enabled: bool = False
+    news_classifier_enabled: bool = False
+    news_reaction_tracker_enabled: bool = False
+    news_sentiment_indices_enabled: bool = False
+    news_impulse_linker_enabled: bool = False
+    news_portal_widgets_enabled: bool = False
+    news_study_mac_enabled: bool = False
+    news_paper_stop_reverse_enabled: bool = False
+    news_paper_fed_reaction_enabled: bool = False
+    news_paper_event_template_enabled: bool = False
+    news_paper_risk_radar_enabled: bool = False
+    fmp_api_key: SecretStr | None = None
+    fred_api_key: SecretStr | None = None
+    acled_api_key: SecretStr | None = None
+    acled_email: str = ""
+    news_gdelt_worker_enabled: bool = False
+
     @property
     def prediction_timeframes(self) -> list[str]:
         """Return list of active prediction timeframes."""

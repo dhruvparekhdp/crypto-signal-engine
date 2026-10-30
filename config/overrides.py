@@ -48,7 +48,7 @@ GROUPS = {
 # Everything else of kind="secret" is a plain str field.
 SECRET_STR_KEYS = frozenset({
     "groq_api_key", "openrouter_api_key", "gemini_api_key", "anthropic_api_key",
-    "telegram_bot_token", "hf_api_token",
+    "telegram_bot_token", "hf_api_token", "fmp_api_key", "fred_api_key", "acled_api_key",
 })
 
 FIELDS: tuple[Field, ...] = (

@@ -1,0 +1,12 @@
+{
+  "version": "W5",
+  "rules": [
+    {"match": "war|invasion|missile|nuclear", "severity": 5},
+    {"match": "emergency meeting|rate decision|fomc|mpc decision", "severity": 4},
+    {"match": "default|bank failure|bail-in|deposit freeze", "severity": 5},
+    {"match": "sanctions|embargo|tariff", "severity": 4},
+    {"match": "etf approval|etf denial|sec sues|sec charges", "severity": 4},
+    {"match": "cpi|inflation|jobs report|nonfarm|payrolls|gdp", "severity": 3},
+    {"match": "hack|exploit|bridge drained", "severity": 4}
+  ]
+}
