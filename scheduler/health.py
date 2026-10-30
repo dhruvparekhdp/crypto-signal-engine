@@ -6973,7 +6973,7 @@ async function load(){
     // The ticker line alone left the table sitting on "loading…", which
     // reads as a quiet market rather than a dead request.
     document.getElementById('tick').textContent = 'failed to update';
-    predictPanelInRow(el=>Panel.error(el,'the outlook',e));
+    predictPanelInRow(el=>Panel.error(el,'the outlook',e,load));   // load: keeps the Try again button
     return;
   }
 
