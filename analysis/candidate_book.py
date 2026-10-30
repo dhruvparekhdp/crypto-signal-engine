@@ -38,11 +38,17 @@ IMPULSE_HOLD = timedelta(hours=72)        # analysis/impulse.HOLD_H: the lab's b
 RATCHET_FROM_R, RATCHET_STEP_R, RATCHET_TARGET_GAP_R, RATCHET_LOCK_GAP_R = 2.8, 0.25, 0.45, 0.5
 CONTROL = {"swing": "swing_mirror", "swing_2h": "swing_2h_mirror", "impulse_follow": "impulse_fade",
            "impulse_ai": "impulse_follow", "swing_ratchet": "swing", "intraday_pick": "intraday_mirror",
-           "counter_trend": "counter_trend_mirror"}
+           "counter_trend": "counter_trend_mirror",
+           "stop_reverse_2r": "stop_same_side_2r", "stop_reverse_15r": "stop_same_side_2r",
+           "fed_reaction": "fed_fade", "news_event_template": "news_event_template_ctrl",
+           "risk_radar_paper": "risk_radar_paper_ctrl"}
 GATE = {"days": 28, "n": 100, "n_each_week_kind": 20}
 EXIT_OF = {"swing": "swing", "swing_mirror": "swing", "swing_2h": "swing", "swing_2h_mirror": "swing",
            "impulse_follow": "fixed", "impulse_fade": "fixed", "impulse_ai": "fixed", "swing_ratchet": "ratchet", "intraday_pick": "fixed",
-           "counter_trend": "fixed", "intraday_mirror": "fixed", "counter_trend_mirror": "fixed"}
+           "counter_trend": "fixed", "intraday_mirror": "fixed", "counter_trend_mirror": "fixed",
+           "stop_reverse_2r": "fixed", "stop_reverse_15r": "fixed", "stop_same_side_2r": "fixed",
+           "fed_reaction": "fixed", "fed_fade": "fixed", "news_event_template": "fixed", "news_event_template_ctrl": "fixed",
+           "risk_radar_paper": "fixed", "risk_radar_paper_ctrl": "fixed"}
 
 
 def _naive(ts: datetime) -> datetime:

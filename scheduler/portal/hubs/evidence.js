@@ -149,4 +149,18 @@
     }
   });
   UI.view("evidence/research", [[{ w: "research-report", size: "grow" }, { stack: ["research-v2", "research-tools"], size: "side" }]]);
+
+  UI.widget("news-study", {
+    title: "NEWS EVENT STUDY",
+    uses: ["news"],
+    mount: function (el) { el.innerHTML = '<div class="panel-body" data-r="body"></div>'; },
+    render: function (el, D) {
+      var n = D.news || {}, box = el.querySelector("[data-r=body]");
+      if (!n.enabled) { box.innerHTML = C.empty("Enable news engine + portal widgets. Mac backfill: scripts/news_backfill.py"); return; }
+      box.innerHTML = "<p class=\"dim\">Event-study runs log to <code>audit/trial_ledger.jsonl</code> (family <code>news_study</code>). "
+        + "Run <code>scripts/news_event_study.py</code> on your Mac — not on the server.</p>"
+        + "<p>Events loaded: <b>" + ((n.events || []).length) + "</b></p>";
+    }
+  });
+  UI.view("evidence/news-study", [["news-study"]]);
 })();
