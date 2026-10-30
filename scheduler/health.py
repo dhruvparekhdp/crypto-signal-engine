@@ -1751,6 +1751,25 @@ async def _api_moves(runner, request: web.Request) -> web.Response:
             "wallet_pct": s.wallet_pct, "note": s.note, "at": _iso(s.created_at),
         } for s in shadow],
     }
+    from config.settings import settings as _settings
+
+    if _settings.news_engine_enabled:
+        from analysis.news.queries import active_news_events
+        from storage.news_models import NewsEvent
+        from sqlalchemy import select
+
+        async with AsyncSessionFactory() as session:
+            store_events = (await session.scalars(select(NewsEvent).order_by(NewsEvent.started_at.desc()).limit(80))).all()
+            body["news_store"] = [{
+                "id": e.id, "title": e.title, "event_type": e.event_type,
+                "severity": e.severity, "severity_market": e.severity_market,
+                "status": e.status, "at": _iso(e.started_at),
+            } for e in store_events]
+            body["news_store_active"] = [
+                {"id": e.id, "title": e.title, "level": e.severity_market or e.severity, "category": e.event_type,
+                 "at": _iso(e.started_at)}
+                for e in await active_news_events(session, now)
+            ]
     return web.Response(text=json.dumps(body), content_type="application/json")
 
 

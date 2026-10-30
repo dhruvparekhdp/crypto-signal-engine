@@ -3696,9 +3696,15 @@ class AppRunner:
                 repo_ = Repository(session)
                 rows = await repo_.recent_events(14)
                 heads = await repo_.news_sentiment_since(6)
-            active = active_window([
+            legacy_active = [
                 ActiveEvent(r.id, r.title, r.category, r.level_current, r.happened_at, r.direction)
-                for r in rows if r.status == "active"], now)
+                for r in rows if r.status == "active"]
+            if settings.news_engine_enabled:
+                from analysis.news.queries import active_news_events
+
+                async with AsyncSessionFactory() as session:
+                    legacy_active.extend(await active_news_events(session, now))
+            active = active_window(legacy_active, now)
             max_level = max((e.level for e in active), default=0)
             # 18 Oct 2026: run only when something happened (most runs found nothing or got no answer)
             from analysis.ai_gates import btc_shock, event_near, fresh_news_count
