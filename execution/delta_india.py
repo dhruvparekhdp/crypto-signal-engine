@@ -135,7 +135,10 @@ class DeltaIndia:
                     amt = abs(float(r.get("amount") or 0))
                 except (TypeError, ValueError):
                     continue
-                out.append({"id": str(r.get("id")), "type": typ, "asset": str(r.get("asset_symbol") or "").upper(),
+                # Delta India's rows carry "uuid", not "id" (30 Oct 2026: every flow was keyed "None", so the
+                # owner's second deposit looked already counted and the floor never moved)
+                fid = r.get("id") or r.get("uuid") or f"{typ}:{r.get('created_at')}:{r.get('amount')}"
+                out.append({"id": str(fid), "type": typ, "asset": str(r.get("asset_symbol") or "").upper(),
                             "amount": -amt if typ in CAPITAL_OUT else amt, "t_us": _epoch_us(r.get("created_at"))})
             after = (data.get("meta") or {}).get("after") if isinstance(data, dict) else None
             if not after or not page:

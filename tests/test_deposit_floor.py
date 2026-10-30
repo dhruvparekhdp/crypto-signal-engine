@@ -139,3 +139,26 @@ async def test_opening_capital_counts_once_with_deposits_after_the_count_from_da
 def test_count_from_date_is_utc_midnight():
     from execution.delta_book import _day_us
     assert _day_us("2026-10-18") == 1792281600 * 1_000_000 and _day_us("") == 0 and _day_us("18/10") == 0
+
+
+async def test_capital_flows_key_delta_rows_by_uuid():
+    # 30 Oct 2026: Delta India rows have "uuid", no "id" - both deposits were keyed "None" and the second was skipped
+    http = _Http([{"success": True, "meta": {"after": None}, "result": [
+        {"uuid": "aa1", "transaction_type": "deposit", "amount": "3.53", "asset_symbol": "USD", "created_at": "2026-10-25T20:26:19Z"},
+        {"uuid": "bb2", "transaction_type": "deposit", "amount": "11.76", "asset_symbol": "USD", "created_at": "2026-10-30T11:44:05Z"}]}])
+    flows = await DeltaIndia("k", "s", client=http).capital_flows()
+    assert [f["id"] for f in flows] == ["aa1", "bb2"]
+
+
+async def test_a_flow_saved_under_none_is_not_counted_twice_and_the_new_deposit_is(tmp_path):
+    old_t = 1792959979523265
+    c = _Client([_flow("c3619", "deposit", 300 / 85, old_t), _flow("310c3", "deposit", 1000 / 85, old_t + 10**11)])
+    b = _book(tmp_path, c)
+    b.capital_base_inr = 500.0
+    st = b._load_state()
+    st["capital"] = {"flows": {"None": {"t_us": old_t, "type": "deposit", "inr": 300.0}}, "net_inr": 800.0,
+                     "floor_inr": 400.0, "checked_us": old_t + 10**10}
+    b._save_state(st)
+    ev = await b.refresh_capital()
+    assert ev["net_deposits_inr"] == pytest.approx(1800.0) and ev["floor_inr"] == pytest.approx(900.0)
+    assert [f["inr"] for f in ev["new_flows"]] == [pytest.approx(1000.0)]

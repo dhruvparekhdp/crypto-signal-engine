@@ -299,8 +299,11 @@ class DeltaBook:
             return None
         rate = self.usd_inr
         new = []
+        # the same flow by time and type, for flows saved before ids were read (30 Oct 2026: stored as "None")
+        seen_at = {(int(v.get("t_us") or 0), v.get("type")) for v in cap["flows"].values()}
         for f in flows:
-            if f["id"] in cap["flows"] or (self.capital_since_us and f["t_us"] < self.capital_since_us):
+            if (f["id"] in cap["flows"] or (int(f["t_us"] or 0), f["type"]) in seen_at
+                    or (self.capital_since_us and f["t_us"] < self.capital_since_us)):
                 continue
             inr = f["amount"] if f["asset"] == "INR" else f["amount"] * rate
             cap["flows"][f["id"]] = {"t_us": f["t_us"], "type": f["type"], "inr": round(inr, 2)}
