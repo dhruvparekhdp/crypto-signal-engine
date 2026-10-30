@@ -13,7 +13,15 @@ from collectors.news.base import NewsCollector, PollResult
 from collectors.news.fixtures import load_fixture, use_fixtures
 from collectors.news.http import fetch_json, fetch_text
 from collectors.news.registry import setting_key_for
-from analysis.news.store import upsert_calendar_row, upsert_document
+from analysis.news.store import (
+    insert_cross_asset_tick,
+    insert_defi_snapshot,
+    insert_fred_observation,
+    insert_odds_snapshot,
+    upsert_calendar_row,
+    upsert_document,
+    upsert_gdelt_batch_pointer,
+)
 from storage.news_models import NewsLiquidationMinute
 
 
@@ -173,9 +181,14 @@ class UsTreasuryFredCollector(NewsCollector):
         now = datetime.now(UTC).replace(tzinfo=None)
         n = 0
         for ob in await self._fetch_obs():
-            title = f"US Treasury deficit observation {ob.get('date', '')}"
-            await upsert_document(session, source_id=self.collector_id, title=title, body=str(ob.get("value") or ""),
-                                  published_at=now, payload=ob)
+            await insert_fred_observation(
+                session,
+                series_id="DTSFDEF",
+                observation_date=str(ob.get("date") or ""),
+                value=str(ob.get("value") or ""),
+                payload=ob,
+                captured_at=now,
+            )
             n += 1
         return n
 
@@ -206,7 +219,23 @@ class PolymarketOddsCollector(NewsCollector):
         n = 0
         for m in await self._fetch_markets():
             q = m.get("question") or m.get("id") or "market"
-            await upsert_document(session, source_id=self.collector_id, title=q, published_at=now, payload=m)
+            mid = str(m.get("id") or m.get("condition_id") or q)[:120]
+            prob = m.get("outcomePrices") or m.get("yes_prob")
+            yes_prob = None
+            if isinstance(prob, list) and prob:
+                try:
+                    yes_prob = float(prob[0])
+                except (TypeError, ValueError):
+                    yes_prob = None
+            await insert_odds_snapshot(
+                session,
+                venue="polymarket",
+                market_id=mid,
+                title=q,
+                yes_prob=yes_prob,
+                payload=m,
+                captured_at=now,
+            )
             n += 1
         return n
 
@@ -236,8 +265,23 @@ class KalshiOddsCollector(NewsCollector):
         now = datetime.now(UTC).replace(tzinfo=None)
         n = 0
         for m in await self._fetch_markets():
-            await upsert_document(session, source_id=self.collector_id, title=m.get("title") or m.get("ticker", ""),
-                                  published_at=now, payload=m)
+            title = m.get("title") or m.get("ticker", "")
+            mid = str(m.get("ticker") or title)[:120]
+            yes_prob = None
+            if m.get("yes_ask") is not None:
+                try:
+                    yes_prob = float(m["yes_ask"]) / 100.0
+                except (TypeError, ValueError):
+                    yes_prob = None
+            await insert_odds_snapshot(
+                session,
+                venue="kalshi",
+                market_id=mid,
+                title=title,
+                yes_prob=yes_prob,
+                payload=m,
+                captured_at=now,
+            )
             n += 1
         return n
 
@@ -345,8 +389,8 @@ class DefillamaCollector(NewsCollector):
         now = datetime.now(UTC).replace(tzinfo=None)
         n = 0
         for ch in await self._fetch_rows():
-            await upsert_document(session, source_id=self.collector_id, title=f"TVL {ch.get('name', '')}",
-                                  body=str(ch.get("tvl") or ""), published_at=now, payload=ch)
+            tvl = float(ch.get("tvl") or 0)
+            await insert_defi_snapshot(session, chain=str(ch.get("name") or ""), tvl_usd=tvl, captured_at=now)
             n += 1
         return n
 
@@ -377,8 +421,19 @@ class CrossAssetPricesCollector(NewsCollector):
         data = await self._fetch_data()
         n = 0
         for k, v in data.items():
-            await upsert_document(session, source_id=self.collector_id, title=f"Cross-asset {k}",
-                                  body=json.dumps(v), published_at=now)
+            if not isinstance(v, dict):
+                continue
+            px = v.get("usd")
+            if px is None:
+                continue
+            await insert_cross_asset_tick(
+                session,
+                symbol=k,
+                price=float(px),
+                change_24h_pct=float(v["usd_24h_change"]) if v.get("usd_24h_change") is not None else None,
+                source_id=self.collector_id,
+                captured_at=now,
+            )
             n += 1
         return n
 
@@ -435,14 +490,32 @@ class Gdelt15mCollector(NewsCollector):
         except Exception as e:
             return self._mark_error(str(e))
 
+    async def _fetch_articles(self) -> list[dict]:
+        if use_fixtures():
+            raw = load_fixture("gdelt_articles.json")
+            return raw if isinstance(raw, list) else list(raw.get("articles") or [])
+        return []
+
     async def ingest(self, session) -> int:
         line = await self._fetch_line()
-        if not line:
-            return 0
+        n = 0
+        if line:
+            file_name = line.strip().split()[0]
+            await upsert_gdelt_batch_pointer(session, file_name=file_name)
+            n += 1
         now = datetime.now(UTC).replace(tzinfo=None)
-        await upsert_document(session, source_id=self.collector_id, title="GDELT export available",
-                              body=line, published_at=now)
-        return 1
+        for art in await self._fetch_articles():
+            await upsert_document(
+                session,
+                source_id="gdelt_15m:article",
+                title=art.get("title") or "GDELT article",
+                body=art.get("body") or "",
+                url=art.get("url") or "",
+                published_at=now,
+                payload=art,
+            )
+            n += 1
+        return n
 
 
 def build_collectors() -> list[NewsCollector]:

@@ -80,7 +80,8 @@ class NewsCollector:
 
     async def poll_and_store(self, session) -> PollResult:
         try:
-            n = await self.ingest(session)
+            async with session.begin_nested():
+                n = await self.ingest(session)
             return self._mark_ok(n, f"stored {n} rows")
         except Exception as e:
             return self._mark_error(str(e))

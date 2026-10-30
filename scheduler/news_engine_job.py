@@ -32,7 +32,11 @@ async def run_news_engine_cycle() -> dict:
                 stats["items"] += result.items
                 await _persist_health(session, collector)
         if settings.news_event_resolver_enabled:
+            from analysis.news.resolve_pipeline import close_stale_open_events, resolve_calendar_releases
+
             stats["events_created"] = await resolve_pending_documents(session)
+            stats["events_created"] += await resolve_calendar_releases(session)
+            stats["events_closed"] = await close_stale_open_events(session)
         await session.commit()
     log.info("news_engine_cycle", **stats)
     return stats

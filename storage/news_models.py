@@ -101,6 +101,7 @@ class NewsCalendarRow(Base):
     actual: Mapped[str] = mapped_column(String, default="")
     severity: Mapped[int] = mapped_column(Integer, default=2)
     payload_json: Mapped[str] = mapped_column(Text, default="{}")
+    event_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=_now_utc, onupdate=_now_utc)
 
 

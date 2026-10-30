@@ -32,6 +32,8 @@ def fed_reaction_side(
     if event_type != "central_bank" or severity < 3:
         return 0
     text = f"{direction} {tone} {title}".lower()
+    if search_wb(text, r"no rush to cut|holds rates|hold rates|unchanged"):
+        return 0
     if search_wb(text, "hawkish|hike|tighten|restrictive|higher for longer"):
         return -1
     if search_wb(text, "dovish|cut|ease|accommodative|lower rates"):
