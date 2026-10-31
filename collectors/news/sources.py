@@ -6,7 +6,7 @@ from __future__ import annotations
 import asyncio
 import json
 import xml.etree.ElementTree as ET
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 from config.settings import settings
 from collectors.news.base import NewsCollector, PollResult
@@ -385,10 +385,21 @@ class DefillamaCollector(NewsCollector):
         except Exception as e:
             return self._mark_error(str(e))
 
+    TOP_CHAINS = 25          # /v2/chains lists ~400 chains: every one every 5 min was ~115k rows a day
+    EVERY = timedelta(hours=1)
+
     async def ingest(self, session) -> int:
+        from sqlalchemy import func, select
+
+        from storage.news_models import NewsDefiSnapshot
+
         now = datetime.now(UTC).replace(tzinfo=None)
+        last = await session.scalar(select(func.max(NewsDefiSnapshot.captured_at)))
+        if last is not None and now - last < self.EVERY:
+            return 0
+        rows = sorted(await self._fetch_rows(), key=lambda c: float(c.get("tvl") or 0), reverse=True)
         n = 0
-        for ch in await self._fetch_rows():
+        for ch in rows[: self.TOP_CHAINS]:
             tvl = float(ch.get("tvl") or 0)
             await insert_defi_snapshot(session, chain=str(ch.get("name") or ""), tvl_usd=tvl, captured_at=now)
             n += 1

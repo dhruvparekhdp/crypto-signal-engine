@@ -61,6 +61,22 @@ class TestDataSourcesNoEvents(unittest.IsolatedAsyncioTestCase):
             await session.commit()
 
 
+    async def test_tvl_keeps_the_top_25_chains_once_an_hour(self):
+        # 31 Oct 2026 review: ~400 chains every 5 minutes would have been ~115k rows a day
+        c = DefillamaCollector()
+
+        async def rows():
+            return [{"name": f"c{i}", "tvl": float(i)} for i in range(40)]
+
+        c._fetch_rows = rows
+        async with self.Session() as session:
+            self.assertEqual(await c.ingest(session), 25)
+            self.assertEqual(await c.ingest(session), 0)          # within the hour: nothing new
+            names = {r.chain for r in (await session.scalars(select(NewsDefiSnapshot))).all()}
+            self.assertIn("c39", names)
+            self.assertNotIn("c0", names)
+
+
 class TestResolverUnlinkedOnly(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
         self.engine = create_async_engine("sqlite+aiosqlite:///:memory:")
