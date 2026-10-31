@@ -37,6 +37,25 @@ def _secret(val) -> str | None:
     return val.get_secret_value() if hasattr(val, "get_secret_value") else str(val)
 
 
+def _rss_time(item) -> datetime | None:
+    """The item's own publish time as naive UTC (31 Oct 2026: every item was stamped with the fetch time, so
+    September's FOMC minutes showed as today's news). RSS pubDate, else Dublin Core / Atom dates."""
+    from email.utils import parsedate_to_datetime
+
+    raw = (item.findtext("pubDate") or item.findtext("{http://purl.org/dc/elements/1.1/}date")
+           or item.findtext("{http://www.w3.org/2005/Atom}updated") or "").strip()
+    if not raw:
+        return None
+    try:
+        dt = parsedate_to_datetime(raw)
+    except (TypeError, ValueError):
+        try:
+            dt = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+        except ValueError:
+            return None
+    return (dt.astimezone(UTC) if dt.tzinfo else dt.replace(tzinfo=UTC)).replace(tzinfo=None)
+
+
 def _parse_rss_items(xml: str) -> list[dict]:
     root = ET.fromstring(xml)
     items = []
@@ -45,7 +64,7 @@ def _parse_rss_items(xml: str) -> list[dict]:
         link = (item.findtext("link") or "").strip()
         desc = (item.findtext("description") or "").strip()
         if title:
-            items.append({"title": title, "url": link, "body": desc})
+            items.append({"title": title, "url": link, "body": desc, "published": _rss_time(item)})
     return items
 
 
@@ -140,7 +159,7 @@ class CentralBankRssCollector(NewsCollector):
                 title=it["title"],
                 body=it.get("body") or "",
                 url=it.get("url") or "",
-                published_at=now,
+                published_at=it.get("published") or now,
             )
             n += 1
         return n
@@ -474,7 +493,7 @@ class RegionalRssCollector(NewsCollector):
         n = 0
         for it in await self._fetch_items():
             await upsert_document(session, source_id=self.collector_id, title=it["title"], body=it.get("body") or "",
-                                  url=it.get("url") or "", published_at=now)
+                                  url=it.get("url") or "", published_at=it.get("published") or now)
             n += 1
         return n
 

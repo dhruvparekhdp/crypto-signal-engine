@@ -39,6 +39,8 @@ async def upsert_document(session: AsyncSession, *, source_id: str, title: str, 
         row.title = clean_title(title)
         row.body = body or row.body
         row.payload_json = json.dumps(payload or {})
+        if published_at and (row.published_at is None or published_at < row.published_at):
+            row.published_at = published_at          # a source's own (earlier) time replaces a fetch-time stamp
     await session.flush()
     return row
 

@@ -106,10 +106,16 @@ async def close_stale_open_events(session: AsyncSession, *, now: datetime | None
     open_events = (await session.scalars(select(NewsEvent).where(NewsEvent.status == "open"))).all()
     closed = 0
     for ev in open_events:
-        last_story = await session.scalar(
-            select(func.max(NewsEventStory.created_at)).where(NewsEventStory.event_id == ev.id)
-        )
-        anchor = last_story or ev.started_at
+        # anchored on the stories' own publish times, not when we fetched them (31 Oct 2026: September's FOMC
+        # minutes, first fetched today, stayed open as fresh news); the event starts at its earliest story
+        first, last = (await session.execute(
+            select(func.min(NewsDocument.published_at), func.max(NewsDocument.published_at))
+            .join(NewsEventStory, NewsEventStory.document_id == NewsDocument.id)
+            .where(NewsEventStory.event_id == ev.id)
+        )).one()
+        if first is not None and first < ev.started_at:
+            ev.started_at = first
+        anchor = last or ev.started_at
         if now - anchor < memory_window_for_severity(ev.severity):
             continue
         ev.status = "resolved"

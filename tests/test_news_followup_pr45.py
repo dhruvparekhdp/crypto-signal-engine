@@ -235,3 +235,48 @@ class TestCollectorSavepoints(unittest.IsolatedAsyncioTestCase):
             n = await session.scalar(select(func.count()).select_from(NewsDocument))
             self.assertGreater(n, 0)
             await session.commit()
+
+
+class TestRealPublishTimes(unittest.IsolatedAsyncioTestCase):
+    """31 Oct 2026 first live run: every RSS item was stamped with the fetch time, and Fed / ECB policy items were
+    'other'."""
+
+    def test_rss_items_carry_their_own_publish_time(self):
+        from collectors.news.sources import _parse_rss_items
+        xml = ("<rss><channel><item><title>Minutes of the Federal Open Market Committee</title>"
+               "<pubDate>Wed, 07 Oct 2026 18:00:00 GMT</pubDate></item></channel></rss>")
+        self.assertEqual(_parse_rss_items(xml)[0]["published"], datetime(2026, 10, 7, 18, 0))
+
+    def test_policy_items_are_central_bank(self):
+        from analysis.news.classifier import classify_rule_based
+        for t in ("Minutes of the Federal Open Market Committee, September 15-16, 2026", "Monetary policy decisions",
+                  "Christine Lagarde, Boris Vujcic: Monetary policy statement (with Q&A)"):
+            self.assertEqual(classify_rule_based(t)["event_type"], "central_bank", t)
+        self.assertEqual(classify_rule_based("Federal Reserve Board announces approval of application by Isabella "
+                                             "Bank Corporation")["event_type"], "other")
+
+    async def test_an_old_item_fetched_today_closes_and_keeps_its_real_date(self):
+        engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+        async with engine.begin() as conn:
+            await conn.run_sync(Base.metadata.create_all)
+        Session = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+        now = datetime(2026, 10, 31, 16, 0)
+        async with Session() as session:
+            # first stored with the fetch time (the old behaviour), then seen again with its real time
+            await upsert_document(session, source_id="central_bank_rss:fed", title="FOMC minutes", published_at=now)
+            await resolve_pending_documents(session)
+            await upsert_document(session, source_id="central_bank_rss:fed", title="FOMC minutes",
+                                  published_at=datetime(2026, 10, 7, 18, 0))
+            self.assertEqual(await close_stale_open_events(session, now=now), 1)
+            ev = (await session.scalars(select(NewsEvent))).one()
+            self.assertEqual((ev.status, ev.started_at), ("resolved", datetime(2026, 10, 7, 18, 0)))
+        await engine.dispose()
+
+
+def test_market_moves_lists_open_news_events_without_failing():
+    # 31 Oct 2026: /api/moves returned 500 ('ActiveEvent' object has no attribute 'severity_market')
+    from analysis.event_monitor import ActiveEvent
+    from scheduler.health import _news_active_rows
+    rows = _news_active_rows([ActiveEvent(7, "FOMC statement", "central_bank", 4, datetime(2026, 10, 31, 16, 0),
+                                          "mixed")])
+    assert rows[0]["level"] == 4 and rows[0]["category"] == "central_bank" and rows[0]["at"].startswith("2026-10-31")

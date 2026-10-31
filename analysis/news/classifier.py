@@ -17,7 +17,8 @@ from analysis.news.severity import classify_severity
 def classify_rule_based(title: str, body: str = "") -> dict:
     t = f"{title} {body}".lower()
     event_type = "other"
-    if search_wb(t, "fomc|fed|ecb|boe|boj|pboc|rate decision|central bank|mpc decision"):
+    if search_wb(t, "fomc|fed|ecb|boe|boj|pboc|rate decision|central bank|mpc decision|federal open market committee|"
+                 "monetary policy|interest rate|interest rates|governing council|policy rate|powell|lagarde"):
         event_type = "central_bank"
     elif search_wb(t, "cpi|inflation|jobs report|nonfarm|payrolls|gdp"):
         event_type = "macro"

@@ -1702,6 +1702,13 @@ async def _api_crypto_watchlist(runner, request: web.Request) -> web.Response:
                         content_type="application/json")
 
 
+def _news_active_rows(events) -> list[dict]:
+    """Open news-engine events for Market moves. They are event_monitor.ActiveEvent (31 Oct 2026: reading
+    news_events columns off them made /api/moves fail with a 500 once the engine was switched on)."""
+    return [{"id": e.id, "title": e.title, "level": e.level, "category": e.category, "at": _iso(e.first_seen)}
+            for e in events]
+
+
 async def _api_moves(runner, request: web.Request) -> web.Response:
     """
     GET /api/moves?limit=24 — the hourly "why did it move" analyses, newest first,
@@ -1765,11 +1772,7 @@ async def _api_moves(runner, request: web.Request) -> web.Response:
                 "severity": e.severity, "severity_market": e.severity_market,
                 "status": e.status, "at": _iso(e.started_at),
             } for e in store_events]
-            body["news_store_active"] = [
-                {"id": e.id, "title": e.title, "level": e.severity_market or e.severity, "category": e.event_type,
-                 "at": _iso(e.started_at)}
-                for e in await active_news_events(session, now)
-            ]
+            body["news_store_active"] = _news_active_rows(await active_news_events(session, now))
     return web.Response(text=json.dumps(body), content_type="application/json")
 
 
