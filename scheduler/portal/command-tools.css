@@ -111,3 +111,14 @@ body.cmd-tool-chart .chart-tools-toggle{display:none}
   .cmd-tool .wrap{padding:12px 12px 32px}
   .cmd-tool table.tbl th,.cmd-tool table.tbl td{padding:8px 8px;font-size:12px}
 }
+
+/* Market moves (31 Oct 2026, owner: "styling is not proper for market movers"). The tool pages also load portal.css,
+   whose .coin (coin chip), .gauge, .hist (histogram) and .pos (position card) rules hit this page's own classes; and
+   #main-body's auto grid column grew to its content, so every coin card sat in one ~11,700px row and got cut off. */
+.cmd-tool #main-body{grid-template-columns:minmax(0,1fr)}
+.cmd-tool #main-body>*{min-width:0}
+.cmd-tool .grid .coin{font:inherit;min-width:0;min-height:0;cursor:auto;color:var(--ink);background:var(--panel)}
+.cmd-tool .chg{grid-template-columns:repeat(4,minmax(0,1fr))}
+.cmd-tool .hist{display:grid;height:auto;align-items:stretch;border-bottom:0;padding-top:0}
+.cmd-tool .pos,.cmd-tool .neg{border:0;box-shadow:none;background:none;padding:0;display:revert;gap:normal}
+.cmd-tool .gauge{height:8px;border:0;border-radius:4px;background:linear-gradient(90deg,var(--neg) 0%,var(--mut-t) 50%,var(--pos) 100%)}

@@ -4,9 +4,10 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 from pathlib import Path
 
-LEDGER = Path("audit/trial_ledger.jsonl")
+LEDGER = Path(os.environ.get("NEWS_LEDGER") or "audit/trial_ledger.jsonl")   # tests point it at a temp file
 
 
 def main() -> int:

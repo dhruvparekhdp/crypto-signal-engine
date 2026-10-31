@@ -12,11 +12,14 @@ ROOT = Path(__file__).resolve().parents[1]
 
 class TestNewsP4(unittest.TestCase):
     def test_backfill_dry_run_logs_ledger(self):
-        led = ROOT / "audit" / "trial_ledger.jsonl"
-        before = led.stat().st_size if led.exists() else 0
+        # a temp ledger: the real audit/trial_ledger.jsonl gained lines on every test run (31 Oct 2026)
+        import os
+        import tempfile
+        led = Path(tempfile.mkdtemp()) / "trial_ledger.jsonl"
+        before = 0
         r = subprocess.run(
             [sys.executable, str(ROOT / "scripts" / "news_backfill.py"), "--dry-run"],
-            cwd=ROOT, capture_output=True, text=True,
+            cwd=ROOT, capture_output=True, text=True, env={**os.environ, "NEWS_LEDGER": str(led)},
         )
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertTrue(led.exists())
