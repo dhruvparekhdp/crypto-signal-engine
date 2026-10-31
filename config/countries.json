@@ -1,0 +1,25 @@
+{
+  "version": "W4.1",
+  "countries": [
+    {"iso2": "US", "name": "United States", "region": "north_america", "crypto_weight": 1.0},
+    {"iso2": "CN", "name": "China", "region": "asia", "crypto_weight": 0.85},
+    {"iso2": "EU", "name": "Euro area", "region": "europe", "crypto_weight": 0.75},
+    {"iso2": "GB", "name": "United Kingdom", "region": "europe", "crypto_weight": 0.6},
+    {"iso2": "JP", "name": "Japan", "region": "asia", "crypto_weight": 0.55},
+    {"iso2": "IN", "name": "India", "region": "asia", "crypto_weight": 0.7},
+    {"iso2": "RU", "name": "Russia", "region": "emea", "crypto_weight": 0.4},
+    {"iso2": "UA", "name": "Ukraine", "region": "emea", "crypto_weight": 0.35},
+    {"iso2": "IL", "name": "Israel", "region": "emea", "crypto_weight": 0.35},
+    {"iso2": "KR", "name": "South Korea", "region": "asia", "crypto_weight": 0.5},
+    {"iso2": "AE", "name": "United Arab Emirates", "region": "emea", "crypto_weight": 0.45},
+    {"iso2": "SG", "name": "Singapore", "region": "asia", "crypto_weight": 0.45},
+    {"iso2": "CH", "name": "Switzerland", "region": "europe", "crypto_weight": 0.4},
+    {"iso2": "TR", "name": "Turkey", "region": "emea", "crypto_weight": 0.35},
+    {"iso2": "BR", "name": "Brazil", "region": "latam", "crypto_weight": 0.35},
+    {"iso2": "MX", "name": "Mexico", "region": "latam", "crypto_weight": 0.3},
+    {"iso2": "CA", "name": "Canada", "region": "north_america", "crypto_weight": 0.45},
+    {"iso2": "AU", "name": "Australia", "region": "oceania", "crypto_weight": 0.35},
+    {"iso2": "SA", "name": "Saudi Arabia", "region": "emea", "crypto_weight": 0.35},
+    {"iso2": "TW", "name": "Taiwan", "region": "asia", "crypto_weight": 0.4}
+  ]
+}

@@ -2019,6 +2019,12 @@ class AppRunner:
         book["impulse_line"] = len(lines)
         return n
 
+    async def _news_engine_job(self) -> dict:
+        """Collectors → news_documents / calendar → resolver (all default-off)."""
+        from scheduler.news_engine_job import run_news_engine_cycle
+
+        return await run_news_engine_cycle()
+
     async def _impulse_job(self) -> dict:
         """Every minute: the live move detector (analysis/impulse.py; owner 30 Oct 2026, alerts and paper only). Each
         watchlist coin's last 15 minutes against its last 24 h (Binance futures bars, like the lab); a move gets one
@@ -3704,9 +3710,15 @@ class AppRunner:
                 repo_ = Repository(session)
                 rows = await repo_.recent_events(14)
                 heads = await repo_.news_sentiment_since(6)
-            active = active_window([
+            legacy_active = [
                 ActiveEvent(r.id, r.title, r.category, r.level_current, r.happened_at, r.direction)
-                for r in rows if r.status == "active"], now)
+                for r in rows if r.status == "active"]
+            if settings.news_engine_enabled:
+                from analysis.news.queries import active_news_events
+
+                async with AsyncSessionFactory() as session:
+                    legacy_active.extend(await active_news_events(session, now))
+            active = active_window(legacy_active, now)
             max_level = max((e.level for e in active), default=0)
             # 18 Oct 2026: run only when something happened (most runs found nothing or got no answer)
             from analysis.ai_gates import btc_shock, event_near, fresh_news_count
@@ -4696,6 +4708,9 @@ class AppRunner:
         self.scheduler.add_job(
             self._impulse_job, "interval", minutes=1, id="impulse", max_instances=1,
             next_run_time=datetime.now(UTC) + timedelta(minutes=2))
+        self.scheduler.add_job(
+            self._news_engine_job, "interval", minutes=5, id="news_engine", max_instances=1,
+            next_run_time=datetime.now(UTC) + timedelta(minutes=3))
         self.scheduler.add_job(
             self._candidate_book_job, "interval", minutes=2, id="candidate_book", max_instances=1,
             next_run_time=datetime.now(UTC) + timedelta(seconds=105))

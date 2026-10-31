@@ -1,0 +1,14 @@
+{
+  "version": "W5",
+  "types": {
+    "macro": {"label": "Macro data", "severity_floor": 2},
+    "central_bank": {"label": "Central bank", "severity_floor": 3},
+    "fiscal": {"label": "Fiscal / Treasury", "severity_floor": 2},
+    "geopolitical": {"label": "Geopolitical", "severity_floor": 3},
+    "regulation": {"label": "Regulation", "severity_floor": 3},
+    "crypto_native": {"label": "Crypto-native", "severity_floor": 2},
+    "election": {"label": "Election / politics", "severity_floor": 2},
+    "commodity": {"label": "Commodity supply", "severity_floor": 2},
+    "other": {"label": "Other", "severity_floor": 1}
+  }
+}

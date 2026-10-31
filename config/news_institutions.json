@@ -1,0 +1,23 @@
+{
+  "version": "W4.3",
+  "institutions": [
+    {"code": "fed", "name": "Federal Reserve", "country": "US", "kind": "central_bank", "aliases": ["FOMC", "Federal Reserve Board"]},
+    {"code": "ecb", "name": "European Central Bank", "country": "EU", "kind": "central_bank", "aliases": ["ECB Governing Council"]},
+    {"code": "boe", "name": "Bank of England", "country": "GB", "kind": "central_bank", "aliases": ["BoE", "MPC"]},
+    {"code": "boj", "name": "Bank of Japan", "country": "JP", "kind": "central_bank", "aliases": ["BoJ"]},
+    {"code": "pboc", "name": "People's Bank of China", "country": "CN", "kind": "central_bank", "aliases": ["PBOC"]},
+    {"code": "rbi", "name": "Reserve Bank of India", "country": "IN", "kind": "central_bank", "aliases": ["RBI MPC"]},
+    {"code": "snb", "name": "Swiss National Bank", "country": "CH", "kind": "central_bank", "aliases": ["SNB"]},
+    {"code": "boc", "name": "Bank of Canada", "country": "CA", "kind": "central_bank", "aliases": ["BoC"]},
+    {"code": "rba", "name": "Reserve Bank of Australia", "country": "AU", "kind": "central_bank", "aliases": ["RBA"]},
+    {"code": "us_treasury", "name": "U.S. Department of the Treasury", "country": "US", "kind": "fiscal", "aliases": ["Treasury", "UST"]},
+    {"code": "sec", "name": "U.S. Securities and Exchange Commission", "country": "US", "kind": "regulator", "aliases": ["SEC"]},
+    {"code": "cftc", "name": "U.S. Commodity Futures Trading Commission", "country": "US", "kind": "regulator", "aliases": ["CFTC"]},
+    {"code": "bis", "name": "Bank for International Settlements", "country": "CH", "kind": "international", "aliases": ["BIS"]},
+    {"code": "imf", "name": "International Monetary Fund", "country": "US", "kind": "international", "aliases": ["IMF"]},
+    {"code": "wto", "name": "World Trade Organization", "country": "CH", "kind": "international", "aliases": ["WTO"]},
+    {"code": "opec", "name": "OPEC+", "country": "SA", "kind": "commodity", "aliases": ["OPEC"]},
+    {"code": "binance", "name": "Binance", "country": "SG", "kind": "crypto_venue", "aliases": []},
+    {"code": "coinbase", "name": "Coinbase", "country": "US", "kind": "crypto_venue", "aliases": []}
+  ]
+}

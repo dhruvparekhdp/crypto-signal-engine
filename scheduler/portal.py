@@ -217,3 +217,6 @@ def register(app: web.Application) -> None:
     app.router.add_get("/api/portal/candles", api_candles)
     app.router.add_get("/api/portal/signals", api_signals)
     app.router.add_get("/api/portal/meta", api_meta)
+    from scheduler.news_portal_api import api_portal_news
+
+    app.router.add_get("/api/portal/news", api_portal_news)
