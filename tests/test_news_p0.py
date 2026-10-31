@@ -53,10 +53,16 @@ class TestNewsTables(unittest.IsolatedAsyncioTestCase):
             self.assertGreater(len(rows), 10)
 
 
-class TestNewsSettingsDefaultOff(unittest.TestCase):
-    def test_master_and_collectors_off(self):
-        from config.settings import settings
+class TestNewsSettingsDefaults(unittest.TestCase):
+    def test_keyless_parts_on_keyed_and_paper_parts_off(self):
+        # owner 31 Oct 2026: "turn on for now and let's review on 2nd nov"
+        from config.settings import Settings
 
-        self.assertFalse(settings.news_engine_enabled)
-        self.assertFalse(settings.news_collector_economic_calendar_enabled)
-        self.assertFalse(settings.news_paper_stop_reverse_enabled)
+        f = Settings.model_fields
+        for k in ("news_engine_enabled", "news_portal_widgets_enabled", "news_event_resolver_enabled",
+                  "news_collector_central_bank_rss_enabled", "news_collector_regional_rss_enabled"):
+            self.assertTrue(f[k].default, k)
+        for k in ("news_collector_economic_calendar_enabled", "news_collector_us_treasury_fred_enabled",
+                  "news_paper_stop_reverse_enabled", "news_paper_fed_reaction_enabled", "news_sentiment_indices_enabled",
+                  "news_engine_feeds_monitor"):
+            self.assertFalse(f[k].default, k)

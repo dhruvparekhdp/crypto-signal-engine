@@ -158,7 +158,7 @@ async def test_paper_opens_a_second_trade_on_a_coin_only_by_the_rule(monkeypatch
     assert skipped == ["opposite_side_open_in_symbol", "same_strategy_open_in_symbol"]
 
 
-def test_multi_per_coin_runs_until_the_1_nov_review():
-    # owner 30 Oct 2026: "3-trades-per-coin rule on 1st nov" - review moved from 31 Oct to 1 Nov 12:00 UTC
+def test_multi_per_coin_runs_until_the_2_nov_review():
+    # owner 31 Oct 2026: "review on 2nd nov ... let all things run for 1 more day"
     from config.settings import Settings
-    assert Settings.model_fields["swing_multi_per_coin_until"].default == "2026-11-01T12:00:00"
+    assert Settings.model_fields["swing_multi_per_coin_until"].default == "2026-11-02T12:00:00"

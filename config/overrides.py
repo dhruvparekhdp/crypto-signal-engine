@@ -41,6 +41,7 @@ GROUPS = {
     "delta": "Delta India (INR futures)",
     "storage": "Storage",
     "keys": "API keys",
+    "news": "World news engine",
 }
 
 # Settings typed SecretStr on the pydantic model — coerce() must wrap the
@@ -376,6 +377,36 @@ FIELDS: tuple[Field, ...] = (
     Field("delta_india_base_url", "delta", "Delta India API base URL",
           "Production: https://api.india.delta.exchange — not api.delta.exchange (Global).",
           kind="str"),
+    # World news engine (Cursor PR #45, merged 31 Oct 2026): labels and pages only, never trades. Owner 31 Oct: "how to
+    # access this page" - its switches were only in code, so nothing could turn it on.
+    Field("news_engine_enabled", "news", "World news engine (master switch)",
+          "ON = the parts switched on below collect every 5 minutes. Labels and pages only: never opens or sizes a "
+          "trade.", kind="bool"),
+    Field("news_portal_widgets_enabled", "news", "Show World / Events / Calendar pages",
+          "Command > World, Events and Calendar read the news engine's tables.", kind="bool"),
+    Field("news_event_resolver_enabled", "news", "Build world events from headlines",
+          "Turns collected headlines and calendar prints into events (closed after 6 h to 7 days).", kind="bool"),
+    Field("news_collector_central_bank_rss_enabled", "news", "Central bank press (Fed, ECB)",
+          "Official RSS feeds. No key needed.", kind="bool"),
+    Field("news_collector_regional_rss_enabled", "news", "World headlines (BBC World)",
+          "RSS. No key needed.", kind="bool"),
+    Field("news_collector_polymarket_odds_enabled", "news", "Polymarket odds", "Public API. No key needed.",
+          kind="bool"),
+    Field("news_collector_kalshi_odds_enabled", "news", "Kalshi odds", "Public API. No key needed.", kind="bool"),
+    Field("news_collector_defillama_enabled", "news", "DeFi totals (DefiLlama)",
+          "Top 25 chains once an hour. No key needed.", kind="bool"),
+    Field("news_collector_cross_asset_prices_enabled", "news", "Cross-asset prices", "CoinGecko. No key needed.",
+          kind="bool"),
+    Field("news_collector_binance_liquidations_enabled", "news", "Binance liquidations",
+          "A 3-second sample of the public liquidation stream each run. No key needed.", kind="bool"),
+    Field("news_collector_gdelt_15m_enabled", "news", "GDELT 15-minute file",
+          "Records the latest GDELT export (articles are not parsed on the server yet).", kind="bool"),
+    Field("news_collector_economic_calendar_enabled", "news", "Economic calendar (FMP)",
+          "Needs the FMP API key on /keys.", kind="bool"),
+    Field("news_collector_us_treasury_fred_enabled", "news", "US Treasury data (FRED)",
+          "Needs the FRED API key on /keys.", kind="bool"),
+    Field("fmp_api_key", "keys", "Financial Modeling Prep API key", "For the economic calendar.", kind="secret"),
+    Field("fred_api_key", "keys", "FRED API key", "For US Treasury / fiscal data.", kind="secret"),
 )
 BY_KEY = {f.key: f for f in FIELDS}
 
@@ -475,6 +506,13 @@ MAIN_SECTIONS: dict[str, tuple[str, ...]] = {
                   "move_attribution_enabled", "groq_postmortem_enabled"),
 }
 ADVANCED = frozenset({
+    # world news engine (31 Oct 2026; collapsed so the page stays short)
+    "news_engine_enabled", "news_portal_widgets_enabled", "news_event_resolver_enabled",
+    "news_collector_central_bank_rss_enabled", "news_collector_regional_rss_enabled",
+    "news_collector_polymarket_odds_enabled", "news_collector_kalshi_odds_enabled",
+    "news_collector_defillama_enabled", "news_collector_cross_asset_prices_enabled",
+    "news_collector_binance_liquidations_enabled", "news_collector_gdelt_15m_enabled",
+    "news_collector_economic_calendar_enabled", "news_collector_us_treasury_fred_enabled",
     "delta_india_floor_frac", "delta_india_capital_base_inr", "delta_india_capital_since", "delta_india_rules_from_inr", "delta_india_kill_after_trades", "delta_india_withdraw_share", "delta_india_kill_rule_ack", "delta_india_base_url", "delta_only_mode", "delta_india_data_enabled", "delta_klines_seconds",
     "binance_only_mode", "binance_klines_enabled", "binance_klines_seconds", "binance_ws_enabled",
     "binance_oi_enabled", "coindcx_enabled", "coingecko_enabled", "twelvedata_enabled", "db_retention_days",

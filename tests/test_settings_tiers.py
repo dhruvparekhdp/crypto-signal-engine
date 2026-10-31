@@ -32,3 +32,11 @@ def test_describe_carries_tier_section_and_rank():
     assert rows["delta_india_kill_switch"]["tier"] == "main" and rows["delta_india_kill_switch"]["rank"] == 0
     assert rows["delta_india_base_url"]["tier"] == "advanced"
     assert rows["groq_api_key"]["tier"] == "key"
+
+
+def test_the_world_news_engine_can_be_switched_on_from_settings():
+    # owner 31 Oct 2026: "how to access this page" - the switches existed only in code; Advanced keeps the page short
+    for k in ("news_engine_enabled", "news_portal_widgets_enabled", "news_event_resolver_enabled",
+              "news_collector_central_bank_rss_enabled", "news_collector_regional_rss_enabled"):
+        assert k in BY_KEY and tier_of(k, BY_KEY[k].group) == "advanced"
+    assert tier_of("fmp_api_key", "keys") == "key" and BY_KEY["fmp_api_key"].kind == "secret"

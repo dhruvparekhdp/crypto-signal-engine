@@ -3713,7 +3713,10 @@ class AppRunner:
             legacy_active = [
                 ActiveEvent(r.id, r.title, r.category, r.level_current, r.happened_at, r.direction)
                 for r in rows if r.status == "active"]
-            if settings.news_engine_enabled:
+            if settings.news_engine_enabled and settings.news_engine_feeds_monitor:
+                # off by default (31 Oct 2026 review): these ids are news_events ids, not market_events ids, so the
+                # monitor's "update by id" could hit the wrong row, and every central-bank item is level 3+, which
+                # would run the monitor every 5 minutes and spend its 60-a-day cap
                 from analysis.news.queries import active_news_events
 
                 async with AsyncSessionFactory() as session:
