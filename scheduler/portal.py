@@ -220,3 +220,8 @@ def register(app: web.Application) -> None:
     from scheduler.news_portal_api import api_portal_news
 
     app.router.add_get("/api/portal/news", api_portal_news)
+    from scheduler.news_portal_api import api_portal_world
+    from scheduler.world_page import world_page
+
+    app.router.add_get("/api/portal/world", api_portal_world)
+    app.router.add_get("/world", world_page)

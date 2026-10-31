@@ -15,7 +15,7 @@
       { id: "outlook", label: "Price outlook", url: "/predict" },
       { id: "moves", label: "Market moves", url: "/moves" },
       { id: "chart", label: "Chart", url: "/chart" },
-      { id: "world", label: "World", native: true },
+      { id: "world", label: "World", url: "/world" },
       { id: "events", label: "Events", native: true },
       { id: "calendar", label: "Calendar", native: true }
     ] },
