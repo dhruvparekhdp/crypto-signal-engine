@@ -61,6 +61,13 @@ SOURCE_LABEL = {"central_bank_rss:fed": "Federal Reserve press", "central_bank_r
                 "regional_rss": "BBC World", "gdelt_15m:article": "GDELT"}
 
 
+import re as _re
+
+# prediction markets worth a line in the ticker (1 Nov 2026: the default feeds were sports parlays and 2028 nominations)
+MARKET_WORDS = _re.compile(r"\b(fed|fomc|rates?|recession|inflation|cpi|gdp|bitcoin|btc|ethereum|crypto|tariffs?|war|"
+                           r"ceasefire|shutdown|debt|treasury|oil|gold|china|taiwan|iran|ukraine|russia|sec|etf)\b", _re.I)
+
+
 def event_countries(countries_json: str, source_id: str) -> list[str]:
     """The event's countries; an official press item without one belongs to its bank's country."""
     try:
@@ -128,7 +135,8 @@ async def api_portal_world(request: web.Request) -> web.Response:
         px = (await session.scalars(select(NewsCrossAssetTick).where(NewsCrossAssetTick.captured_at == last_px))).all() \
             if last_px else []
     ticker = []
-    for o in sorted((o for o in odds if o.yes_prob is not None and 0 < o.yes_prob < 1), key=lambda o: -(o.volume_usd or 0))[:6]:
+    for o in sorted((o for o in odds if o.yes_prob is not None and 0.01 < o.yes_prob < 0.99 and MARKET_WORDS.search(o.title)),
+                    key=lambda o: -(o.volume_usd or 0))[:6]:
         ticker.append({"k": o.venue.upper(), "v": f"{o.title[:70]} {round(o.yes_prob * 100)}%"})
     if defi:
         ticker.append({"k": "DEFI TVL", "v": f"${defi / 1e9:,.1f}B (top 25 chains)"})

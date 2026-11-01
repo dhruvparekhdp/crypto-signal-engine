@@ -217,7 +217,7 @@ class PolymarketOddsCollector(NewsCollector):
 
     async def _fetch_markets(self) -> list:
         data = await fetch_json(
-            "https://gamma-api.polymarket.com/markets?limit=20&active=true",
+            "https://gamma-api.polymarket.com/markets?limit=50&active=true&closed=false&order=volume24hr&ascending=false",
             fixture="polymarket_markets.json",
         )
         return data if isinstance(data, list) else list(data.get("data") or [])
@@ -239,19 +239,13 @@ class PolymarketOddsCollector(NewsCollector):
         for m in await self._fetch_markets():
             q = m.get("question") or m.get("id") or "market"
             mid = str(m.get("id") or m.get("condition_id") or q)[:120]
-            prob = m.get("outcomePrices") or m.get("yes_prob")
-            yes_prob = None
-            if isinstance(prob, list) and prob:
-                try:
-                    yes_prob = float(prob[0])
-                except (TypeError, ValueError):
-                    yes_prob = None
             await insert_odds_snapshot(
                 session,
                 venue="polymarket",
                 market_id=mid,
                 title=q,
-                yes_prob=yes_prob,
+                yes_prob=polymarket_yes(m),
+                volume_usd=_num(m.get("volumeNum") or m.get("volume")),
                 payload=m,
                 captured_at=now,
             )
@@ -259,12 +253,41 @@ class PolymarketOddsCollector(NewsCollector):
         return n
 
 
+def _num(v) -> float | None:
+    try:
+        return float(v) if v not in (None, "") else None
+    except (TypeError, ValueError):
+        return None
+
+
+def polymarket_yes(m: dict) -> float | None:
+    """The 'yes' price. Polymarket sends outcomePrices as JSON text ('["0.62","0.38"]'), not a list (1 Nov 2026: every
+    probability was saved empty)."""
+    p = m.get("outcomePrices")
+    if isinstance(p, str):
+        try:
+            p = json.loads(p)
+        except ValueError:
+            p = None
+    return _num(p[0]) if isinstance(p, list) and p else _num(m.get("yes_prob"))
+
+
+def kalshi_yes(m: dict) -> float | None:
+    """Kalshi's 'yes' price: yes_ask_dollars / last_price_dollars (0-1) now, yes_ask in cents before. 0 = no quote."""
+    for k in ("last_price_dollars", "yes_ask_dollars"):
+        v = _num(m.get(k))
+        if v:
+            return v
+    v = _num(m.get("yes_ask"))
+    return v / 100.0 if v else None
+
+
 class KalshiOddsCollector(NewsCollector):
     collector_id = "kalshi_odds"
 
     async def _fetch_markets(self) -> list:
         data = await fetch_json(
-            "https://api.elections.kalshi.com/trade-api/v2/markets?limit=20",
+            "https://api.elections.kalshi.com/trade-api/v2/markets?limit=100&status=open&mve_filter=exclude",
             fixture="kalshi_markets.json",
         )
         return list((data.get("markets") or []) if isinstance(data, dict) else [])
@@ -286,18 +309,13 @@ class KalshiOddsCollector(NewsCollector):
         for m in await self._fetch_markets():
             title = m.get("title") or m.get("ticker", "")
             mid = str(m.get("ticker") or title)[:120]
-            yes_prob = None
-            if m.get("yes_ask") is not None:
-                try:
-                    yes_prob = float(m["yes_ask"]) / 100.0
-                except (TypeError, ValueError):
-                    yes_prob = None
             await insert_odds_snapshot(
                 session,
                 venue="kalshi",
                 market_id=mid,
                 title=title,
-                yes_prob=yes_prob,
+                yes_prob=kalshi_yes(m),
+                volume_usd=_num(m.get("volume_24h") or m.get("volume")),
                 payload=m,
                 captured_at=now,
             )

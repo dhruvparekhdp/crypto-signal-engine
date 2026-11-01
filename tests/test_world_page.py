@@ -68,3 +68,19 @@ def test_the_world_tab_opens_the_new_page():
     from pathlib import Path
     nav = (Path(__file__).resolve().parents[1] / "scheduler" / "portal" / "nav.js").read_text()
     assert '{ id: "world", label: "World", url: "/world" }' in nav
+
+
+def test_odds_prices_parse_from_the_live_formats():
+    # 1 Nov 2026: Polymarket sends outcomePrices as JSON text; Kalshi moved to *_dollars fields
+    from collectors.news.sources import kalshi_yes, polymarket_yes
+    assert polymarket_yes({"outcomePrices": '["0.62", "0.38"]'}) == 0.62
+    assert polymarket_yes({"outcomePrices": ["0.4", "0.6"]}) == 0.4
+    assert kalshi_yes({"yes_ask_dollars": "0.0000", "last_price_dollars": "0.3100"}) == 0.31
+    assert kalshi_yes({"yes_ask": 45}) == 0.45 and kalshi_yes({"yes_ask_dollars": "0.0000"}) is None
+
+
+def test_only_market_moving_questions_reach_the_ticker():
+    from scheduler.news_portal_api import MARKET_WORDS
+    assert MARKET_WORDS.search("Fed cut in December?") and MARKET_WORDS.search("US recession in 2027?")
+    assert not MARKET_WORDS.search("Will Gina Raimondo win the 2028 Democratic presidential nomination?")
+    assert not MARKET_WORDS.search("yes Over 0.5 goals scored,yes Real Madrid")
