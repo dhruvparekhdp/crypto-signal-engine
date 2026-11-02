@@ -103,24 +103,43 @@
       .then(function () { s.at = Date.now(); s.inflight = null; s.subs.slice().forEach(function (fn) { fn(key); }); });
     return s.inflight;
   };
+  Store._pollTick = function (key) {
+    if (document.hidden) return;
+    Store.fetch(key);
+  };
+  Store._startTimer = function (s) {
+    if (!s.every || s.timer) return;
+    s.timer = setInterval(function () { Store._pollTick(s.key); }, s.every);
+  };
+  Store._stopTimer = function (s) {
+    if (s.timer) { clearInterval(s.timer); s.timer = null; }
+  };
   Store.use = function (key, fn) {
     var s = Store.src[key]; if (!s) throw new Error("unknown store key " + key);
     s.subs.push(fn);
     if (s.subs.length === 1) {
       if (!s.at || (s.every && Date.now() - s.at > s.every)) Store.fetch(key); else setTimeout(function () { fn(key); }, 0);
-      if (s.every) s.timer = setInterval(function () { if (!document.hidden) Store.fetch(key); }, s.every);
+      if (s.every && !document.hidden) Store._startTimer(s);
     } else if (s.at) setTimeout(function () { fn(key); }, 0);
     return function () {
       var i = s.subs.indexOf(fn); if (i >= 0) s.subs.splice(i, 1);
-      if (!s.subs.length && s.timer) { clearInterval(s.timer); s.timer = null; }
+      if (!s.subs.length) Store._stopTimer(s);
     };
   };
   document.addEventListener("visibilitychange", function () {
-    if (document.hidden) return;
-    Object.keys(Store.src).forEach(function (k) { var s = Store.src[k]; if (s.subs.length && s.every && Date.now() - s.at > s.every) Store.fetch(k); });
+    if (document.hidden) {
+      Object.keys(Store.src).forEach(function (k) { Store._stopTimer(Store.src[k]); });
+      return;
+    }
+    Object.keys(Store.src).forEach(function (k) {
+      var s = Store.src[k];
+      if (!s.subs.length || !s.every) return;
+      Store.fetch(k);
+      Store._startTimer(s);
+    });
   });
   // The shared endpoints. Hub modules may add their own with Store.def.
-  Store.def("coins", "/api/crypto/coins", 5000);
+  Store.def("coins", "/api/crypto/coins", 15000);
   Store.def("swing", "/api/swing", 30000);
   Store.def("signals", "/api/portal/signals?days=14&limit=40", 30000);
   Store.def("meta", "/api/portal/meta", 30000);
