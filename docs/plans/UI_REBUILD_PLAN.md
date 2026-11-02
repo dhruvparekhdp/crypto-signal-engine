@@ -250,6 +250,22 @@ Parallel tracks Cursor can run on separate branches while Phase 1–2 are in rev
 
 ---
 
+### 9.1 One-go mode (owner, 2 Nov 2026: "plan entire change in one go, instead of phases")
+
+Cursor builds everything in §3–§8 and every page in §5 in one continuous task on **one branch,
+`feat/ui-rebuild`**, in this order: foundation → UI kit → P1 pages → P2 pages → P3 pages → SSE stream, ⌘K,
+PWA. Rules for one-go mode:
+- **One commit per finished unit** (foundation, kit, then one commit per page), each with its own tests passing, so
+  Claude can review commit by commit and any page can be reverted alone.
+- Push after every commit; open **one draft PR** after the first commit and keep pushing to it. Mark it ready only
+  when everything is done.
+- The old portal and every old route stay untouched; the new app lives only under `/app/`. Cutover (§10) is a
+  separate, later PR after the owner has used `/app` for 3 days.
+- If a page needs an API change, it goes in the same commit as the page, with a Python test, and must not change
+  what the old pages receive.
+- At the end: a PR description with the page-by-page table (every number, its API field, old-page value at the
+  same moment), screenshots of every page at 390 px and 1440 px in look A, bundle sizes, Lighthouse scores.
+
 ## 10. Cutover
 
 - Both apps run side by side. A "Try the new app" link sits in the old header; the new app has "Back to old".
