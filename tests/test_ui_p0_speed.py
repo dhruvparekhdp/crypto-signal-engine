@@ -17,8 +17,15 @@ from storage.models import CryptoSignalLog, MoveAttribution
 
 
 class TestHistoryLimitDefault(unittest.TestCase):
-    def test_default_limit_is_two_hundred(self):
-        self.assertEqual(history_limit({}), 200)
+    def test_legacy_default_is_four_hundred(self):
+        from scheduler.signal_history_api import history_limit_for_request
+
+        self.assertEqual(history_limit_for_request({}), 400)
+
+    def test_paged_default_is_two_hundred(self):
+        from scheduler.signal_history_api import history_limit_for_request
+
+        self.assertEqual(history_limit_for_request({"cursor": ""}), 200)
 
     def test_legacy_high_limit_still_allowed(self):
         self.assertEqual(history_limit({"limit": "3000"}), 3000)
@@ -91,6 +98,39 @@ class TestMovesApiPayloadSize(AioHTTPTestCase):
         self.assertLess(len(body), 80_000, f"list payload {len(body)} bytes")
         data = json.loads(body)
         self.assertEqual(len(data["runs"]), 48)
+        self.assertNotIn("moves", data["runs"][0])
+        await engine.dispose()
+
+
+class TestMovesLatestInList(AioHTTPTestCase):
+    async def get_application(self):
+        from scheduler.health import make_app
+
+        return await make_app(MagicMock())
+
+    async def test_list_includes_latest_full_run(self):
+        engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+        async with engine.begin() as conn:
+            await conn.run_sync(Base.metadata.create_all)
+        Session = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+        async with Session() as session:
+            row = MoveAttribution(
+                window_hours=4,
+                moves=json.dumps([{"symbol": "btcusdt", "change_4h": 1.0}]),
+                signals=json.dumps([]),
+                result=json.dumps({"overall": "Newest run summary."}),
+                model="m",
+                latency_ms=1,
+                created_at=datetime.now(UTC).replace(tzinfo=None),
+            )
+            session.add(row)
+            await session.commit()
+
+        with patch("storage.database.AsyncSessionFactory", Session):
+            resp = await self.client.get("/api/moves?limit=24")
+            data = json.loads(await resp.text())
+        self.assertIn("latest", data)
+        self.assertIn("moves", data["latest"])
         self.assertNotIn("moves", data["runs"][0])
         await engine.dispose()
 

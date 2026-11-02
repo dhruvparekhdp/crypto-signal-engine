@@ -540,10 +540,10 @@ def _iso(dt):
 
 
 def _history_limit(query) -> int:
-    """Rows for /api/signals/history. Default 200; portal may still ask for limit=3000."""
-    from scheduler.signal_history_api import history_limit
+    """Rows for /api/signals/history. Default 400; paged (cursor) default 200."""
+    from scheduler.signal_history_api import history_limit_for_request
 
-    return history_limit(query, default=200)
+    return history_limit_for_request(query)
 
 
 def _signal_row(r) -> dict:
@@ -803,7 +803,7 @@ async def _api_signal_history(runner, request: web.Request) -> web.Response:
     Optional `cursor` (signal id) and `fields=` for paginated, slimmer payloads.
     """
     from scheduler.signal_history_api import (
-        history_limit,
+        history_limit_for_request,
         parse_cursor,
         project_signal_row,
         uses_paginated_envelope,
@@ -813,7 +813,7 @@ async def _api_signal_history(runner, request: web.Request) -> web.Response:
 
     days = max(1, min(365, int(request.query.get("days") or 7)))
     before = max(0, min(365, int(request.query.get("before") or 0)))
-    limit = history_limit(request.query, default=200)
+    limit = history_limit_for_request(request.query)
     cursor_id = parse_cursor(request.query)
     fields = request.query.get("fields")
     async with AsyncSessionFactory() as session:
@@ -1832,6 +1832,8 @@ async def _api_moves(runner, request: web.Request) -> web.Response:
         news_store_active=ctx["news_store_active"],
     )
     body["runs"] = [run_summary_row(r) for r in rows]
+    if rows:
+        body["latest"] = run_detail_row(rows[0])
     return web.Response(text=json.dumps(body), content_type="application/json")
 
 
@@ -7359,15 +7361,18 @@ async function loadDetail(id){
   currentRun=j.run;
   mergeShell(j);
 }
-function pick(i){ SEL=i; loadDetail(DATA.runs[i].id).then(()=>{ render(); window.scrollTo({top:0,behavior:'smooth'}); }).catch(()=>render()); }
+function pick(i){
+  SEL=i;
+  if(i===0&&DATA.latest){ currentRun=DATA.latest; render(); window.scrollTo({top:0,behavior:'smooth'}); return; }
+  loadDetail(DATA.runs[i].id).then(()=>{ render(); window.scrollTo({top:0,behavior:'smooth'}); }).catch(()=>render());
+}
 async function load(){
   const body=document.getElementById('main-body');
   try{
     const r=await withTimeout(fetch('/api/moves?limit=48'), LOAD_MS);
     if(!r.ok) throw new Error('server returned '+r.status);
     DATA=await r.json();
-    currentRun=null;
-    if(DATA.runs&&DATA.runs.length) await loadDetail(DATA.runs[SEL].id);
+    currentRun=DATA.latest||null;
   }catch(e){
     if(body) Panel.error(body,'market moves',e,load);
     document.getElementById('tick').textContent='failed to update';

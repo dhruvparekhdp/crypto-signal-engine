@@ -22,12 +22,18 @@ def project_signal_row(row_dict: dict, fields: str | None) -> dict:
     return {k: v for k, v in row_dict.items() if k in keep}
 
 
-def history_limit(query, *, default: int = 200) -> int:
+def history_limit(query, *, default: int = 400) -> int:
     try:
         n = int(query.get("limit") or default)
     except (TypeError, ValueError):
         n = default
     return max(1, min(3000, n))
+
+
+def history_limit_for_request(query) -> int:
+    """Legacy list calls default to 400 rows; cursor (paged) calls default to 200."""
+    default = 200 if uses_paginated_envelope(query) else 400
+    return history_limit(query, default=default)
 
 
 def parse_cursor(query) -> int | None:
