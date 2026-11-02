@@ -84,3 +84,21 @@ def test_only_market_moving_questions_reach_the_ticker():
     assert MARKET_WORDS.search("Fed cut in December?") and MARKET_WORDS.search("US recession in 2027?")
     assert not MARKET_WORDS.search("Will Gina Raimondo win the 2028 Democratic presidential nomination?")
     assert not MARKET_WORDS.search("yes Over 0.5 goals scored,yes Real Madrid")
+
+
+@pytest.mark.asyncio
+async def test_the_fmp_calendar_is_called_at_most_once_an_hour(monkeypatch):
+    # FMP free plan: 250 calls a day; the news cycle runs every 5 minutes
+    from collectors.news import sources
+    calls = []
+
+    async def rows(self):
+        calls.append(1)
+        return []
+
+    monkeypatch.setattr(sources.EconomicCalendarCollector, "_fetch_rows", rows)
+    monkeypatch.setattr(sources.EconomicCalendarCollector, "_last_call", 0.0)
+    c = sources.EconomicCalendarCollector()
+    await c.ingest(None)
+    await sources.EconomicCalendarCollector().ingest(None)       # a new instance next cycle: still throttled
+    assert len(calls) == 1

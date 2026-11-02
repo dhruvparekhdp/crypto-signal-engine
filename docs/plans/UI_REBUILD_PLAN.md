@@ -20,6 +20,13 @@ This file is the single source of truth for the rebuild. Each phase ends with a 
 7. Plain English in the UI (owner's rule): say what something means, not how it's built.
 8. Small PRs: one page or one shared piece per PR, under ~800 changed lines where possible.
 
+9. **Logic lives in the backend (owner, 2 Nov 2026: "core logic should be in backend, very less exposure at
+   frontend").** The Angular app only renders what the API returns: no R, P&L, sizing, rule, score or signal maths in
+   TypeScript. If a page needs a derived number, add it to the API response (with a Python test). The frontend never
+   holds keys, never calls third-party APIs directly, and ships no strategy code.
+10. **Look: A, Orbital glass** (owner, 2 Nov 2026: "i actually like orbit glass world globe"). The other looks stay as
+    optional themes behind the switch; A is the default everywhere.
+
 ---
 
 ## 1. Where we are (measured 31 Oct – 1 Nov 2026)
@@ -51,8 +58,16 @@ This file is the single source of truth for the rebuild. Each phase ends with a 
 - nginx: `Cache-Control: public, max-age=31536000, immutable` for `/portal/static/*?v=` and the future `/app/*.js|css`
   (file names carry a hash); `no-store` stays on `/api/*`.
 - HTTP keep-alive between nginx and aiohttp (`proxy_http_version 1.1; proxy_set_header Connection ""`).
-- **Owner decision:** put Cloudflare (free plan) in front with the domain (e.g. `engine.dhruvparekh.in`): HTTPS,
-  HTTP/2, edge near India. Requires DNS access by the owner. Optional later: move the EC2 to Mumbai (ap-south-1).
+- **Done 2 Nov 2026** (backup `~/backups/nginx_site_20261102_0735`): gzip for proxied JSON/CSS/JS, keep-alive to the
+  engine, a year's cache on versioned `/portal/static/*`. Measured: /api/moves 536 KB → 72 KB (3.2 s → 1.7 s),
+  signal history 530 KB → 68 KB (3.1 s → 1.8 s).
+- **HTTPS:** the owner's domain is on Netlify DNS. Owner adds an `A` record `engine` → the server's IP; Claude then
+  adds an nginx `server_name engine.dhruvparekh.in` block and a Let's Encrypt certificate (certbot, auto-renew),
+  HTTP → HTTPS redirect, HTTP/2. Check first that the server's IP is an Elastic IP (it must not change on reboot).
+- **Distance:** opening a connection from the owner's network to Sydney takes ~0.4 s (measured). Moving the
+  engine to Mumbai (ap-south-1) is the remaining big win; plan it as a separate, owner-approved migration.
+- **Exposure:** once on the domain, every page and `/api/*` requires sign-in (one owner login, session cookie,
+  rate-limited), except a health ping. Today reads are public on the bare IP.
 
 **0b. API payloads (Cursor):**
 - `/api/moves`: return only what the page renders; history list without full bodies (`?detail=<id>` for one).
@@ -109,8 +124,8 @@ repo/
 - Later (Phase 5): Server-Sent Events `/api/stream` for prices + live book changes, replacing the fast polls.
 
 ### 3.2 Auth
-- Read pages are public as today. Settings/Keys/admin actions use the existing session cookie; the app shows
-  "Sign in on Settings" when the API returns 401 (same text as now).
+- After the HTTPS move every route needs the owner's sign-in (session cookie, HttpOnly, Secure, SameSite=Strict).
+  The app shows a sign-in screen on 401. Settings/Keys keep their extra admin step. No tokens in localStorage.
 
 ---
 
@@ -295,8 +310,7 @@ service worker (app shell only, never cache /api), and the chosen concept view (
 
 ## 13. Decisions the owner still makes
 
-1. Look: A / B / C, or a new concept (Orbit cockpit, Time river, Holo deck), or a mix (e.g. Deck frame + Orbit as
-   the Live tile). The app ships with a switch either way.
-2. Cloudflare + domain for HTTPS and speed (needs the owner's DNS), and whether to move the server to Mumbai later.
+1. ~~Look~~ decided 2 Nov: **A, Orbital glass**.
+2. HTTPS on engine.dhruvparekh.in (owner adds the Netlify DNS record), and whether to move the server to Mumbai.
 3. Free API keys for FMP (calendar) and FRED (fiscal data), entered only on the Keys page.
 4. When the old portal is switched off (after Phase 4 acceptance).

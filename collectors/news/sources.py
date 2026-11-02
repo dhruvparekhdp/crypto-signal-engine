@@ -98,7 +98,16 @@ class EconomicCalendarCollector(NewsCollector):
         except Exception as e:
             return self._mark_error(str(e))
 
+    # FMP's free plan allows 250 calls a day; the news cycle runs every 5 minutes (288). Collectors are rebuilt each
+    # cycle, so the last call time lives on the class (2 Nov 2026).
+    EVERY_S = 3600
+    _last_call = 0.0
+
     async def ingest(self, session) -> int:
+        import time as _time
+        if _time.time() - EconomicCalendarCollector._last_call < self.EVERY_S:
+            return 0
+        EconomicCalendarCollector._last_call = _time.time()
         rows = await self._fetch_rows()
         n = 0
         for r in rows:
