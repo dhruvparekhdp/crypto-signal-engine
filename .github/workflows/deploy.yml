@@ -6,6 +6,29 @@ on:
   workflow_dispatch:
 
 jobs:
+  web:
+    name: Angular web (blocks deploy)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: '.nvmrc'
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - name: Install web deps
+        working-directory: web
+        run: npm ci
+      - name: Lint (smoke)
+        working-directory: web
+        run: npm run lint
+      - name: Unit tests
+        working-directory: web
+        run: npm run test:ci
+      - name: Production build
+        working-directory: web
+        run: npm run build:prod
+
   # Plan Q11 / Phase 1.1: a failing test blocks the deploy (an ImportError once crashed production).
   test:
     name: Test suite (blocks deploy)
@@ -37,7 +60,7 @@ jobs:
 
   deploy:
     name: Auto Deploy to AWS EC2
-    needs: test
+    needs: [web, test]
     runs-on: ubuntu-latest
     steps:
       - name: Checkout Code
