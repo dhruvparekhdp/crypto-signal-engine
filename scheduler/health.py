@@ -7970,6 +7970,8 @@ async def make_app(runner) -> web.Application:
     _register_portal(app)
     from scheduler.web_static import register_web_app
     register_web_app(app)
+    from scheduler.api_stream import register_api_stream
+    register_api_stream(app, runner)
     app.router.add_get("/api/tables", _bind(_api_tables))
     app.router.add_get("/health", _bind(_health))
     app.router.add_get("/api/status", _bind(_api_status))
