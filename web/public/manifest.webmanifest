@@ -1,0 +1,9 @@
+{
+  "name": "Signal engine",
+  "short_name": "Signals",
+  "start_url": "/app/command/overview",
+  "display": "standalone",
+  "background_color": "#04070d",
+  "theme_color": "#5ee0ff",
+  "icons": [{ "src": "favicon.ico", "sizes": "64x64", "type": "image/x-icon" }]
+}

@@ -1,4 +1,5 @@
 @import url('https://fonts.googleapis.com/css2?family=Chakra+Petch:wght@500;600&family=IBM+Plex+Sans:wght@400;500&family=JetBrains+Mono:wght@400;500&display=swap');
+@import 'app/shared/ui/tokens.scss';
 
 html,
 body {
@@ -7,36 +8,4 @@ body {
   background: var(--surface-0);
   color: var(--ink);
   font-family: var(--font-body);
-}
-
-html[data-look='a'] {
-  --surface-0: #04070d;
-  --surface-1: rgba(14, 24, 40, 0.42);
-  --ink: #e8f1ff;
-  --dim: #8ea3bf;
-  --accent-1: #5ee0ff;
-  --accent-2: #9d7bff;
-  --up: #45e3a3;
-  --down: #ff5d73;
-  --warn: #ffb547;
-  --edge: rgba(160, 210, 255, 0.16);
-  --glass: rgba(14, 24, 40, 0.42);
-  --font-display: 'Chakra Petch', ui-sans-serif, system-ui, sans-serif;
-  --font-body: 'IBM Plex Sans', ui-sans-serif, system-ui, sans-serif;
-  --font-data: 'JetBrains Mono', ui-monospace, Menlo, monospace;
-}
-
-html[data-look='b'] {
-  --accent-1: #ff8de0;
-  --accent-2: #7cf3ff;
-  --glass: rgba(30, 12, 40, 0.4);
-  --edge: rgba(255, 170, 240, 0.18);
-}
-
-html[data-look='c'] {
-  --surface-0: #030807;
-  --accent-1: #c8ff6a;
-  --accent-2: #4dd8c8;
-  --glass: rgba(10, 22, 20, 0.55);
-  --edge: rgba(200, 255, 140, 0.16);
 }
