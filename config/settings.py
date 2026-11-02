@@ -202,9 +202,10 @@ class Settings(BaseSettings):
     # review"): up to swing_max_per_coin swing trades per coin, all the same direction, each from a different strategy
     # (live_sim, max 4 open: avg R 0.28 -> 0.37 / 0.34 at Rs10k and 0.29 -> 0.34 / 0.39 at Rs800 in 2021-24 / 2025-26,
     # deepest drop 40 -> 31% / 34 -> 29%). Paper and live. After swing_multi_per_coin_until (UTC) it is 1 per coin
-    # again by itself; trades already open keep running. Owner moved the review to 2 Nov (17:30 IST) on 31 Oct.
+    # again by itself; trades already open keep running. Review moved to 2 Nov (owner, 31 Oct), then extended one
+    # week to 9 Nov 17:30 IST (owner, 2 Nov: "extend for 1 week more").
     swing_max_per_coin: int = 3
-    swing_multi_per_coin_until: str = "2026-11-02T12:00:00"
+    swing_multi_per_coin_until: str = "2026-11-09T12:00:00"
     swing_risk_pct: float = 0.03
     # Backtest (scripts/portfolio_wallet, fixed vs adaptive): cutting risk in drawdowns barely reduced the
     # worst drawdown but halved the profit, so fixed risk is the default.
