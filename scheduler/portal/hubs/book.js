@@ -556,6 +556,207 @@
   });
   UI.view("book/simulator", [["sim-live"]]);
 
+  // ------------------------------------------------------------- intraday simulator (was /classic#simulator)
+  // Replays the old 5-minute intraday detectors through a compounding "challenge" wallet. The runner, the cycles and
+  // the ledger are server-side (/api/simulator/*); what the settings mean comes from /api/simulator/preview, so the
+  // page only renders and sends the form. Distinct from Simulator above, which replays the live swing book.
+  var ISIM = { cfg: null, preview: null, timer: null, seq: 0 };
+  var ISIM_FIELDS = ["strategy", "years", "tp_r", "sl_r", "trail_sl", "anti_flip", "stagnation", "cycle_start", "cycle_target",
+    "cycle_margin_pct", "cycle_leverage", "stepped_mode", "step_market_hours", "ai_provider"];
+  function usd(x, signed) { return !U.num(x) ? "—" : (x < 0 ? "−" : signed ? "+" : "") + "$" + Math.abs(x).toFixed(2); }
+  function isimBody() { var b = {}; ISIM_FIELDS.forEach(function (k) { b[k] = ISIM.cfg[k]; }); b.max_ai_reviews = 150; b.step_seconds = 0; return b; }
+  function isimQuery() { return ISIM_FIELDS.map(function (k) { return k + "=" + encodeURIComponent(ISIM.cfg[k]); }).join("&"); }
+  function isimPreview(ctx) {
+    var seq = ++ISIM.seq;
+    UI.Net.get("/api/simulator/preview?" + isimQuery()).then(function (p) { if (seq === ISIM.seq) { ISIM.preview = p; ctx.render(); } }).catch(function () { /* the form still works */ });
+  }
+  function isimSave() {
+    clearTimeout(ISIM.timer);
+    ISIM.timer = setTimeout(function () { UI.Net.post("/api/simulator/config", isimBody()).catch(function () { /* saved next change */ }); }, 400);
+  }
+
+  UI.widget("isim-run", {
+    title: "INTRADAY SIMULATOR · OLD 5-MINUTE DETECTORS", uses: ["isim"],
+    on: {
+      start: function (el, ev, t) {
+        if (!ISIM.cfg) return;
+        t.disabled = true; t.textContent = "Starting…";
+        UI.Net.post("/api/simulator/start", isimBody()).then(function () { UI.Store.fetch("isim"); })
+          .catch(function (err) { window.alert("Could not start: " + err.message); }).then(function () { t.disabled = false; });
+      },
+      stop: function (el, ev, t) {
+        t.disabled = true;
+        UI.Net.post("/api/simulator/pause", {}).then(function () { UI.Store.fetch("isim"); })
+          .catch(function (err) { window.alert("Could not stop: " + err.message); t.disabled = false; });
+      }
+    },
+    render: function (el, D, ctx) {
+      var d = D.isim; if (!d) { el.innerHTML = C.state(D, "isim"); return; }
+      var run = !!d.is_running, pct = Math.max(0, Math.min(100, d.progress_pct || 0));
+      ctx.right(run ? "running" + (d.current_symbol ? " · " + d.current_symbol : "") : pct >= 100 ? "finished" : "idle");
+      el.innerHTML = '<p class="small dim">Replays the old intraday detectors on past data through a small compounding wallet. Paper only, nothing is sent to an exchange. Settings are below.</p>' +
+        '<div class="toolbar">' + (run ? '<button class="mini" data-act="stop">Stop</button>' : '<button class="mini" data-act="start"' + (ISIM.cfg ? "" : " disabled") + ">Run simulator</button>") +
+        '<span class="mono small">' + e(d.current_market_time ? "market clock " + d.current_market_time + (d.total_steps ? " · step " + (d.current_step || 1) + " of " + d.total_steps : "") : "ready") + "</span></div>" +
+        '<div class="mono tiny dim">PROGRESS ' + pct.toFixed(1) + "%</div>" + '<div class="meter"><i style="width:' + pct + '%"></i></div>' +
+        C.tiles([
+          ["STATUS", run ? "Running" : pct >= 100 ? "Finished" : "Idle", d.current_symbol || ""],
+          ["TICKS REPLAYED", (d.ticks_processed || 0).toLocaleString(), "price steps"],
+          ["TRADES", (d.trades_simulated || 0).toLocaleString(), (d.won_count || 0) + " won · " + (d.stopped_count || 0) + " lost · " + (d.partial_count || 0) + " partial"],
+          ["WIN RATE", (d.win_rate_pct || 0).toFixed(1) + "%", "profit factor " + (d.profit_factor || 1).toFixed(2)],
+          ["AI REVIEWS", (d.hf_calls_succeeded || 0) + " / " + (d.hf_calls_dispatched || 0), "answered / asked"],
+          ["RUN TIME", U.hours((d.elapsed_seconds || 0) / 3600), d.step_seconds_elapsed ? "last step " + d.step_seconds_elapsed + "s" : ""]]);
+    }
+  });
+
+  UI.widget("isim-settings", {
+    title: "SETTINGS",
+    mount: function (el, ctx) {
+      el.innerHTML = '<div class="toolbar" data-slot="form" style="flex-wrap:wrap">' + C.loading() + '</div><div data-slot="preview"></div>';
+      if (ISIM.cfg) { ctx.render(); isimPreview(ctx); return; }
+      UI.Net.get("/api/simulator/config").then(function (c) {
+        ISIM.cfg = {}; ISIM_FIELDS.forEach(function (k) { ISIM.cfg[k] = c[k]; });
+        ctx.render(); isimPreview(ctx);
+      }).catch(function (err) { el.querySelector('[data-slot="form"]').innerHTML = C.empty("Could not load the saved settings: " + err.message); });
+    },
+    on: {
+      f: function (el, ev, t, ctx) {
+        ISIM.cfg[t.dataset.k] = t.type === "checkbox" ? t.checked : t.value;
+        isimSave(); isimPreview(ctx);
+      }
+    },
+    render: function (el, D, ctx) {
+      var c = ISIM.cfg, p = ISIM.preview; if (!c) return;
+      var form = el.querySelector('[data-slot="form"]');
+      if (!form.dataset.built && p) {           // build once: re-rendering would steal focus from a field being typed in
+        form.dataset.built = "1";
+        var o = p.options;
+        function sel(k, label, opts) { return '<label class="fld"><span>' + e(label) + '</span><select data-act="f" data-k="' + k + '">' + opts.map(function (x) { return '<option value="' + e(x.value) + '"' + (String(x.value) === String(c[k]) ? " selected" : "") + ">" + e(x.label) + "</option>"; }).join("") + "</select></label>"; }
+        function num(k, label, attrs) { return '<label class="fld"><span>' + e(label) + '</span><input type="number" data-act="f" data-k="' + k + '" value="' + e(c[k]) + '" ' + attrs + ' style="width:96px"></label>'; }
+        function box(k, label) { return '<label class="fld"><span>' + e(label) + '</span><input type="checkbox" data-act="f" data-k="' + k + '"' + (c[k] ? " checked" : "") + ' style="min-height:24px;width:24px"></label>'; }
+        form.innerHTML = sel("strategy", "Strategy", o.strategies) + sel("years", "Period", o.periods) + sel("ai_provider", "AI reviews", o.ai_providers) +
+          num("tp_r", "Target (R)", 'step="0.1" min="0.1"') + num("sl_r", "Stop (R)", 'step="0.1" min="0.1"') + box("trail_sl", "Trailing stop") +
+          num("anti_flip", "No flip for (min)", 'step="5" min="0"') + num("stagnation", "Close if flat for (min)", 'step="5" min="0"') +
+          num("cycle_start", "Wallet start ($)", 'step="1" min="1"') + num("cycle_target", "Wallet target ($)", 'step="1" min="1"') +
+          num("cycle_margin_pct", "Margin a trade (%)", 'step="1" min="1" max="100"') + num("cycle_leverage", "Leverage (x)", 'step="1" min="1" max="125"') +
+          box("stepped_mode", "Step through time") + num("step_market_hours", "Hours a step", 'step="0.5" min="0.1" max="24"');
+      }
+      if (!p) return;
+      var tr = p.trade, run = p.run;
+      el.querySelector('[data-slot="preview"]').innerHTML = C.tiles([
+          ["RUN SIZE", run.steps.toLocaleString() + " steps", run.market_hours.toLocaleString() + " market hours"],
+          ["ONE TRADE", usd(tr.margin_usdt) + " margin", usd(tr.position_usdt) + " position at " + p.cycle.leverage + "x"],
+          ["AT THE TARGET", "+" + tr.target_roe_pct + "% · " + usd(tr.target_cash_usdt, true), "needs a +" + tr.target_price_pct + "% move", "up"],
+          ["AT THE STOP", "−" + tr.stop_roe_pct + "% · " + usd(-tr.stop_cash_usdt), "a −" + tr.stop_price_pct + "% move", "dn"],
+          ["REWARD : RISK", tr.reward_risk + " : 1", "gain for each $1 risked"],
+          ["WALLET RULE", usd(p.cycle.start_usdt) + " → " + usd(p.cycle.target_usdt), p.cycle.rule]]) +
+        '<p class="mono tiny dim">' + e(p.note) + " Settings save as you change them.</p>";
+    }
+  });
+
+  UI.widget("isim-cycles", {
+    title: "COMPOUNDING CYCLES", uses: ["isim"],
+    mount: function (el, ctx) {
+      ctx.s.f = "ALL"; ctx.s.id = null; ctx.s.page = 1;
+      el.innerHTML = '<div data-slot="sum"></div><div class="toolbar" data-slot="tb"></div><div data-slot="card"></div><div data-slot="ledger"></div>';
+      ctx.s.load = function () {
+        var box = el.querySelector('[data-slot="ledger"]'), id = ctx.s.id, page = ctx.s.page;
+        if (!id) { box.innerHTML = ""; return; }
+        box.innerHTML = C.loading();
+        UI.Net.get("/api/simulator/cycle-ledger?cycle_id=" + encodeURIComponent(id) + "&page=" + page + "&limit=15").then(function (d) {
+          if (ctx.s.id !== id || ctx.s.page !== page) return;
+          var tx = d.transactions || [];
+          box.innerHTML = '<h3 class="h3">Ledger · ' + (d.total_transactions || tx.length) + " trades</h3>" + C.table([
+            { label: "#", w: "44px", cell: function (x) { return '<span class="dim">' + e(x.tx_id) + "</span>"; } },
+            { label: "TIME", w: "140px", cell: function (x) { return '<span class="dim">' + e(x.timestamp || "") + "</span>"; } },
+            { label: "COIN", w: "90px", cell: function (x) { return "<b>" + e(x.symbol || "") + "</b>"; } },
+            { label: "SIDE", w: "70px", cell: function (x) { return C.side(x.direction); } },
+            { label: "ENTRY → EXIT", w: "minmax(0,1.2fr)", cell: function (x) { return e(U.px(x.entry_price) + " → " + U.px(x.exit_price)); } },
+            { label: "EXIT", w: "minmax(0,1fr)", cell: function (x) { return '<span class="dim">' + e(x.exit_reason || "") + "</span>"; } },
+            { label: "MARGIN", w: "80px", cell: function (x) { return e(usd(x.margin_usdt)) + ' <span class="dim tiny">' + e(x.leverage) + "x</span>"; } },
+            { label: "FEE", w: "70px", cell: function (x) { return e(usd(x.fee_usdt)); } },
+            { label: "NET", w: "80px", cell: function (x) { return C.signed(x.net_pnl_usdt, function (y) { return usd(y, true); }); } },
+            { label: "ON MARGIN", w: "90px", cell: function (x) { return C.signed(x.pnl_pct_on_margin); } },
+            { label: "WALLET", w: "80px", cell: function (x) { return e(usd(x.balance_after)); } }
+          ], tx, { minWidth: 1000, empty: "No trades in this cycle." }) +
+          ((d.total_pages || 1) > 1 ? '<div class="toolbar"><button class="mini" data-act="pg" data-d="-1"' + (page > 1 ? "" : " disabled") + '>‹ Prev</button><span class="mono small">Page ' + page + " of " + d.total_pages +
+            '</span><button class="mini" data-act="pg" data-d="1"' + (page < d.total_pages ? "" : " disabled") + ">Next ›</button></div>" : "");
+        }).catch(function (err) { box.innerHTML = C.empty("Could not load the ledger: " + err.message); });
+      };
+    },
+    on: {
+      f: function (el, ev, t, ctx) { ctx.s.f = t.dataset.v; ctx.s.id = null; ctx.render(); },
+      pick: function (el, ev, t, ctx) { ctx.s.id = t.value; ctx.s.page = 1; ctx.render(); ctx.s.load(); },
+      pg: function (el, ev, t, ctx) { ctx.s.page += +t.dataset.d; ctx.s.load(); }
+    },
+    render: function (el, D, ctx) {
+      var cc = D.isim && D.isim.cycle_challenge;
+      if (!D.isim) { el.querySelector('[data-slot="sum"]').innerHTML = C.state(D, "isim"); return; }
+      if (!cc || cc.total_cycles == null) { el.querySelector('[data-slot="sum"]').innerHTML = C.empty("No cycles yet: run the simulator."); return; }
+      var tgt = cc.target_capital != null ? cc.target_capital : 100;
+      el.querySelector('[data-slot="sum"]').innerHTML = C.tiles([
+        ["CYCLES", cc.total_cycles, "finished or running"], ["TARGET HIT", cc.targets_hit, "reached " + usd(tgt), "up"], ["BUSTED", cc.busted, "wallet ran out", "dn"],
+        ["CYCLE WIN RATE", (cc.cycle_win_rate_pct || 0).toFixed(1) + "%", ""], ["NET, ALL CYCLES", usd(cc.total_net_profit_usdt, true), "", cc.total_net_profit_usdt >= 0 ? "up" : "dn"],
+        ["TRADES A CYCLE", (cc.avg_trades_per_cycle || 0).toFixed(1), "on average"]]);
+      var all = cc.cycles || [], list = ctx.s.f === "ALL" ? all : all.filter(function (c) { return c.status === ctx.s.f; });
+      if (list.length && !list.some(function (c) { return String(c.cycle_id) === String(ctx.s.id); })) { ctx.s.id = String(list[list.length - 1].cycle_id); ctx.s.page = 1; setTimeout(ctx.s.load, 0); }
+      var key = [ctx.s.f, ctx.s.id, all.length, cc.targets_hit, cc.busted].join("|");
+      if (key === ctx.s.key) return;              // the status polls every few seconds: keep an open picker open
+      ctx.s.key = key;
+      var chips = [["ALL", "All " + all.length], ["TARGET_REACHED", "Target hit " + (cc.targets_hit || 0)], ["BUSTED", "Busted " + (cc.busted || 0)]];
+      el.querySelector('[data-slot="tb"]').innerHTML = '<span class="chipset">' + chips.map(function (x) { return '<button class="chipbtn' + (ctx.s.f === x[0] ? " on" : "") + '" data-act="f" data-v="' + x[0] + '">' + e(x[1]) + "</button>"; }).join("") + "</span>" +
+        (list.length ? C.select("pick", "Cycle", list.slice().reverse().map(function (c) {
+          return [String(c.cycle_id), "#" + c.cycle_id + " · " + (c.status === "TARGET_REACHED" ? "target hit" : c.status === "BUSTED" ? "busted" : "running") + " · " + usd(c.net_profit_usdt, true) + " · " + (c.total_trades || c.transaction_count || 0) + " trades"];
+        }), ctx.s.id) : "");
+      var c = all.filter(function (x) { return String(x.cycle_id) === String(ctx.s.id); })[0];
+      el.querySelector('[data-slot="card"]').innerHTML = !c ? C.empty("No cycles match.") :
+        '<p class="mono small">Cycle #' + e(c.cycle_id) + " · " + e(c.start_time || "") + " → " + e(c.end_time || "still running") + (c.duration_str ? " (" + e(c.duration_str) + ")" : "") + "</p>" + C.tiles([
+          ["START", usd(c.starting_balance)], ["END", usd(c.ending_balance), "", c.ending_balance >= c.starting_balance ? "up" : "dn"], ["PEAK", usd(c.peak_balance)],
+          ["DEEPEST DROP", (c.max_drawdown_pct || 0) + "%", "", "dn"], ["WIN RATE", (c.win_rate_pct || 0) + "%", (c.wins || 0) + " won · " + (c.losses || 0) + " lost"], ["FEES", usd(c.total_fees_usdt || 0)]]);
+    }
+  });
+
+  UI.widget("isim-trades", {
+    title: "TRADE STREAM · NEWEST FIRST", uses: ["isim"],
+    render: function (el, D, ctx) {
+      var d = D.isim; if (!d) { el.innerHTML = C.state(D, "isim"); return; }
+      var tr = d.recent_trades || [], last = tr[tr.length - 1], key = tr.length + "|" + (last ? last.entry_time + last.exit_time : "");
+      if (key === ctx.s.key) return;              // keep an opened "read" open between polls
+      ctx.s.key = key;
+      ctx.right(tr.length ? tr.length + " trades" : "");
+      el.innerHTML = C.table([
+        { label: "COIN", w: "90px", cell: function (t) { return "<b>" + e(t.symbol) + "</b>"; } },
+        { label: "SIDE", w: "70px", cell: function (t) { return C.side(t.direction); } },
+        { label: "OPENED → CLOSED", w: "minmax(0,1.4fr)", cell: function (t) { return '<span class="dim">' + e(t.entry_time) + " → " + e(t.exit_time || "running") + "</span>"; } },
+        { label: "RESULT", w: "130px", cell: function (t) { return C.signed(t.pnl_pct) + ' <span class="dim tiny">' + e((t.pnl_r >= 0 ? "+" : "") + t.pnl_r + "R") + "</span>"; } },
+        { label: "PEAK", w: "80px", cell: function (t) { return '<span class="up">+' + e(t.peak_gain_pct) + "%</span>"; } },
+        { label: "OF TARGET", w: "80px", cell: function (t) { return e(t.target_pct_reached + "%"); } },
+        { label: "EXIT", w: "minmax(0,1fr)", cell: function (t) { return '<span class="dim">' + e(t.exit_reason || "") + "</span>" + (t.source_model ? ' <span class="dim tiny">' + e(t.source_model) + "</span>" : ""); } },
+        { label: "AI READ", w: "minmax(0,1.6fr)", cell: function (t) {
+          return t.why_it_worked || t.thinking_trace ? '<details><summary class="small">read</summary><p class="small"><b class="up">Worked:</b> ' + e(t.why_it_worked || "—") +
+            '</p><p class="small"><b class="dn">Failed:</b> ' + e(t.why_it_failed || "—") + "</p>" + (t.thinking_trace ? C.pre(t.thinking_trace) : "") + "</details>" : '<span class="dim">—</span>';
+        } }
+      ], tr.slice().reverse(), { minWidth: 1000, limit: 200, empty: "No trades yet: run the simulator." });
+    }
+  });
+
+  UI.widget("isim-ai", {
+    title: "AI CALLS DURING THE RUN", uses: ["isim_ai"],
+    render: function (el, D, ctx) {
+      var ev = D.isim_ai; if (!Array.isArray(ev)) { el.innerHTML = C.state(D, "isim_ai"); return; }
+      ctx.right(ev.length + " logged");
+      el.innerHTML = C.table([
+        { label: "TIME", w: "80px", cell: function (x) { return '<span class="dim">' + e(x.timestamp ? x.timestamp.slice(11, 19) : "") + "</span>"; } },
+        { label: "PROVIDER", w: "minmax(0,1fr)", cell: function (x) { return "<b>" + e((x.provider || "AI").toUpperCase()) + '</b> <span class="dim tiny">' + e(x.model || "") + "</span>"; } },
+        { label: "CALL", w: "100px", cell: function (x) { return e(x.call_type || ""); } },
+        { label: "COIN", w: "110px", cell: function (x) { return e(x.symbol || "") + " " + (x.direction ? C.side(x.direction) : ""); } },
+        { label: "TOOK", w: "80px", cell: function (x) { return e((x.latency_ms || 0) + " ms"); } },
+        { label: "STATUS", w: "90px", cell: function (x) { return C.tag(x.status || "OK", x.status === "SUCCESS" ? "" : "neutral"); } },
+        { label: "SUMMARY", w: "minmax(0,2fr)", cell: function (x) { return '<span class="small">' + e(x.summary || "") + "</span>"; } }
+      ], ev.slice(-30).reverse(), { minWidth: 900, empty: "No AI calls logged (AI reviews are off unless chosen in Settings)." });
+    }
+  });
+  UI.view("book/intraday-sim", [["isim-run"], ["isim-settings"], ["isim-cycles"], [{ w: "isim-trades", size: "grow" }], ["isim-ai"]]);
+
   // ------------------------------------------------------------- live, real money (owner, 18 Oct 2026)
   // paise, like the Delta app: a ₹500 wallet rounded to ₹500 hid the ₹0.21 that was really gone (19 Oct 2026)
   function rs(x, signed) {

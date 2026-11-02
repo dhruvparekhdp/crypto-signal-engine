@@ -175,6 +175,7 @@ Priority: **P1** = rebuild first (used daily), P2 = next, P3 = rarely used (keep
 | Paper | /app/book/paper | /api/paper, /api/candidates, /api/bracket, /api/vol | P2 | candidate books (swing_2h, impulse) |
 | Guard | /app/book/guard | /api/parity, status | P2 | |
 | Simulator | /app/book/simulator | /api/sim/live-book | P2 | form + results chart |
+| Intraday sim (old) | /app/book/intraday-sim | /api/simulator/* + /api/simulator/preview (form choices and maths) | P3 | native in the old portal since 2 Nov; Start/Pause have no login today |
 | Journal | /app/book/journal | journal API | P3 | |
 | Strategies | /app/evidence/strategies | /api/research, registry | P2 | |
 | Accuracy | /app/evidence/accuracy | /api/signals/accuracy | P3 | |
@@ -182,7 +183,7 @@ Priority: **P1** = rebuild first (used daily), P2 = next, P3 = rarely used (keep
 | Research | /app/evidence/research | /api/research | P3 | |
 | News study | /app/evidence/news-study | news study API | P3 | |
 | Audit | /app/evidence/audit | /audit data | P3 | |
-| Mirror | /app/evidence/mirror | classic mirror data | P3 | |
+| Mirror | /app/evidence/mirror | /api/crypto/signals?mirror=1 (summary, summary.by_symbol, target_move_pct, stop_risk_pct) | P3 | native in the old portal since 2 Nov: port `evidence.js` mirror widgets |
 | Pipeline | /app/evidence/pipeline | pipeline data | P3 | |
 | v2 shadow | /app/evidence/v2 | /api/v2/shadow | P3 | |
 | Go-live | /app/system/golive | /api/golive | P2 | |

@@ -1,5 +1,5 @@
 /* Portal chrome for the server-rendered tool pages (/predict, /moves, /chart, /audit, /settings,
-   /keys, /journal, /v2, /pipeline, /api-docs, /classic#mirror|#simulator).
+   /keys, /journal, /v2, /pipeline, /api-docs). Every /classic#tab now has a native page, so /classic only forwards.
    Draws the same header as the portal from nav.js, so every page has the full navigation and none
    is a dead end with one "← back" link. Also forwards retired addresses to their new home.
    Spec: docs/PORTAL_REVAMP.md §3. */

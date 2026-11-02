@@ -206,6 +206,12 @@ async def api_meta(request: web.Request) -> web.Response:
     })
 
 
+async def api_sim_preview(request: web.Request) -> web.Response:
+    """What the intraday simulator's settings mean (run size, one trade's money) and the form's choices."""
+    from scheduler.sim_preview import preview
+    return _json(preview(dict(request.query)))
+
+
 def register(app: web.Application) -> None:
     app.router.add_get("/", root_redirect)
     for hub in HUBS:
@@ -217,6 +223,7 @@ def register(app: web.Application) -> None:
     app.router.add_get("/api/portal/candles", api_candles)
     app.router.add_get("/api/portal/signals", api_signals)
     app.router.add_get("/api/portal/meta", api_meta)
+    app.router.add_get("/api/simulator/preview", api_sim_preview)
     from scheduler.news_portal_api import api_portal_news
 
     app.router.add_get("/api/portal/news", api_portal_news)

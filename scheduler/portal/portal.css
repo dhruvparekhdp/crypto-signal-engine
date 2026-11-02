@@ -282,7 +282,7 @@ main section{display:flex;flex-direction:column;gap:24px}
 .fld select,.fld input{min-height:40px;background:var(--bg);color:var(--ink);border:2px solid var(--line);font:13px var(--mono);padding:0 10px;border-radius:0}
 .fld select:focus,.fld input:focus{outline:2px solid var(--acc);outline-offset:1px}
 .sr{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0)}
-.chipset{display:flex;gap:6px}
+.chipset{display:flex;flex-wrap:wrap;gap:6px;min-width:0}
 .chipbtn,.mini{min-height:40px;padding:0 14px;border:2px solid var(--line);background:var(--bg);color:var(--ink);font:700 12px var(--mono);cursor:pointer;
   text-transform:uppercase;letter-spacing:.04em}
 .chipbtn.on,.mini:hover{background:var(--acc);color:var(--on-acc);border-color:var(--acc)}
@@ -341,3 +341,9 @@ main section{display:flex;flex-direction:column;gap:24px}
 .lock-badge.dim{color:var(--dim)}
 .modetabs{margin-right:8px}
 .modetabs .chipbtn.on{background:var(--acc);color:var(--bg)}
+
+/* Long option text (e.g. AI provider names) must not push a field past a phone's width. */
+.fld{max-width:100%;min-width:0}
+.fld select,.fld input{max-width:100%}
+.mirror-ai{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:10px}
+.mirror-card .pos-top{flex-wrap:wrap;gap:6px}

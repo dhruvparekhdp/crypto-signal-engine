@@ -143,7 +143,7 @@
     title: "DEEP TOOLS",
     render: function (el) {
       el.innerHTML = C.links([
-        ["/audit", "Audit", "every signal, its gates and its outcome"], ["/classic#mirror", "Mirror", "mirror review and live trade check"],
+        ["/audit", "Audit", "every signal, its gates and its outcome"], ["/evidence/mirror", "Mirror", "mirror review and live trade check"],
         ["/pipeline", "Pipeline", "multi-year backtest monitor"], ["/v2", "v2 shadow", "next strategy set, shadow only"], ["/chart", "Chart", "candles with signal overlays"]
       ]);
     }
@@ -163,4 +163,94 @@
     }
   });
   UI.view("evidence/news-study", [["news-study"]]);
+
+  // ------------------------------------------------------------- mirror (was /classic#mirror)
+  // Every intraday signal is logged with its mirror (same setup, opposite side) as a control. This page shows how
+  // the mirrors of the last 48 h did. Every number comes from /api/crypto/signals?mirror=1 (scorecard, trade check,
+  // distances, AI read); the page only filters and renders.
+  var MIRROR_STATUS = [["ALL", "All"], ["WORKED", "Worked (full + partial)"], ["won", "Full target"], ["partial", "Partial"], ["running", "Running"], ["stopped", "Stopped"]];
+  function mirrorCount(sum, k) {
+    if (!sum) return 0;
+    return { ALL: sum.total_tested, WORKED: sum.worked_count, won: sum.full_win_count, partial: sum.partial_win_count,
+      running: sum.running_count, stopped: sum.stopped_count }[k] || 0;
+  }
+  function mirrorBadge(s) {
+    var tc = s.trade_check || {}, st = tc.status || s.outcome || "pending";
+    if (st === "won") return ["FULL TARGET " + U.pct(tc.target_dist_pct || s.target_move_pct), ""];
+    if (st === "partial") return ["PARTIAL · " + Math.round(tc.target_pct_reached || 0) + "% OF TARGET", "neutral"];
+    if (st === "running") return ["RUNNING " + U.pct(tc.current_pnl_pct), "neutral"];
+    if (st === "stopped" || st === "lost") return ["STOPPED −" + Number(tc.risk_dist_pct || s.stop_risk_pct || 0).toFixed(2) + "%", "skip"];
+    return [String(st).toUpperCase(), "neutral"];
+  }
+  function mirrorCard(s) {
+    var tc = s.trade_check || {}, ai = s.ai_reasoning || {}, b = mirrorBadge(s), reached = Math.max(0, Math.min(100, tc.target_pct_reached || 0));
+    var src = !ai.source_model || ai.source_model === "pending" ? "not explained yet" : ai.source_model === "algorithmic_synthesis" ? "template text (no AI was available)" : ai.source_model;
+    return '<article class="pos mirror-card"><div class="pos-top"><b>' + e(U.base(s.symbol)) + "</b>" + C.side(s.direction) + C.tag(b[0], b[1]) + "</div>" +
+      '<div class="mono small dim">' + e(U.name(s.signal_type)) + " · " + e(s.confidence) + "% confidence · " + e(s.timeframe || "") + " · " + e(U.ago(s.timestamp)) + "</div>" +
+      C.tiles([["STOP", U.px(s.stop_loss), s.stop_risk_pct != null ? "−" + s.stop_risk_pct.toFixed(2) + "%" : ""], ["ENTRY", U.px(s.current_price), "price at the signal"],
+        ["TARGET", U.px(s.target_price), s.target_move_pct != null ? "+" + s.target_move_pct.toFixed(2) + "%" : ""],
+        ["PEAK GAIN", U.pct(tc.peak_gain_pct), tc.peak_r != null ? "+" + tc.peak_r + "R at best" : "", "up"]]) +
+      '<div class="mono tiny dim">HOW FAR TOWARDS THE TARGET · peak ' + e(U.px(tc.peak_price)) + "</div>" + '<div class="meter" role="img" aria-label="' + reached + '% of the way to the target"><i style="width:' + reached + '%"></i></div>' +
+      '<div class="pos-scale"><span>entry</span><span>half way</span><span>target</span></div>' +
+      (tc.worked_desc ? '<p class="small">' + e(tc.worked_desc) + "</p>" : "") +
+      '<div class="mirror-ai"><div><b class="up">Why it worked</b><p class="small">' + e(ai.why_it_worked || "Not explained yet: only finished trades are explained, a few at a time.") + "</p></div>" +
+      '<div><b class="dn">Why it failed or gave back</b><p class="small">' + e(ai.why_it_failed || "—") + "</p></div></div>" +
+      '<p class="mono tiny dim">Takeaway: ' + e(ai.key_takeaway || "—") + " · read by " + e(src) + "</p></article>";
+  }
+  UI.widget("mirror-score", {
+    bare: true, uses: ["mirror"],
+    render: function (el, D) {
+      var m = D.mirror; if (!m || !m.summary) { el.innerHTML = C.state(D, "mirror"); return; }
+      var x = m.summary;
+      el.innerHTML = C.tiles([
+        ["TESTED", x.total_tested, "mirrors in the last 48 h"], ["WORKED", x.worked_rate_pct + "%", x.worked_count + " full or partial", x.worked_rate_pct >= 50 ? "up" : ""],
+        ["FULL TARGET", x.full_win_count, "hit the whole target", "up"], ["PARTIAL", x.partial_win_count, "40%+ of the way"],
+        ["STOPPED", x.stopped_count, "hit the stop first", "dn"], ["RUNNING", x.running_count, "still open"],
+        ["AVG PEAK GAIN", U.pct(x.avg_peak_gain_pct), "best move, on average"], ["AVG OF TARGET", (x.avg_target_reached_pct || 0) + "%", "reached, on average"]]);
+    }
+  });
+  UI.widget("mirror-list", {
+    title: "MIRROR SIGNALS · LAST 48 H", uses: ["mirror"],
+    mount: function (el, ctx) {
+      ctx.s.f = { st: "ALL", sym: "" }; ctx.s.page = 0;
+      el.innerHTML = '<p class="small dim">A mirror is the same setup taken the other way, logged as a control for every intraday signal. If mirrors do as well as the picks, the picks have no edge.</p>' +
+        '<div class="toolbar" data-slot="tb"></div><div data-slot="cards"></div><div class="toolbar" data-slot="pg"></div>';
+    },
+    on: {
+      st: function (el, ev, t, ctx) { ctx.s.f.st = t.dataset.v; ctx.s.page = 0; ctx.render(); },
+      sym: function (el, ev, t, ctx) { ctx.s.f.sym = t.value; ctx.s.page = 0; ctx.render(); },
+      pg: function (el, ev, t, ctx) { ctx.s.page += +t.dataset.d; ctx.render(); },
+      check: function (el, ev, t) {
+        t.disabled = true; t.textContent = "Checking live trades…";
+        UI.Net.post("/api/crypto/signals/live-check?mirror=1", {})
+          .then(function () { return UI.Store.fetch("mirror"); })
+          .catch(function (err) { window.alert("Live check failed: " + err.message); })
+          .then(function () { t.disabled = false; t.textContent = "Re-check live trades now"; });
+      }
+    },
+    render: function (el, D, ctx) {
+      var m = D.mirror, slot = el.querySelector('[data-slot="cards"]');
+      if (!m || !Array.isArray(m.signals)) { slot.innerHTML = C.state(D, "mirror"); return; }
+      var f = ctx.s.f, sum = m.summary || {}, syms = Object.keys(sum.by_symbol || {});
+      el.querySelector('[data-slot="tb"]').innerHTML =
+        '<span class="chipset" role="group" aria-label="Result">' + MIRROR_STATUS.map(function (x) {
+          return '<button class="chipbtn' + (f.st === x[0] ? " on" : "") + '" data-act="st" data-v="' + x[0] + '" aria-pressed="' + (f.st === x[0]) + '">' + e(x[1]) + " " + mirrorCount(sum, x[0]) + "</button>";
+        }).join("") + "</span>" +
+        C.select("sym", "Coin", [["", "All coins"]].concat(syms.map(function (s) { return [s, U.base(s) + " (" + sum.by_symbol[s] + ")"]; })), f.sym) +
+        '<button class="mini" data-act="check">Re-check live trades now</button>';
+      var rows = m.signals.filter(function (s) {
+        var tc = s.trade_check || {};
+        var ok = f.st === "ALL" || (f.st === "WORKED" ? !!tc.worked : tc.status === f.st);
+        return ok && (!f.sym || s.symbol === f.sym);
+      });
+      var per = 10, pages = Math.max(1, Math.ceil(rows.length / per));
+      ctx.s.page = Math.max(0, Math.min(ctx.s.page, pages - 1));
+      ctx.right(rows.length + " of " + m.signals.length);
+      slot.innerHTML = rows.length ? '<div class="cards">' + rows.slice(ctx.s.page * per, ctx.s.page * per + per).map(mirrorCard).join("") + "</div>"
+        : C.empty("No mirror signals match these filters in the last 48 hours.");
+      el.querySelector('[data-slot="pg"]').innerHTML = pages > 1 ? '<button class="mini" data-act="pg" data-d="-1"' + (ctx.s.page ? "" : " disabled") + '>‹ Prev</button><span class="mono small">Page ' +
+        (ctx.s.page + 1) + " of " + pages + '</span><button class="mini" data-act="pg" data-d="1"' + (ctx.s.page < pages - 1 ? "" : " disabled") + ">Next ›</button>" : "";
+    }
+  });
+  UI.view("evidence/mirror", [["mirror-score"], ["mirror-list"]]);
 })();

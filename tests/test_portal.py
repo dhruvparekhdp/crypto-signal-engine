@@ -66,12 +66,29 @@ class TestPortalRoutes(AioHTTPTestCase):
         self.assertEqual(resp.status, 301)
         self.assertEqual(resp.headers["Location"], "/system/data")
 
-    async def test_the_classic_dashboard_still_serves_its_two_tools(self):
+    async def test_the_classic_page_only_forwards_now(self):
+        """Every /classic#tab has a native page (Mirror and the intraday sim since 2 Nov 2026): the classic
+        page still answers so old bookmarks work, and chrome.js forwards each anchor before it loads data."""
+        import re
         resp = await self.client.get("/classic")
         self.assertEqual(resp.status, 200)
-        body = await resp.text()
-        self.assertIn('id="tab-mirror"', body)
-        self.assertIn('id="tab-simulator"', body)
+        self.assertIn("/portal/static/chrome.js", await resp.text())
+        nav = (portal.STATIC / "nav.js").read_text()
+        anchors = set(re.findall(r'"/classic#(\w+)"', nav))
+        self.assertTrue({"mirror", "simulator", "paper", "dashboard"} <= anchors)
+        for line in nav.splitlines():
+            if "/classic#" in line:
+                with self.subTest(line=line.strip()):
+                    self.assertIn("native: true", line)
+                    self.assertNotIn("url:", line)
+
+    async def test_simulator_preview_route(self):
+        resp = await self.client.get("/api/simulator/preview?tp_r=2&sl_r=1&cycle_start=100&cycle_margin_pct=10&cycle_leverage=5")
+        self.assertEqual(resp.status, 200)
+        body = await resp.json()
+        self.assertEqual(body["trade"]["margin_usdt"], 10.0)
+        self.assertEqual(body["trade"]["reward_risk"], 2.0)
+        self.assertTrue(body["options"]["strategies"])
 
     async def test_assets_are_a_fixed_list_with_versioned_caching(self):
         for name, ctype in portal.ASSETS.items():

@@ -25,7 +25,7 @@
       { id: "live", label: "Live ₹ (real)", native: true },
       { id: "guard", label: "Session guard", native: true, aliases: ["/classic#guard"] },
       { id: "simulator", label: "Simulator", native: true },
-      { id: "intraday-sim", label: "Intraday sim (old)", url: "/classic#simulator" },
+      { id: "intraday-sim", label: "Intraday sim (old)", native: true, aliases: ["/classic#simulator"] },
       { id: "journal", label: "Journal", url: "/journal" }
     ] },
     { id: "evidence", label: "Evidence", tabs: [
@@ -35,7 +35,7 @@
       { id: "research", label: "Research", native: true },
       { id: "news-study", label: "News study", native: true },
       { id: "audit", label: "Audit", url: "/audit" },
-      { id: "mirror", label: "Mirror", url: "/classic#mirror" },
+      { id: "mirror", label: "Mirror", native: true, aliases: ["/classic#mirror"] },
       { id: "pipeline", label: "Pipeline", url: "/pipeline" },
       { id: "v2", label: "v2 shadow", url: "/v2" }
     ] },

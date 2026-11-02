@@ -55,6 +55,7 @@ ENDPOINTS: tuple[tuple[str, str, str, str, dict], ...] = (
     ("Paper trading", "GET", "/api/swing", "Swing book vs its backtest: last 4h bar per coin, open swing positions, closed trades in R.", {}),
     ("Portal", "GET", "/api/portal/candles", "Closed bars for the Command chart (Binance futures, cached 60 s).", {"symbol": "BTCUSDT", "tf": "4h", "limit": "48"}),
     ("Portal", "GET", "/api/portal/signals", "Swing signals, newest first: traded / not traded / filter block, with the BTC vol rank.", {"days": "14", "limit": "40"}),
+    ("Simulator", "GET", "/api/simulator/preview", "What the intraday simulator settings mean: run size, margin, target and stop money, and the form choices.", {"tp_r": "3", "sl_r": "1", "cycle_start": "25", "cycle_margin_pct": "25", "cycle_leverage": "10"}),
     ("Portal", "GET", "/api/portal/meta", "Paper or live, swing book on/off, market filter mode and threshold.", {}),
     ("Portal", "GET", "/api/portal/world", "World page: open and recent news events with countries and source, news heat per country, and the odds / DeFi / liquidations / price ticker.", {}),
     ("Portal", "GET", "/api/portal/news", "News engine store for Command World/Events/Calendar (off until news_engine_enabled).", {}),

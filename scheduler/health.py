@@ -183,6 +183,9 @@ async def _api_crypto_signals(runner, request: web.Request) -> web.Response:
             "veto_reason": getattr(r, "veto_reason", "") or r.suppressed_by or None,
             "trade_check": tc_dict.get(r.id),
             "ai_reasoning": ai_dict.get(r.id),
+            # Distances from entry, so pages render them instead of computing them (logic stays here).
+            "target_move_pct": _level_pct(r.current_price, r.target_price),
+            "stop_risk_pct": _level_pct(r.current_price, r.stop_loss),
             **({"review_trail": [_review_trail_row(t, REASON_WORDS) for t in trails[r.id]]}
                if r.id in trails else {}),
         }
@@ -209,6 +212,8 @@ async def _api_crypto_signals(runner, request: web.Request) -> web.Response:
             "running_count": run_cnt,
             "avg_peak_gain_pct": avg_peak,
             "avg_target_reached_pct": avg_tgt,
+            "by_symbol": {sym: sum(1 for r in rows if r.symbol.upper() == sym)
+                          for sym in sorted({r.symbol.upper() for r in rows})},
         }
         return web.Response(text=json.dumps({"signals": signals, "summary": summary}), content_type="application/json")
 
@@ -460,7 +465,12 @@ async def _api_simulator_get_config(runner, request: web.Request) -> web.Respons
             defaults.update(saved)
         except Exception:
             pass
+    for k in _SIM_SECRET_FIELDS:                  # a key saved before 2 Nov 2026 is still never echoed
+        defaults[k] = ""
     return web.Response(text=json.dumps(defaults), content_type="application/json")
+
+
+_SIM_SECRET_FIELDS = ("gemini_key", "openrouter_key", "hf_tokens")
 
 
 async def _api_simulator_save_config(runner, request: web.Request) -> web.Response:
@@ -477,12 +487,25 @@ async def _api_simulator_save_config(runner, request: web.Request) -> web.Respon
                 existing = json.loads(cfg_file.read_text())
             except Exception:
                 pass
-        existing.update(data)
+        existing.update(data if isinstance(data, dict) else {})
+        for k in _SIM_SECRET_FIELDS:              # this route has no login: never store a key sent to it
+            existing.pop(k, None)
         cfg_file.write_text(json.dumps(existing, indent=2))
         return web.Response(text=json.dumps({"status": "saved", "config": existing}), content_type="application/json")
     except Exception as exc:
         return web.Response(text=json.dumps({"status": "error", "message": str(exc)}), status=500, content_type="application/json")
 
+
+
+def _level_pct(entry, level) -> float | None:
+    """Distance from entry to a stop or target, in percent of entry; None when either is missing."""
+    try:
+        entry, level = float(entry or 0), float(level or 0)
+    except (TypeError, ValueError):
+        return None
+    if entry <= 0 or level <= 0:
+        return None
+    return round(abs(level - entry) / entry * 100.0, 4)
 
 
 def _review_trail_row(t, reason_words: dict) -> dict:

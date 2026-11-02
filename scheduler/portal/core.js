@@ -144,6 +144,9 @@
   Store.def("tables", "/api/tables?limit=50", 0);
   Store.def("debug", "/api/debug", 30000);
   Store.def("perf", "/api/debug/perf", 60000);
+  Store.def("mirror", "/api/crypto/signals?mirror=1", 60000);           // Evidence › Mirror (scorecard is server-side)
+  Store.def("isim", "/api/simulator/status", 5000);                    // Book › Intraday sim (progress while it runs)
+  Store.def("isim_ai", "/api/simulator/ai-events", 15000);
 
   // ---------------------------------------------------------------- components
   var e = U.esc, C = {};

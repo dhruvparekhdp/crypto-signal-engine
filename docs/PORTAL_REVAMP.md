@@ -100,8 +100,8 @@ the pages of the current hub. Pages marked ↗ are **tools**: their own server p
 | Hub | Pages (native) | Tools (own page, same header) |
 |---|---|---|
 | 01 Command `/command` | **Overview**, **Signals** `/command/signals`, **Watchlist** `/command/watchlist` | Price outlook `/predict`, Market moves `/moves`, Chart `/chart` |
-| 02 Book `/book` | **Swing book**, **Paper cycle** `/book/paper`, **Session guard** `/book/guard` | Simulator `/classic#simulator`, Journal `/journal` |
-| 03 Evidence `/evidence` | **Strategies**, **Accuracy** `/evidence/accuracy`, **History** `/evidence/history`, **Research** `/evidence/research` | Audit `/audit`, Mirror `/classic#mirror`, Pipeline `/pipeline`, v2 shadow `/v2` |
+| 02 Book `/book` | **Swing book**, **Paper cycle** `/book/paper`, **Session guard** `/book/guard`, **Intraday sim (old)** `/book/intraday-sim` | Journal `/journal` |
+| 03 Evidence `/evidence` | **Strategies**, **Accuracy** `/evidence/accuracy`, **History** `/evidence/history`, **Research** `/evidence/research`, **Mirror** `/evidence/mirror` | Audit `/audit`, Pipeline `/pipeline`, v2 shadow `/v2` |
 | 04 System `/system` | **Health**, **Data** `/system/data`, **Diagnostics** `/system/diagnostics` | Settings `/settings`, Keys `/keys`, API list `/api-docs` |
 
 ### What was clubbed
@@ -129,7 +129,7 @@ the pages of the current hub. Pages marked ↗ are **tools**: their own server p
 | `/classic#watchlist` | → `/command/watchlist` |
 | `/classic#paper` / `#guard` | → `/book/paper` / `/book/guard` |
 | `/classic#accuracy` / `#historic` | → `/evidence/accuracy` / `/evidence/history` |
-| `/classic#mirror`, `/classic#simulator` | Stay (tools) under the new header; the old sidebar is hidden |
+| `/classic#mirror` / `#simulator` | → `/evidence/mirror` / `/book/intraday-sim` (native since 2 Nov 2026: every classic tab now has a native page, so `/classic` only forwards) |
 | `/data` | 301 → `/system/data` |
 | `/<hub>/<tool page>` (e.g. `/book/simulator`) | Forwarded to the tool's address |
 | `/predict` `/moves` `/chart` `/audit` `/settings` `/settings/classic` `/keys` `/journal` `/v2` `/pipeline` `/api-docs` | Same address, now with the portal header (hub + its pages + theme + paper/live badge) and the new skin. Their old "← Dashboard" links, nav rows, sidebar and theme pickers are hidden |
@@ -257,3 +257,21 @@ pages' colour variables onto the four palettes.
 
 Later, optional: rebuild the remaining tools (Audit, Chart, Settings, Keys, Simulator, Mirror) as native widgets one
 by one; each then only needs its nav entry switched from `url` to `native` and an alias for the old address.
+
+
+## 7. Mirror and the intraday simulator go native (2 Nov 2026)
+
+Owner: "rebuild mirror and simulator as native pages too". The live-book Simulator (`/book/simulator`) was already
+native; this moved the last two classic tabs, so no page is served from the classic dashboard any more.
+
+| Page | Route | Data | Logic kept in the backend (rule 9 of `docs/plans/UI_REBUILD_PLAN.md`) |
+|---|---|---|---|
+| Mirror | `/evidence/mirror` | `GET /api/crypto/signals?mirror=1`, `POST /api/crypto/signals/live-check?mirror=1` | scorecard (`summary`), counts per coin (`summary.by_symbol`, new), each signal's `target_move_pct` / `stop_risk_pct` (new), the trade check and the AI read. The page only filters and pages. |
+| Intraday sim (old) | `/book/intraday-sim` | `/api/simulator/status`, `config` (GET/POST), `start`, `pause`, `cycle-ledger`, `ai-events`, and **`GET /api/simulator/preview`** (new) | run size, one trade's margin / position / target and stop money / reward:risk, the form's choices and defaults: `scheduler/sim_preview.py`, the same arithmetic the classic form did in the browser. |
+
+Also fixed on the way: `/api/simulator/config` has no login, and a key posted to it (`gemini_key`, `openrouter_key`,
+`hf_tokens`) was stored and echoed back by the GET. Save now drops those fields and GET always blanks them. Start and
+pause still have no login (unchanged, as before); see the open question in the hand-off.
+
+Tests: `tests/test_portal_mirror_isim.py` (preview maths equal the classic form's, junk input clamps, keys never kept,
+level distances) and `tests/test_portal.py` (every `/classic#tab` alias is native; the preview route).
