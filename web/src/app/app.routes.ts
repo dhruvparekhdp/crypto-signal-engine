@@ -5,8 +5,7 @@ function hubRoutes(hubId: string): Routes {
   const hub = NAV.find((h) => h.id === hubId)!;
   return hub.tabs.map((t) => ({
     path: t.id,
-    loadComponent: () =>
-      import('./features/placeholder/placeholder.page').then((m) => m.PlaceholderPage),
+    loadComponent: () => import('./pages/route-host.page').then((m) => m.RouteHostPage),
     data: { title: t.label, path: appPath(hubId, t.id) },
   }));
 }

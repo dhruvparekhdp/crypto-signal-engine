@@ -1,14 +1,22 @@
-import { ChangeDetectionStrategy, Component } from '@angular/core';
+import { ChangeDetectionStrategy, Component, HostListener, ViewChild, inject } from '@angular/core';
 import { RouterLink, RouterLinkActive, RouterOutlet } from '@angular/router';
 import { NAV, appPath } from '../core/nav.model';
+import { CommandBarComponent } from '../shared/ui/command-bar.component';
+import { ThemeService, LookId } from '../shared/ui/theme.service';
 
 @Component({
   standalone: true,
   selector: 'app-shell',
-  imports: [RouterOutlet, RouterLink, RouterLinkActive],
+  imports: [RouterOutlet, RouterLink, RouterLinkActive, CommandBarComponent],
   template: `
     <header class="top">
       <a routerLink="/app/command/overview" class="brand">Signal engine</a>
+      <button type="button" class="cmd" (click)="commandBar.toggle()">⌘K</button>
+      <select class="look" aria-label="Theme look" [value]="theme.look()" (change)="onLook($event)">
+        @for (l of looks; track l) {
+          <option [value]="l">{{ l }}</option>
+        }
+      </select>
       <nav class="hubs">
         @for (h of nav; track h.id) {
           <details>
@@ -23,6 +31,7 @@ import { NAV, appPath } from '../core/nav.model';
       </nav>
     </header>
     <main class="main"><router-outlet /></main>
+    <ui-command-bar />
   `,
   styles: [
     `
@@ -40,6 +49,15 @@ import { NAV, appPath } from '../core/nav.model';
         text-transform: uppercase;
         text-decoration: none;
         color: var(--ink);
+      }
+      .cmd,
+      .look {
+        min-height: 44px;
+        border: 1px solid var(--edge);
+        background: var(--surface-1);
+        color: var(--ink);
+        border-radius: var(--radius-sm);
+        padding: 0 0.65rem;
       }
       .hubs {
         display: flex;
@@ -61,6 +79,9 @@ import { NAV, appPath } from '../core/nav.model';
         color: var(--dim);
         text-decoration: none;
         font-size: 0.85rem;
+        min-height: 44px;
+        display: flex;
+        align-items: center;
       }
       .tabs a.on {
         color: var(--accent-1);
@@ -74,9 +95,25 @@ import { NAV, appPath } from '../core/nav.model';
   changeDetection: ChangeDetectionStrategy.OnPush,
 })
 export class AppShellComponent {
+  @ViewChild(CommandBarComponent) commandBar!: CommandBarComponent;
   readonly nav = NAV;
+  readonly theme = inject(ThemeService);
+  readonly looks: LookId[] = ['a', 'b', 'c', 'brutal'];
 
   link(hub: string, tab: string): string {
     return appPath(hub, tab);
+  }
+
+  onLook(ev: Event): void {
+    const v = (ev.target as HTMLSelectElement).value as LookId;
+    this.theme.setLook(v);
+  }
+
+  @HostListener('document:keydown', ['$event'])
+  onKey(e: KeyboardEvent): void {
+    if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') {
+      e.preventDefault();
+      this.commandBar?.toggle();
+    }
   }
 }
