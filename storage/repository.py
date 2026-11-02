@@ -850,6 +850,41 @@ class Repository:
             select(MoveAttribution).order_by(MoveAttribution.created_at.desc()).limit(limit))
         return list(res.scalars().all())
 
+    async def get_move_attribution(self, row_id: int):
+        from storage.models import MoveAttribution
+        return await self.session.get(MoveAttribution, row_id)
+
+    async def crypto_signals_between(
+        self, newer_than_days: int,
+        older_than_days: int = 0,
+        limit: int = 400,
+        include_suppressed: bool = False,
+        before_id: int | None = None,
+        use_id_order: bool = False,
+    ) -> list[CryptoSignalLog]:
+        """
+        Signals inside a window. `older_than_days` carves out the recent end,
+        which is what splits the live dashboard from the archive.
+
+        `before_id` (cursor): only rows with id strictly less than this value.
+
+        Suppressed signals are excluded by default: they never fired, so
+        counting them would misreport what the engine actually published.
+        The scorecard asks for them on purpose.
+        """
+        now = _now_utc()
+        q = select(CryptoSignalLog).where(
+            CryptoSignalLog.timestamp >= now - timedelta(days=newer_than_days))
+        if not include_suppressed:
+            q = q.where(CryptoSignalLog.suppressed_by == "")
+        if older_than_days:
+            q = q.where(CryptoSignalLog.timestamp < now - timedelta(days=older_than_days))
+        if before_id is not None:
+            q = q.where(CryptoSignalLog.id < before_id)
+        order = CryptoSignalLog.id.desc() if use_id_order or before_id is not None else CryptoSignalLog.timestamp.desc()
+        res = await self.session.execute(q.order_by(order).limit(limit))
+        return list(res.scalars().all())
+
     async def get_event_precedent(self, event_key: str):
         from storage.models import EventPrecedent
         res = await self.session.execute(
@@ -1122,30 +1157,6 @@ class Repository:
                                                 CryptoSignalLog.mirror_of_log_id, CryptoSignalLog.review_round)
                                          .where(CryptoSignalLog.id.in_(ids)))
         return {r.id: (r.candidate_role or "primary", r.mirror_of_log_id or 0, r.review_round or 0) for r in res}
-
-    async def crypto_signals_between(self, newer_than_days: int,
-                                     older_than_days: int = 0,
-                                     limit: int = 400,
-                                     include_suppressed: bool = False,
-                                     ) -> list[CryptoSignalLog]:
-        """
-        Signals inside a window. `older_than_days` carves out the recent end,
-        which is what splits the live dashboard from the archive.
-
-        Suppressed signals are excluded by default: they never fired, so
-        counting them would misreport what the engine actually published.
-        The scorecard asks for them on purpose.
-        """
-        now = _now_utc()
-        q = select(CryptoSignalLog).where(
-            CryptoSignalLog.timestamp >= now - timedelta(days=newer_than_days))
-        if not include_suppressed:
-            q = q.where(CryptoSignalLog.suppressed_by == "")
-        if older_than_days:
-            q = q.where(CryptoSignalLog.timestamp < now - timedelta(days=older_than_days))
-        res = await self.session.execute(
-            q.order_by(CryptoSignalLog.timestamp.desc()).limit(limit))
-        return list(res.scalars().all())
 
     async def swing_signals_since(self, days: int, limit: int = 2000) -> list[CryptoSignalLog]:
         """Swing-book signals only. The intraday shadow signals arrive dozens a day, so a plain

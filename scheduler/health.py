@@ -540,13 +540,10 @@ def _iso(dt):
 
 
 def _history_limit(query) -> int:
-    """Rows for /api/signals/history. 400 by default; the 7-day signals table asks for more, because intraday signals
-    arrive 100-270 a day and 400 rows covered about two of the seven days it claimed (19 Oct 2026)."""
-    try:
-        n = int(query.get("limit") or 400)
-    except (TypeError, ValueError):
-        n = 400
-    return max(1, min(3000, n))
+    """Rows for /api/signals/history. Default 200; portal may still ask for limit=3000."""
+    from scheduler.signal_history_api import history_limit
+
+    return history_limit(query, default=200)
 
 
 def _signal_row(r) -> dict:
@@ -802,18 +799,40 @@ async def _api_signal_history(runner, request: web.Request) -> web.Response:
     """
     Signals in a window. `before` carves out the recent end, which is what
     separates the dashboard's live 7 days from the archive behind it.
+
+    Optional `cursor` (signal id) and `fields=` for paginated, slimmer payloads.
     """
+    from scheduler.signal_history_api import (
+        history_limit,
+        parse_cursor,
+        project_signal_row,
+        uses_paginated_envelope,
+    )
     from storage.database import AsyncSessionFactory
     from storage.repository import Repository
 
     days = max(1, min(365, int(request.query.get("days") or 7)))
     before = max(0, min(365, int(request.query.get("before") or 0)))
+    limit = history_limit(request.query, default=200)
+    cursor_id = parse_cursor(request.query)
+    fields = request.query.get("fields")
     async with AsyncSessionFactory() as session:
         repo = Repository(session)
-        rows = await repo.crypto_signals_between(days, before, limit=_history_limit(request.query))
+        rows = await repo.crypto_signals_between(
+            days, before, limit=limit, before_id=cursor_id,
+            use_id_order=uses_paginated_envelope(request.query),
+        )
         counts = await repo.crypto_signal_counts() if before else None
 
-    payload = [_signal_row(r) for r in rows]
+    payload = [project_signal_row(_signal_row(r), fields) for r in rows]
+    if uses_paginated_envelope(request.query):
+        out = {
+            "signals": payload,
+            "next_cursor": str(rows[-1].id) if len(rows) == limit and rows else None,
+        }
+        if before:
+            out["counts"] = counts
+        return _json_response(out)
     if counts is None:
         return _json_response(payload)
     return _json_response({"signals": payload, "counts": counts})
@@ -1709,44 +1728,26 @@ def _news_active_rows(events) -> list[dict]:
             for e in events]
 
 
-async def _api_moves(runner, request: web.Request) -> web.Response:
-    """
-    GET /api/moves?limit=24 — the hourly "why did it move" analyses, newest first,
-    with the latest world briefing and the next scheduled releases.
-    """
-    from analysis.event_calendar import upcoming
-    from storage.database import AsyncSessionFactory
-    from storage.repository import Repository
+def _monitor_health(runner) -> dict:
+    last_run = getattr(runner, "_monitor_last_run", None)
+    if not isinstance(last_run, datetime):
+        last_run = None
+    raw_failures = getattr(runner, "_monitor_failures", None)
+    failures = list(raw_failures) if isinstance(raw_failures, (list, tuple)) else []
+    return {"last_run": _iso(last_run), "failures": failures}
 
-    try:
-        limit = max(1, min(int(request.query.get("limit", "24")), 200))
-    except ValueError:
-        limit = 24
-    async with AsyncSessionFactory() as session:
-        repo = Repository(session)
-        rows = await repo.recent_move_attributions(limit)
-        briefing = await repo.latest_briefing()
-        events = await repo.recent_events(14)
-        shadow = await repo.shadow_trades(30)
+
+async def _moves_page_context(runner, session, repo) -> dict:
+    from analysis.event_calendar import upcoming
+
     now = datetime.now(UTC).replace(tzinfo=None)
-    body = {
-        "runs": [{
-            "id": r.id, "at": _iso(r.created_at), "window_hours": r.window_hours,
-            "model": r.model, "latency_ms": r.latency_ms,
-            "moves": json.loads(r.moves or "[]"), "signals": json.loads(r.signals or "[]"),
-            "result": json.loads(r.result or "{}"),
-        } for r in rows],
-        "briefing": None if briefing is None else {
-            "at": _iso(briefing.created_at), "risk_tone": briefing.risk_tone,
-            "summary": briefing.summary, "events": json.loads(briefing.events or "[]"),
-            "model": briefing.model,
-        },
+    briefing = await repo.latest_briefing()
+    events = await repo.recent_events(14)
+    shadow = await repo.shadow_trades(30)
+    ctx = {
         "upcoming": [{"at": _iso(e.at), "kind": e.kind, "name": e.name}
                      for e in upcoming(now, days=7)],
-        "monitor": {
-            "last_run": _iso(getattr(runner, "_monitor_last_run", None)),
-            "failures": list(getattr(runner, "_monitor_failures", []) or []),
-        },
+        "monitor": _monitor_health(runner),
         "events": [{
             "id": e.id, "title": e.title, "category": e.category, "at": _iso(e.happened_at),
             "level": e.level_current, "level_initial": e.level_initial,
@@ -1757,6 +1758,9 @@ async def _api_moves(runner, request: web.Request) -> web.Response:
             "event_id": s.event_id, "book": s.book, "symbol": s.symbol, "side": s.side,
             "wallet_pct": s.wallet_pct, "note": s.note, "at": _iso(s.created_at),
         } for s in shadow],
+        "briefing": briefing,
+        "news_store": None,
+        "news_store_active": None,
     }
     from config.settings import settings as _settings
 
@@ -1765,14 +1769,69 @@ async def _api_moves(runner, request: web.Request) -> web.Response:
         from storage.news_models import NewsEvent
         from sqlalchemy import select
 
+        store_events = (await session.scalars(select(NewsEvent).order_by(NewsEvent.started_at.desc()).limit(80))).all()
+        ctx["news_store"] = [{
+            "id": e.id, "title": e.title, "event_type": e.event_type,
+            "severity": e.severity, "severity_market": e.severity_market,
+            "status": e.status, "at": _iso(e.started_at),
+        } for e in store_events]
+        ctx["news_store_active"] = _news_active_rows(await active_news_events(session, now))
+    return ctx
+
+
+async def _api_moves(runner, request: web.Request) -> web.Response:
+    """
+    GET /api/moves?limit=24 — slim run list + shared context.
+    GET /api/moves?detail=<id> — one run with full moves/signals/result bodies.
+    """
+    from scheduler.moves_api import moves_shared_shell, run_detail_row, run_summary_row
+    from storage.database import AsyncSessionFactory
+    from storage.repository import Repository
+
+    detail_raw = request.query.get("detail")
+    if detail_raw:
+        try:
+            detail_id = int(detail_raw)
+        except ValueError:
+            return web.Response(text=json.dumps({"error": "invalid detail id"}),
+                                content_type="application/json", status=400)
         async with AsyncSessionFactory() as session:
-            store_events = (await session.scalars(select(NewsEvent).order_by(NewsEvent.started_at.desc()).limit(80))).all()
-            body["news_store"] = [{
-                "id": e.id, "title": e.title, "event_type": e.event_type,
-                "severity": e.severity, "severity_market": e.severity_market,
-                "status": e.status, "at": _iso(e.started_at),
-            } for e in store_events]
-            body["news_store_active"] = _news_active_rows(await active_news_events(session, now))
+            repo = Repository(session)
+            row = await repo.get_move_attribution(detail_id)
+            if row is None:
+                return web.Response(text=json.dumps({"error": "not found"}),
+                                    content_type="application/json", status=404)
+            ctx = await _moves_page_context(runner, session, repo)
+        shell = moves_shared_shell(
+            briefing=ctx["briefing"],
+            events=ctx["events"],
+            shadow=ctx["shadow"],
+            upcoming=ctx["upcoming"],
+            monitor=ctx["monitor"],
+            news_store=ctx["news_store"],
+            news_store_active=ctx["news_store_active"],
+        )
+        shell["run"] = run_detail_row(row)
+        return web.Response(text=json.dumps(shell), content_type="application/json")
+
+    try:
+        limit = max(1, min(int(request.query.get("limit", "24")), 200))
+    except ValueError:
+        limit = 24
+    async with AsyncSessionFactory() as session:
+        repo = Repository(session)
+        rows = await repo.recent_move_attributions(limit)
+        ctx = await _moves_page_context(runner, session, repo)
+    body = moves_shared_shell(
+        briefing=ctx["briefing"],
+        events=ctx["events"],
+        shadow=ctx["shadow"],
+        upcoming=ctx["upcoming"],
+        monitor=ctx["monitor"],
+        news_store=ctx["news_store"],
+        news_store_active=ctx["news_store_active"],
+    )
+    body["runs"] = [run_summary_row(r) for r in rows]
     return web.Response(text=json.dumps(body), content_type="application/json")
 
 
@@ -7166,7 +7225,7 @@ function pct(v){ if(v==null||!isFinite(v)) return '<b class="muted">—</b>';
 function stamp(iso){ return window.fmtStamp? window.fmtStamp(iso) : esc(iso); }
 function ago(iso){ return window.fmtAgo? window.fmtAgo(iso) : ''; }
 const CAUSE={news:'News event',market_wide:'Whole market',coin_specific:'Coin-specific',no_clear_cause:'No clear cause'};
-let DATA=null, SEL=0;
+let DATA=null, SEL=0, currentRun=null;
 // The measured numbers the model was handed, so its reasoning can be checked.
 function factsBlock(f){ if(!f) return ''; const out=[]; const n=v=>(v>=0?'+':'')+v;
   if(f.volume_last3h_vs_prior!=null) out.push('vol 3h '+f.volume_last3h_vs_prior+'× prior');
@@ -7188,7 +7247,8 @@ function render(){
       + eventsCard() + shadowCard() + briefingCard();
     return;
   }
-  const run=DATA.runs[SEL], r=run.result||{};
+  if(!currentRun){ main.innerHTML='<div class="panel empty-state">Loading analysis…</div>'; return; }
+  const run=currentRun, r=run.result||{};
   const moves={}; (run.moves||[]).forEach(m=>moves[m.symbol]=m);
   const btc=moves['btcusdt'];
   let h='';
@@ -7247,8 +7307,8 @@ function render(){
   // history
   h+='<section class="card"><h2>Earlier analyses</h2><div class="hist">'
     +DATA.runs.map((x,i)=>'<button type="button" class="'+(i===SEL?'on':'')+'" onclick="pick('+i+')"><time>'+stamp(x.at)+'</time>'
-      +'<span class="txt">'+esc(((x.result||{}).overall||'').split('. ')[0])+'</span>'
-      +'<span class="muted">'+((x.result||{}).coins||[]).filter(c=>c.cause_type==='news').length+' news-driven</span></button>').join('')
+      +'<span class="txt">'+esc(x.overall_preview||'')+'</span>'
+      +'<span class="muted">'+(x.news_driven||0)+' news-driven</span></button>').join('')
     +'</div></section>';
   main.innerHTML=h;
 }
@@ -7291,13 +7351,23 @@ function shadowCard(){
     +'</table></div>';
   return h+'</section>';
 }
-function pick(i){ SEL=i; render(); window.scrollTo({top:0,behavior:'smooth'}); }
+function mergeShell(j){ if(!j||!DATA) return; ['briefing','upcoming','monitor','events','shadow','news_store','news_store_active'].forEach(k=>{ if(k in j) DATA[k]=j[k]; }); }
+async function loadDetail(id){
+  const r=await withTimeout(fetch('/api/moves?detail='+encodeURIComponent(id)), LOAD_MS);
+  if(!r.ok) throw new Error('server returned '+r.status);
+  const j=await r.json();
+  currentRun=j.run;
+  mergeShell(j);
+}
+function pick(i){ SEL=i; loadDetail(DATA.runs[i].id).then(()=>{ render(); window.scrollTo({top:0,behavior:'smooth'}); }).catch(()=>render()); }
 async function load(){
   const body=document.getElementById('main-body');
   try{
     const r=await withTimeout(fetch('/api/moves?limit=48'), LOAD_MS);
     if(!r.ok) throw new Error('server returned '+r.status);
     DATA=await r.json();
+    currentRun=null;
+    if(DATA.runs&&DATA.runs.length) await loadDetail(DATA.runs[SEL].id);
   }catch(e){
     if(body) Panel.error(body,'market moves',e,load);
     document.getElementById('tick').textContent='failed to update';
@@ -7874,11 +7944,13 @@ async def make_app(runner) -> web.Application:
     # than being opted into per-route — a cross-cutting concern bolted onto
     # individual handlers is the one that gets forgotten on the next new
     # endpoint.
+    from scheduler.etag import etag_middleware
     from scheduler.perf import timing_middleware
     app = web.Application(middlewares=[
         timing_middleware,          # outermost: times the whole request
         rate_limit_middleware(lambda: _SETTINGS),
         security_headers_middleware,
+        etag_middleware,
         _compress_middleware,
     ])
 

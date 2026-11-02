@@ -24,10 +24,10 @@ def test_row_says_whether_it_is_the_signal_or_its_mirror():
 
 
 def test_history_limit_is_settable_and_capped():
-    assert _history_limit({}) == 400
+    assert _history_limit({}) == 200
     assert _history_limit({"limit": "2500"}) == 2500
     assert _history_limit({"limit": "999999"}) == 3000
-    assert _history_limit({"limit": "x"}) == 400
+    assert _history_limit({"limit": "x"}) == 200
 
 
 def test_the_seven_day_table_asks_for_seven_days_of_rows():
