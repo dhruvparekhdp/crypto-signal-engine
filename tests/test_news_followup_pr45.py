@@ -94,7 +94,7 @@ class TestResolverUnlinkedOnly(unittest.IsolatedAsyncioTestCase):
                 await upsert_document(
                     session,
                     source_id="regional_rss",
-                    title=f"Headline number {i}",
+                    title=f"Headline number {i} " + " ".join(f"w{i}x{j}" for j in range(4)),   # distinct stories
                     published_at=self.base + timedelta(minutes=i),
                 )
             await session.commit()
@@ -280,3 +280,55 @@ def test_market_moves_lists_open_news_events_without_failing():
     rows = _news_active_rows([ActiveEvent(7, "FOMC statement", "central_bank", 4, datetime(2026, 10, 31, 16, 0),
                                           "mixed")])
     assert rows[0]["level"] == 4 and rows[0]["category"] == "central_bank" and rows[0]["at"].startswith("2026-10-31")
+
+
+class TestSameStory(unittest.IsolatedAsyncioTestCase):
+    """3 Nov 2026 (owner: "many of the events are showing duplicate"): rewritten BBC headlines of one story."""
+
+    def test_rewritten_headlines_are_one_story(self):
+        from analysis.news.resolver import same_story
+        pairs = [
+            ("Russian bombing kills 24 people at Ukraine aid centre, Kyiv says",
+             "Russian bombing kills 18 people at Ukraine aid centre, Kyiv says"),
+            ("Wizz Air flight from London in emergency landing after bomb threat",
+             "Wizz Air flight from Luton in emergency landing after bomb threat"),
+            ("Ryanair may freeze workers' pay and raise airfares", "Ryanair says it may freeze workers' pay and raise airfares"),
+            ("Ryanair may freeze workers' pay as fuel prices spike", "Ryanair may freeze workers' pay and raise airfares"),
+            ("Shop freezers in seven European countries hit by cyber-attack",
+             "Shop freezers in six European countries hit by suspected cyber-attack"),
+            ("Trump makes fevered campaign push in final weekend before election",
+             "Trump makes final campaign push in final weekend before election"),
+        ]
+        for a, b in pairs:
+            self.assertTrue(same_story(a, b), (a, b))
+
+    def test_different_stories_stay_apart(self):
+        from analysis.news.resolver import same_story
+        for a, b in [("Fake nuclear warnings issued after Ukrainian and Russian air alert apps hacked",
+                      "What we know about the alert app hack in Ukraine and Russia"),
+                     ("Iran killed her teenage daughter - now she is facing up to the regime",
+                      "Uganda begins withdrawing troops from Somalia after 20 years"),
+                     ("Federal Reserve issues FOMC statement", "Minutes of the Federal Open Market Committee")]:
+            self.assertFalse(same_story(a, b), (a, b))
+
+    async def test_new_and_existing_duplicates_fold_into_one_event(self):
+        from analysis.news.resolve_pipeline import merge_same_story_events
+        engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+        async with engine.begin() as conn:
+            await conn.run_sync(Base.metadata.create_all)
+        Session = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+        t0 = datetime(2026, 11, 2, 18, 0)
+        async with Session() as session:
+            await upsert_document(session, source_id="regional_rss", title="Russian bombing kills 18 people at Ukraine aid centre, Kyiv says", published_at=t0)
+            await upsert_document(session, source_id="regional_rss", title="Russian bombing kills 24 people at Ukraine aid centre, Kyiv says", published_at=t0 + timedelta(minutes=27))
+            self.assertEqual(await resolve_pending_documents(session), 1)          # one event, two stories
+            ev = (await session.scalars(select(NewsEvent))).one()
+            self.assertIn("24 people", ev.title)
+            # an event built before matching existed: a second open duplicate gets merged
+            session.add(NewsEvent(event_key="old-dup", title="Russian bombing kills 20 people at Ukraine aid centre",
+                                  event_type="other", severity=1, status="open", started_at=t0 + timedelta(minutes=5)))
+            await session.flush()
+            self.assertEqual(await merge_same_story_events(session), 1)
+            statuses = sorted(e.status for e in (await session.scalars(select(NewsEvent))).all())
+            self.assertEqual(statuses, ["merged", "open"])
+        await engine.dispose()

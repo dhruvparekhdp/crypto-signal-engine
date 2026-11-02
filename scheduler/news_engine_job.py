@@ -37,6 +37,8 @@ async def run_news_engine_cycle() -> dict:
             stats["events_created"] = await resolve_pending_documents(session)
             stats["events_created"] += await resolve_calendar_releases(session)
             stats["events_closed"] = await close_stale_open_events(session)
+            from analysis.news.resolve_pipeline import merge_same_story_events
+            stats["events_merged"] = await merge_same_story_events(session)
         await session.commit()
     log.info("news_engine_cycle", **stats)
     return stats

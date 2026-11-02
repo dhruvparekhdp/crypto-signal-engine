@@ -2,14 +2,14 @@
 from __future__ import annotations
 
 import json
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from analysis.news.classifier import classify_rule_based
 from analysis.news.memory import memory_window_for_severity
-from analysis.news.resolver import event_key_for
+from analysis.news.resolver import event_key_for, same_story
 from analysis.news.source_policy import document_eligible_for_event
 from storage.news_models import NewsCalendarRow, NewsDocument, NewsEvent, NewsEventStory
 
@@ -42,10 +42,38 @@ async def resolve_pending_documents(session: AsyncSession, *, limit: int = 40) -
     return created
 
 
+SAME_STORY_HOURS = 36
+
+
+async def _same_story_event(session: AsyncSession, title: str, at: datetime) -> NewsEvent | None:
+    """An open event from the last 36 h that tells the same story (rewritten headline)."""
+    recent = (await session.scalars(
+        select(NewsEvent).where(NewsEvent.status == "open")
+        .where(NewsEvent.started_at >= at - timedelta(hours=SAME_STORY_HOURS))
+        .order_by(NewsEvent.started_at.asc()))).all()
+    return next((e for e in recent if same_story(title, e.title)), None)
+
+
+def _absorb(ev: NewsEvent, title: str, at: datetime, severity: int, countries: list[str]) -> None:
+    """A newer headline of the same story: keep the newest wording, the highest level and every country."""
+    if at and at >= ev.started_at:          # later wording of the story (headlines arrive oldest first)
+        ev.title = title
+    ev.severity = max(int(ev.severity or 1), int(severity or 1))
+    try:
+        have = list(json.loads(ev.countries_json or "[]"))
+    except ValueError:
+        have = []
+    ev.countries_json = json.dumps(sorted(set(have) | set(countries or [])))
+
+
 async def _link_document_to_event(session: AsyncSession, doc: NewsDocument) -> int:
     meta = classify_rule_based(doc.title, doc.body)
     key = event_key_for(doc.title, meta["event_type"], doc.published_at)
     ev = await session.scalar(select(NewsEvent).where(NewsEvent.event_key == key))
+    if ev is None:
+        ev = await _same_story_event(session, doc.title, doc.published_at)
+        if ev is not None:
+            _absorb(ev, doc.title, doc.published_at, meta["severity"], meta["countries"])
     created = 0
     if ev is None:
         ev = NewsEvent(
@@ -122,3 +150,31 @@ async def close_stale_open_events(session: AsyncSession, *, now: datetime | None
         ev.resolved_at = now
         closed += 1
     return closed
+
+
+
+async def merge_same_story_events(session: AsyncSession) -> int:
+    """Fold open events that are one story into the earliest of them: their stories move over and they are marked
+    'merged' (3 Nov 2026: the events built before same-story matching kept their duplicates)."""
+    evs = (await session.scalars(select(NewsEvent).where(NewsEvent.status == "open")
+                                 .order_by(NewsEvent.started_at.asc()))).all()
+    merged = 0
+    keep: list[NewsEvent] = []
+    for ev in evs:
+        home = next((k for k in keep if same_story(ev.title, k.title)
+                     and abs((ev.started_at - k.started_at).total_seconds()) <= SAME_STORY_HOURS * 3600), None)
+        if home is None:
+            keep.append(ev)
+            continue
+        stories = (await session.scalars(select(NewsEventStory).where(NewsEventStory.event_id == ev.id))).all()
+        for st in stories:
+            st.event_id = home.id
+        try:
+            countries = json.loads(ev.countries_json or "[]")
+        except ValueError:
+            countries = []
+        _absorb(home, ev.title, ev.started_at, ev.severity, countries)
+        ev.status = "merged"
+        ev.resolved_at = datetime.utcnow()
+        merged += 1
+    return merged
