@@ -28,6 +28,12 @@ jobs:
       - name: Production build
         working-directory: web
         run: npm run build:prod
+      - name: Playwright browsers
+        working-directory: web
+        run: npm run e2e:install
+      - name: E2E (fixtures, no live API)
+        working-directory: web
+        run: npm run e2e
 
   # Plan Q11 / Phase 1.1: a failing test blocks the deploy (an ImportError once crashed production).
   test:
