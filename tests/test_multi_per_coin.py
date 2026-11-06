@@ -162,3 +162,37 @@ def test_multi_per_coin_runs_until_the_9_nov_review():
     # owner 2 Nov 2026: "extend for 1 week more"
     from config.settings import Settings
     assert Settings.model_fields["swing_multi_per_coin_until"].default == "2026-11-09T12:00:00"
+
+
+@pytest.mark.asyncio
+async def test_closing_a_trade_whose_stop_already_filled_leaves_the_other_trade_alone(tmp_path):
+    # 4 Nov 2026: gold #2's exchange stop filled (19 -> 8 contracts), then the engine's close sold the other trade's 8
+    from tests.test_delta_ladder import FakeDelta, _book
+    d = FakeDelta()
+    book = _book(tmp_path, d)
+    st = book._load_state()
+    st["positions"] = {
+        "XRPUSD": {"side": "sell", "size": 8, "product_id": 14969, "spec": "a@4h", "stop_order_id": 1, "tp_order_id": 2},
+        "XRPUSD#2": {"side": "sell", "size": 11, "product_id": 14969, "spec": "b@4h", "stop_order_id": 3, "tp_order_id": 4},
+    }
+    book._save_state(st)
+    d.size = -8                                                    # #2's stop has filled on the exchange
+    res = await book.on_paper_close("xrpusdt", "stop", "b@4h")
+    assert res["ok"] and not any(k == "market" for k, _ in d.calls)
+    assert list(book._load_state()["positions"]) == ["XRPUSD"]
+
+
+@pytest.mark.asyncio
+async def test_closing_one_of_two_open_trades_sells_only_its_own_contracts(tmp_path):
+    from tests.test_delta_ladder import FakeDelta, _book
+    d = FakeDelta()
+    book = _book(tmp_path, d)
+    st = book._load_state()
+    st["positions"] = {
+        "XRPUSD": {"side": "sell", "size": 8, "product_id": 14969, "spec": "a@4h", "stop_order_id": 1, "tp_order_id": 2},
+        "XRPUSD#2": {"side": "sell", "size": 11, "product_id": 14969, "spec": "b@4h", "stop_order_id": 3, "tp_order_id": 4},
+    }
+    book._save_state(st)
+    d.size = -19
+    await book.on_paper_close("xrpusdt", "profit_lock", "b@4h")
+    assert [kw["size"] for k, kw in d.calls if k == "market"] == [11]

@@ -667,7 +667,10 @@ class DeltaBook:
             try:
                 size = await self.client.position_size(pos["product_id"])
                 if others:
-                    n = min(abs(size), int(pos.get("size") or 0))
+                    # only what is beyond the other trades' contracts: this trade's own exchange stop may already have
+                    # filled (4 Nov 2026: gold #2's stop filled, then this sold gold #1's 8 contracts as well)
+                    theirs = sum(int(r.get("size") or 0) for _, r in others)
+                    n = max(0, min(abs(size) - theirs, int(pos.get("size") or 0)))
                     if n:
                         await self.client.place_market(pos["product_id"], "sell" if size > 0 else "buy", n,
                                                        reduce_only=True)
