@@ -1960,6 +1960,13 @@ async def _api_debug(runner, request: web.Request) -> web.Response:
     )
 
 
+async def _integration_health(runner, request: web.Request) -> web.Response:
+    """Per-feed last success, error count, latency, and fresh/degraded/stale/erroring."""
+    from collectors.source_health import get_health
+
+    return _json_response(get_health().snapshot())
+
+
 async def _health(runner, request: web.Request) -> web.Response:
     # Counts priced symbols, not watchlist size: the systemd/uptime check
     # should go red when every feed is down, not merely when the DB row count
@@ -7893,6 +7900,7 @@ async def make_app(runner) -> web.Application:
     _register_portal(app)
     app.router.add_get("/api/tables", _bind(_api_tables))
     app.router.add_get("/health", _bind(_health))
+    app.router.add_get("/integration/v1/health", _bind(_integration_health))
     app.router.add_get("/api/status", _bind(_api_status))
     app.router.add_get("/api/debug", _bind(_api_debug))
     from scheduler.settings_page import register as _register_settings

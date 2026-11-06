@@ -765,6 +765,12 @@ class Settings(BaseSettings):
     # Empty = none, which is right while nothing sits in front of :8080.
     trusted_proxy_ips: str = ""
     sentiment_feeds_enabled: bool = True
+    # Feed health (collectors/source_health.py). The tracker always logs and
+    # serves GET /integration/v1/health. Telegram stays off unless this is set.
+    source_health_notify: bool = False
+    source_health_stale_after_seconds: float = 300.0
+    source_health_erroring_after: int = 3
+    source_health_degraded_latency_ms: float = 5000.0
     # Headlines from the news scorer -> CryptoState.sentiment_score, every 5 min.
     news_sentiment_enabled: bool = True
     # RSI divergence detector. It never fired before (window too short); now
