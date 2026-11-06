@@ -256,6 +256,12 @@ class BinanceKlines:
         """
         if self.store is None:
             return 0
+        from collectors.source_health import watching
+
+        async with watching("binance_klines") as outcome:
+            return await self._fetch_watched(outcome)
+
+    async def _fetch_watched(self, outcome: dict) -> int:
         symbols = await self.store.get_symbols()
         self.refreshed = set()
         self.status = {}
@@ -286,6 +292,14 @@ class BinanceKlines:
         await asyncio.gather(*(_one(sym) for sym in symbols))
         if self.refreshed:
             self.last_success = datetime.now(UTC)
-        log.info("binance_klines_done", refreshed=len(self.refreshed),
+        refreshed_n = len(self.refreshed)
+        log.info("binance_klines_done", refreshed=refreshed_n,
                  requested=len(symbols), host=self.host, error=self.last_error)
-        return len(self.refreshed)
+        outcome["attempted"] = len(symbols)
+        outcome["failed"] = max(0, len(symbols) - refreshed_n)
+        outcome["ok"] = refreshed_n > 0 or not symbols
+        if not outcome["ok"]:
+            outcome["error"] = self.last_error or "no candles"
+        elif outcome["failed"] and self.last_error:
+            outcome["note"] = self.last_error
+        return refreshed_n

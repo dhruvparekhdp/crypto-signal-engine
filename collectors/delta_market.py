@@ -183,6 +183,12 @@ class DeltaMarket:
         """Refresh 1m candles for every watchlist symbol. Returns how many succeeded."""
         if self.store is None:
             return 0
+        from collectors.source_health import watching
+
+        async with watching("delta_klines") as outcome:
+            return await self._fetch_watched(outcome)
+
+    async def _fetch_watched(self, outcome: dict) -> int:
         symbols = await self.store.get_symbols()
         self.refreshed = set()
         self.status = {}
@@ -226,6 +232,14 @@ class DeltaMarket:
             log.debug("delta_mark_price_push_failed", error=str(e)[:120])
         if self.refreshed:
             self.last_success = datetime.now(UTC)
-        log.info("delta_klines_done", refreshed=len(self.refreshed),
+        refreshed_n = len(self.refreshed)
+        log.info("delta_klines_done", refreshed=refreshed_n,
                  requested=len(symbols), error=self.last_error)
-        return len(self.refreshed)
+        outcome["attempted"] = len(symbols)
+        outcome["failed"] = max(0, len(symbols) - refreshed_n)
+        outcome["ok"] = refreshed_n > 0 or not symbols
+        if not outcome["ok"]:
+            outcome["error"] = self.last_error or "no candles"
+        elif outcome["failed"] and self.last_error:
+            outcome["note"] = self.last_error
+        return refreshed_n

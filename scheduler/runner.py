@@ -353,7 +353,28 @@ class AppRunner:
         # Telegram alerts (fire on 1st failure, then every 3rd).
         self._llm_fail_counts: dict[str, int] = {}
         self.sync_collectors()
+        # Feed health may notify through the existing Telegram bot. The flag
+        # defaults off, so installing the hook sends nothing until it is set.
+        from collectors.source_health import get_registry
+        get_registry().set_hook(self._notify_source_health)
 
+
+    async def _notify_source_health(self, feed: str, status: str, detail: dict) -> None:
+        """Tell the owner a data source changed state. Off unless the flag is set.
+
+        Uses the existing Telegram notifier. It never places or changes an order.
+        """
+        if not getattr(settings, "source_health_notify_enabled", False):
+            return
+        when = detail.get("last_success_at") or "never"
+        text = (f"Data source {feed} is {status}. "
+                f"errors={detail.get('error_count', 0)} "
+                f"latency_ms={detail.get('last_latency_ms')} "
+                f"last_success={when}")
+        err = str(detail.get("last_error") or "").strip()
+        if err:
+            text += f"\n{err[:160]}"
+        await self.notifier.send_text(text)
 
     def sync_collectors(self) -> None:
         """Collector switches from settings. Delta-only / Binance-only force others off."""

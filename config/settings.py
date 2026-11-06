@@ -653,6 +653,18 @@ class Settings(BaseSettings):
     # and the cost of believing one bad print is a signal built on it.
     max_price_jump_pct: float = 0.60
 
+    # Data-source health (CRY-004). Each feed records its last success, error
+    # count and latency. A feed goes stale after its own poll window (three
+    # missed polls) or this default, degraded when a fetch is slower than
+    # source_health_degraded_latency_ms or at least half the symbols fail,
+    # and erroring after source_health_error_threshold consecutive failures.
+    # The notifier hook stays off until source_health_notify_enabled is set.
+    source_health_stale_after_seconds: float = 180.0
+    source_health_degraded_latency_ms: float = 5000.0
+    source_health_error_threshold: int = 3
+    source_health_partial_fail_ratio: float = 0.5
+    source_health_notify_enabled: bool = False
+
     # Ceiling on a published target. The level policy derives distance from
     # ATR and has a floor but no roof, so a corrupted ATR produced a 43.5%
     # scalp target with a 36-minute horizon. Past this the setup is not

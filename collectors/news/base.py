@@ -6,6 +6,7 @@ the scheduler — the owner switches parts on from /settings (Oct 2026).
 """
 from __future__ import annotations
 
+import time
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
@@ -79,20 +80,39 @@ class NewsCollector:
         raise NotImplementedError
 
     async def poll_and_store(self, session) -> PollResult:
+        started = time.perf_counter()
         try:
             async with session.begin_nested():
                 n = await self.ingest(session)
-            return self._mark_ok(n, f"stored {n} rows")
+            result = self._mark_ok(n, f"stored {n} rows")
+            await self._report_source(True, started, "")
+            return result
         except Exception as e:
-            return self._mark_error(str(e))
+            result = self._mark_error(str(e))
+            await self._report_source(False, started, result.message or str(e))
+            return result
 
     async def poll(self) -> PollResult:
         """Health check / tests: fetch without requiring a session."""
+        started = time.perf_counter()
         try:
             n = await self._fetch_count()
-            return self._mark_ok(n, f"{n} items")
+            result = self._mark_ok(n, f"{n} items")
+            await self._report_source(True, started, "")
+            return result
         except Exception as e:
-            return self._mark_error(str(e))
+            result = self._mark_error(str(e))
+            await self._report_source(False, started, result.message or str(e))
+            return result
+
+    async def _report_source(self, ok: bool, started: float, error: str) -> None:
+        from collectors.source_health import report_fetch
+        await report_fetch(
+            f"news:{self.collector_id or 'unknown'}",
+            ok=ok,
+            latency_ms=max(0.0, (time.perf_counter() - started) * 1000.0),
+            error=error,
+        )
 
     async def _fetch_count(self) -> int:
         raise NotImplementedError

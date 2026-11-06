@@ -1960,18 +1960,46 @@ async def _api_debug(runner, request: web.Request) -> web.Response:
     )
 
 
+async def _data_source_health() -> dict | None:
+    """Feed snapshot for /health and /integration/v1/health. None if it cannot be built.
+
+    Liveness stays "ok" even when a feed is stale: a bad upstream must not make
+    systemd restart the process. The feed rollup lives under data_sources.
+    """
+    try:
+        from collectors.source_health import get_registry
+        reg = get_registry()
+        body = reg.snapshot()
+        await reg.publish_pending()
+        return body
+    except Exception:
+        import structlog
+        structlog.get_logger().warning("source_health_snapshot_failed")
+        return None
+
+
 async def _health(runner, request: web.Request) -> web.Response:
     # Counts priced symbols, not watchlist size: the systemd/uptime check
     # should go red when every feed is down, not merely when the DB row count
-    # happens to be non-zero.
+    # happens to be non-zero. status stays "ok" for that same reason — feed
+    # health is reported beside it, not instead of process liveness.
     states = await runner.crypto_store.get_all()
     priced = sum(1 for s in states if s.current_price > 0)
     uptime = int((datetime.now(UTC) - _start_time).total_seconds())
-    return web.Response(
-        text=json.dumps({"status": "ok", "symbols_tracked": len(states),
-                         "symbols_priced": priced, "uptime_seconds": uptime}),
-        content_type="application/json",
-    )
+    body = {"status": "ok", "symbols_tracked": len(states),
+            "symbols_priced": priced, "uptime_seconds": uptime}
+    sources = await _data_source_health()
+    if sources is not None:
+        body["data_sources"] = sources
+    return web.Response(text=json.dumps(body), content_type="application/json")
+
+
+async def _integration_health(runner, request: web.Request) -> web.Response:
+    """GET /integration/v1/health — read-only per-feed health. No orders, no secrets."""
+    sources = await _data_source_health()
+    if sources is None:
+        sources = {"status": "ok", "notify_enabled": False, "feeds": []}
+    return web.Response(text=json.dumps(sources), content_type="application/json")
 
 
 # ── Dashboard HTML ────────────────────────────────────────────────────────────
@@ -7893,6 +7921,7 @@ async def make_app(runner) -> web.Application:
     _register_portal(app)
     app.router.add_get("/api/tables", _bind(_api_tables))
     app.router.add_get("/health", _bind(_health))
+    app.router.add_get("/integration/v1/health", _bind(_integration_health))
     app.router.add_get("/api/status", _bind(_api_status))
     app.router.add_get("/api/debug", _bind(_api_debug))
     from scheduler.settings_page import register as _register_settings
