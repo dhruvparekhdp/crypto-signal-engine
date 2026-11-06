@@ -17,6 +17,8 @@ import time
 from dataclasses import dataclass
 from urllib.parse import urlencode
 
+from execution import live_guard
+
 LIVE_URL = "https://fapi.binance.com"
 TESTNET_URL = "https://testnet.binancefuture.com"
 
@@ -141,6 +143,7 @@ class BinanceFutures:
 
     # ── writes ─────────────────────────────────────────────────
     async def prepare(self, symbol: str, leverage: int) -> None:
+        live_guard.assert_live_trading_allowed()
         try:
             await self._request("POST", "/fapi/v1/marginType", {"symbol": symbol.upper(), "marginType": "ISOLATED"})
         except BinanceError as e:
@@ -149,6 +152,7 @@ class BinanceFutures:
         await self._request("POST", "/fapi/v1/leverage", {"symbol": symbol.upper(), "leverage": int(leverage)})
 
     async def market(self, symbol: str, side: str, qty: float, reduce_only: bool = False, client_id: str | None = None) -> dict:
+        live_guard.assert_live_trading_allowed()
         body = await self._request("POST", "/fapi/v1/order", {
             "symbol": symbol.upper(), "side": side, "type": "MARKET", "quantity": f"{qty}",
             "reduceOnly": "true" if reduce_only else None, "newClientOrderId": client_id, "newOrderRespType": "RESULT"})
@@ -158,6 +162,7 @@ class BinanceFutures:
     async def protect(self, symbol: str, close_side: str, kind: str, trigger: float) -> dict:
         """Server-side stop or target that closes the whole position at the mark price. kind: STOP_MARKET or
         TAKE_PROFIT_MARKET."""
+        live_guard.assert_live_trading_allowed()
         params = {"symbol": symbol.upper(), "side": close_side, "type": kind, "stopPrice": f"{trigger}",
                   "closePosition": "true", "workingType": "MARK_PRICE", "priceProtect": "true"}
         try:
@@ -172,6 +177,7 @@ class BinanceFutures:
         return {"id": body.get("algoId"), "via": "algo"}
 
     async def cancel_all(self, symbol: str) -> None:
+        live_guard.assert_live_trading_allowed()
         await self._request("DELETE", "/fapi/v1/allOpenOrders", {"symbol": symbol.upper()})
         try:
             await self._request("DELETE", "/fapi/v1/algoOpenOrders", {"symbol": symbol.upper()})

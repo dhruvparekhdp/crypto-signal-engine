@@ -34,6 +34,8 @@ log = structlog.get_logger()
 async def main() -> None:
     configure_logging()
     log.info("crypto_signal_engine_starting")
+    from execution.live_guard import trading_mode_fields
+    log.info("trading_mode", **trading_mode_fields())
     import sys
 
     from scheduler.alerts import excepthook

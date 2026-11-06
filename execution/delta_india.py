@@ -17,6 +17,8 @@ from dataclasses import dataclass
 from typing import Any
 from urllib.parse import urlencode
 
+from execution import live_guard
+
 INDIA_URL = "https://api.india.delta.exchange"
 INDIA_TESTNET_URL = "https://cdn-ind.testnet.deltaex.org"
 USER_AGENT = "crypto-signal-engine/delta-india"
@@ -279,6 +281,7 @@ class DeltaIndia:
     async def place_market(self, product_id: int, side: str, size: int,
                            reduce_only: bool = False) -> dict:
         """side: buy|sell. size: integer contracts. Requires Trading permission on the key."""
+        live_guard.assert_live_trading_allowed()
         body = {
             "product_id": product_id,
             "size": int(size),
@@ -290,6 +293,7 @@ class DeltaIndia:
 
     async def place_stop_market(self, product_id: int, side: str, size: int,
                                 stop_price: float) -> dict:
+        live_guard.assert_live_trading_allowed()
         body = {
             "product_id": product_id,
             "size": int(size),
@@ -303,6 +307,7 @@ class DeltaIndia:
 
     async def place_take_profit_market(self, product_id: int, side: str, size: int,
                                        stop_price: float) -> dict:
+        live_guard.assert_live_trading_allowed()
         body = {
             "product_id": product_id,
             "size": int(size),
@@ -315,6 +320,7 @@ class DeltaIndia:
         return await self._request("POST", "/v2/orders", body=body)
 
     async def cancel_all(self, product_id: int) -> dict:
+        live_guard.assert_live_trading_allowed()
         # The product goes in the JSON body: as a query parameter Delta signs without it (testnet 14 Oct:
         # 401 Signature Mismatch, signature_data 'DELETE<ts>/v2/orders/all')
         return await self._request("DELETE", "/v2/orders/all",
@@ -331,11 +337,13 @@ class DeltaIndia:
 
     async def edit_stop(self, order_id: int, product_id: int, size: int, stop_price: float) -> dict:
         """Move an existing stop order (PUT /v2/orders)."""
+        live_guard.assert_live_trading_allowed()
         body = {"id": int(order_id), "product_id": int(product_id), "size": int(size),
                 "stop_price": _px(stop_price)}
         return await self._request("PUT", "/v2/orders", body=body)
 
     async def cancel_order(self, order_id: int, product_id: int) -> dict:
+        live_guard.assert_live_trading_allowed()
         return await self._request("DELETE", "/v2/orders", body={"id": int(order_id), "product_id": int(product_id)})
 
     async def trading_status(self, symbol: str) -> str:
@@ -357,6 +365,7 @@ class DeltaIndia:
     async def set_leverage(self, product_id: int, leverage: int) -> dict:
         """Order leverage for one product on this account (POST /v2/products/{id}/orders/leverage). Delta keeps it
         per product per account; a live account's default can be 100x+ (17 Oct 2026 review)."""
+        live_guard.assert_live_trading_allowed()
         return await self._request("POST", f"/v2/products/{int(product_id)}/orders/leverage",
                                    body={"leverage": str(int(leverage))})
 

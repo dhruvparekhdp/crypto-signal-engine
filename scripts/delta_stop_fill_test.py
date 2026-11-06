@@ -17,6 +17,7 @@ SYM, DSYM = "adausdt", "ADAUSD"
 async def main() -> int:
     from config.overrides import apply
     from config.settings import settings
+    from execution import live_guard
     from execution.delta_book import DeltaBook
     from execution.delta_india import USER_AGENT, DeltaIndia
     from scheduler.keys_page import _stored
@@ -62,7 +63,7 @@ async def main() -> int:
                 sl = [o for o in orders if o.get("stop_order_type") == "stop_loss_order"]
                 if sl and abs(float(sl[0].get("stop_price") or 0) - want) > tick / 2:
                     try:
-                        await c.edit_stop(sl[0]["id"], p.id, int(plan.size), want)
+                        await live_guard.delta_edit_stop(c, sl[0]["id"], p.id, int(plan.size), want)
                     except Exception as e:  # noqa: BLE001
                         print("  edit refused (fine if immediate):", str(e)[:120])
                 await asyncio.sleep(5)
@@ -80,11 +81,13 @@ async def main() -> int:
             step("our record removed", DSYM not in (book._load_state().get("positions") or {}))
             _ = st
         finally:
+            # Cleanup is an order path too: it raises without the live-trading flags.
             try:
                 size = await c.position_size(p.id)
                 if size:
-                    await c.place_market(p.id, "buy" if size < 0 else "sell", abs(size), reduce_only=True)
-                await c.cancel_all(p.id)
+                    await live_guard.delta_place_market(
+                        c, p.id, "buy" if size < 0 else "sell", abs(size), reduce_only=True)
+                await live_guard.delta_cancel_all(c, p.id)
             except Exception as e:  # noqa: BLE001
                 print("cleanup warning", str(e)[:120])
     print(f"{sum(ok)}/{len(ok)} passed")
