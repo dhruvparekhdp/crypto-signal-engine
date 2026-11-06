@@ -161,8 +161,16 @@ class CoinDCXCollector:
         self.futures_symbols: set[str] = set()
 
     async def fetch(self) -> None:
+        from collectors.source_health import watching
+
+        async with watching("coindcx") as outcome:
+            await self._fetch_watched(outcome)
+
+    async def _fetch_watched(self, outcome: dict) -> None:
         symbols = await self.store.get_symbols()
+        outcome["attempted"] = len(symbols)
         if not symbols:
+            outcome["ok"] = True
             return
 
         try:
@@ -172,6 +180,8 @@ class CoinDCXCollector:
             if resp.status_code != 200:
                 self._consecutive_failures += 1
                 log.warning("coindcx_bad_status", status=resp.status_code, body=resp.text[:200])
+                outcome["error"] = f"HTTP {resp.status_code}"
+                outcome["failed"] = len(symbols)
                 return
 
             rows = resp.json()
@@ -220,9 +230,17 @@ class CoinDCXCollector:
                 log.warning("coindcx_symbols_unmatched", symbols=unmatched)
             self._consecutive_failures = 0
             log.info("coindcx_poll_done", matched=len(matched), requested=len(symbols))
+            outcome["failed"] = len(unmatched)
+            outcome["ok"] = len(matched) > 0
+            if not outcome["ok"]:
+                outcome["error"] = "no markets matched"
+            elif unmatched:
+                outcome["note"] = "unmatched: " + ",".join(unmatched[:8])
         except Exception as exc:
             self._consecutive_failures += 1
             log.warning("coindcx_fetch_failed", error=str(exc))
+            outcome["error"] = f"{type(exc).__name__}: {exc}"
+            outcome["failed"] = len(symbols)
 
     def _pair_variants(self, symbol: str) -> tuple[str, ...]:
         """

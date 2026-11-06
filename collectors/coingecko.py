@@ -96,61 +96,76 @@ class CoinGeckoCollector:
         return None
 
     async def fetch(self) -> None:
-        symbols = await self.store.get_symbols()
-        if not symbols:
-            return
+        from collectors.source_health import watching
 
-        try:
-            async with httpx.AsyncClient(timeout=15.0) as client:
-                id_map: dict[str, str] = {}  # coin_id -> our symbol
-                for sym in symbols:
-                    coin_id = await self._resolve_id(client, _base_symbol(sym))
-                    if coin_id:
-                        id_map[coin_id] = sym
+        async with watching("coingecko") as outcome:
+            symbols = await self.store.get_symbols()
+            outcome["attempted"] = len(symbols)
+            if not symbols:
+                outcome["ok"] = True
+                return
 
-                if not id_map:
-                    log.warning("coingecko_no_symbols_resolved", symbols=symbols)
-                    return
+            try:
+                async with httpx.AsyncClient(timeout=15.0) as client:
+                    id_map: dict[str, str] = {}  # coin_id -> our symbol
+                    for sym in symbols:
+                        coin_id = await self._resolve_id(client, _base_symbol(sym))
+                        if coin_id:
+                            id_map[coin_id] = sym
 
-                resp = await client.get(
-                    f"{_API_BASE}/coins/markets",
-                    params={
-                        "vs_currency": "usd",
-                        "ids": ",".join(id_map.keys()),
-                        "price_change_percentage": "24h",
-                    },
-                    headers=self._headers(),
-                )
+                    if not id_map:
+                        log.warning("coingecko_no_symbols_resolved", symbols=symbols)
+                        outcome["error"] = "no symbols resolved"
+                        outcome["failed"] = len(symbols)
+                        return
 
-                if resp.status_code != 200:
-                    self._consecutive_failures += 1
-                    log.warning("coingecko_bad_status", status=resp.status_code,
-                                body=resp.text[:200])
-                    return
-
-                rows = resp.json()
-                now = datetime.now(timezone.utc)
-                updated = 0
-                for row in rows:
-                    sym = id_map.get(row.get("id", ""))
-                    if not sym:
-                        continue
-                    price = float(row.get("current_price") or 0.0)
-                    if price <= 0:
-                        continue
-                    await self.store.update_from_rest(
-                        symbol=sym,
-                        price=price,
-                        high_24h=float(row.get("high_24h") or price),
-                        low_24h=float(row.get("low_24h") or price),
-                        volume_24h=float(row.get("total_volume") or 0.0),
-                        change_24h_pct=float(row.get("price_change_percentage_24h") or 0.0),
-                        timestamp=now,
+                    resp = await client.get(
+                        f"{_API_BASE}/coins/markets",
+                        params={
+                            "vs_currency": "usd",
+                            "ids": ",".join(id_map.keys()),
+                            "price_change_percentage": "24h",
+                        },
+                        headers=self._headers(),
                     )
-                    updated += 1
 
-                self._consecutive_failures = 0
-                log.info("coingecko_poll_done", symbols=updated, requested=len(id_map))
-        except Exception as exc:
-            self._consecutive_failures += 1
-            log.warning("coingecko_fetch_failed", error=str(exc))
+                    if resp.status_code != 200:
+                        self._consecutive_failures += 1
+                        log.warning("coingecko_bad_status", status=resp.status_code,
+                                    body=resp.text[:200])
+                        outcome["error"] = f"HTTP {resp.status_code}"
+                        outcome["failed"] = len(symbols)
+                        return
+
+                    rows = resp.json()
+                    now = datetime.now(timezone.utc)
+                    updated = 0
+                    for row in rows:
+                        sym = id_map.get(row.get("id", ""))
+                        if not sym:
+                            continue
+                        price = float(row.get("current_price") or 0.0)
+                        if price <= 0:
+                            continue
+                        await self.store.update_from_rest(
+                            symbol=sym,
+                            price=price,
+                            high_24h=float(row.get("high_24h") or price),
+                            low_24h=float(row.get("low_24h") or price),
+                            volume_24h=float(row.get("total_volume") or 0.0),
+                            change_24h_pct=float(row.get("price_change_percentage_24h") or 0.0),
+                            timestamp=now,
+                        )
+                        updated += 1
+
+                    self._consecutive_failures = 0
+                    log.info("coingecko_poll_done", symbols=updated, requested=len(id_map))
+                    outcome["failed"] = max(0, len(symbols) - updated)
+                    outcome["ok"] = updated > 0
+                    if not outcome["ok"]:
+                        outcome["error"] = "no prices"
+            except Exception as exc:
+                self._consecutive_failures += 1
+                log.warning("coingecko_fetch_failed", error=str(exc))
+                outcome["error"] = f"{type(exc).__name__}: {exc}"
+                outcome["failed"] = len(symbols)

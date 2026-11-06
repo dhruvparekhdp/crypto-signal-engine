@@ -68,20 +68,28 @@ CROWDED_FUNDING_PER_8H = 0.0003
 
 async def fetch_fear_greed(timeout: float = 10.0) -> FearGreed | None:
     """One value for the whole crypto market. Free, no key, updated daily."""
-    try:
-        async with httpx.AsyncClient(timeout=timeout) as client:
-            r = await client.get(FEAR_GREED_URL, params={"limit": 1})
-            if r.status_code != 200:
-                log.warning("fng.http", status=r.status_code)
-                return None
-            rows = r.json().get("data") or []
-            if not rows:
-                return None
-            return FearGreed(value=int(rows[0]["value"]),
-                             classification=str(rows[0].get("value_classification", "")))
-    except Exception as exc:
-        log.warning("fng.failed", error=f"{type(exc).__name__}: {exc}")
-        return None
+    from collectors.source_health import watching
+
+    async with watching("fear_greed") as outcome:
+        try:
+            async with httpx.AsyncClient(timeout=timeout) as client:
+                r = await client.get(FEAR_GREED_URL, params={"limit": 1})
+                if r.status_code != 200:
+                    log.warning("fng.http", status=r.status_code)
+                    outcome["error"] = f"HTTP {r.status_code}"
+                    return None
+                rows = r.json().get("data") or []
+                if not rows:
+                    outcome["error"] = "empty index"
+                    return None
+                value = FearGreed(value=int(rows[0]["value"]),
+                                  classification=str(rows[0].get("value_classification", "")))
+                outcome["ok"] = True
+                return value
+        except Exception as exc:
+            log.warning("fng.failed", error=f"{type(exc).__name__}: {exc}")
+            outcome["error"] = f"{type(exc).__name__}: {exc}"
+            return None
 
 
 def fear_greed_adjustment(fg: FearGreed | None, direction: str) -> SentimentAdjustment:

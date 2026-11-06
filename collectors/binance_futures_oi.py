@@ -61,21 +61,29 @@ class BinanceFuturesOICollector:
     async def fetch_all(self) -> int:
         if self.store is None:
             return 0
+        from collectors.source_health import watching
 
-        states = await self.store.get_all()
-        if not states:
-            return 0
+        async with watching("binance_oi") as outcome:
+            states = await self.store.get_all()
+            outcome["attempted"] = len(states)
+            if not states:
+                outcome["ok"] = True
+                return 0
 
-        updated = 0
-        async with httpx.AsyncClient(timeout=self.timeout) as client:
-            for state in states:
-                res = await self.fetch_symbol_oi(client, state.symbol)
-                if res is not None:
-                    curr_oi, change_1h = res
-                    state.open_interest = curr_oi
-                    state.oi_change_1h_pct = change_1h
-                    updated += 1
+            updated = 0
+            async with httpx.AsyncClient(timeout=self.timeout) as client:
+                for state in states:
+                    res = await self.fetch_symbol_oi(client, state.symbol)
+                    if res is not None:
+                        curr_oi, change_1h = res
+                        state.open_interest = curr_oi
+                        state.oi_change_1h_pct = change_1h
+                        updated += 1
 
-        self.last_fetch_success = updated > 0
-        log.info("binance_futures_oi_poll_done", updated=updated, total=len(states))
-        return updated
+            self.last_fetch_success = updated > 0
+            log.info("binance_futures_oi_poll_done", updated=updated, total=len(states))
+            outcome["failed"] = max(0, len(states) - updated)
+            outcome["ok"] = updated > 0
+            if not outcome["ok"]:
+                outcome["error"] = "no open interest"
+            return updated

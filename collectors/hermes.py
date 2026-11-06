@@ -41,6 +41,7 @@ from __future__ import annotations
 
 import hashlib
 import re
+import time
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from xml.etree import ElementTree
@@ -314,21 +315,35 @@ async def fetch_feeds(timeout: float = 20.0,
     batch = Batch()
     async with httpx.AsyncClient(timeout=timeout, follow_redirects=True,
                                  headers={"User-Agent": "hermes/1.0"}) as client:
+        from collectors.source_health import report_fetch
+
         for source, url in (feeds or FEEDS):
+            started = time.perf_counter()
             try:
                 resp = await client.get(url)
+                latency_ms = max(0.0, (time.perf_counter() - started) * 1000.0)
                 if resp.status_code != 200:
                     log.warning("hermes_feed_status", source=source, status=resp.status_code)
                     batch.feeds_failed += 1
+                    await report_fetch(
+                        f"rss:{source}", ok=False, latency_ms=latency_ms,
+                        error=f"HTTP {resp.status_code}",
+                    )
                     continue
                 found = parse_feed(resp.text, source)
                 for headline in found:
                     headline.symbol = guess_symbol(headline.headline)
                 batch.headlines.extend(found)
                 batch.feeds_read += 1
+                await report_fetch(f"rss:{source}", ok=True, latency_ms=latency_ms)
             except Exception as exc:
                 log.warning("hermes_feed_failed", source=source, error=str(exc)[:140])
                 batch.feeds_failed += 1
+                await report_fetch(
+                    f"rss:{source}", ok=False,
+                    latency_ms=max(0.0, (time.perf_counter() - started) * 1000.0),
+                    error=f"{type(exc).__name__}: {exc}",
+                )
 
     seen: set[str] = set()
     unique = []
