@@ -41,6 +41,9 @@ class CryptoSignal:
     # hold-time ceiling instead of the normal one — never anything else.
     precedent_extended_hold: bool = False
     trade_mode: str = "intraday"         # "intraday" | "delivery"
+    # Semver from analysis/strategy_catalog.py. Empty until a swing signal
+    # is built, and empty for detectors that are not in the catalog.
+    strategy_version: str = ""
     leverage_suggested: float = 10.0     # 5x-15x for intraday, 1x-3x for delivery
     tp1_price: float = 0.0               # First scale-out target (+1.0R)
     tp2_price: float = 0.0               # Second runner target (+2.0R to +2.5R)
@@ -114,4 +117,5 @@ def make_mirror_signal(sig: CryptoSignal) -> CryptoSignal:
         indicators_summary=sig.indicators_summary,
         timestamp=sig.timestamp,
         candidate_role="mirror",
+        strategy_version=sig.strategy_version,
     )

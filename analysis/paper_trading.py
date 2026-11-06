@@ -362,6 +362,7 @@ class Position:
     tp2_price: float = 0.0               # Second runner target (+2.0R to +2.5R)
     partial_closed: bool = False         # True once 50% scale-out is executed
     partial_pnl: float = 0.0             # Realized PnL from partial close
+    strategy_version: str = ""           # semver from analysis/strategy_catalog.py
 
     # Set once the position has been scaled in or out, because after that the
     # size no longer follows from margin x leverage / entry.
@@ -937,6 +938,11 @@ class ClosedTrade:
         return self.net_pnl > 0
 
 
+def _version_for(signal_type: str, timeframe: str) -> str:
+    from analysis.strategy_catalog import version_for
+    return version_for(signal_type, timeframe)
+
+
 def open_position(
     symbol: str,
     side: Side,
@@ -960,6 +966,7 @@ def open_position(
     trade_mode: str = "intraday",
     tp1_price: float = 0.0,
     tp2_price: float = 0.0,
+    strategy_version: str = "",
 ) -> Position:
     # The signal quotes a price; we fill somewhere near it. Everything after
     # this point — stop, target, liquidation, size — is measured from where we
@@ -1000,6 +1007,7 @@ def open_position(
         trade_mode=trade_mode,
         tp1_price=tp1_price,
         tp2_price=tp2_price or target,
+        strategy_version=strategy_version or _version_for(signal_type, timeframe),
     )
     # Charged on what actually filled, not on what we asked for. With a coarse
     # lot step those differ by enough to matter on a small wallet.

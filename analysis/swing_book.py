@@ -285,6 +285,11 @@ def levels(entry: float, side: int, atr: float) -> tuple[float, float] | None:
     return entry - side * dist, entry + side * REWARD_RISK * dist
 
 
+def _strategy_version(strategy_id: str) -> str:
+    from analysis.strategy_catalog import version_for
+    return version_for(f"swing_{strategy_id}")
+
+
 def to_signal(setup: SwingSetup, price: float, now: datetime) -> CryptoSignal | None:
     lv = levels(price, setup.side, setup.atr)
     if lv is None:
@@ -300,7 +305,8 @@ def to_signal(setup: SwingSetup, price: float, now: datetime) -> CryptoSignal | 
         confidence=0.8, current_price=price, target_price=target, stop_loss=stop,
         edge_pct=0.0, stake_pct=0.0, timeframe=setup.tf, sentiment_score=0.0,
         indicators_summary=f"atr{setup.tf}={setup.atr:.6g} bar_close={setup.close:.6g}",
-        timestamp=now, trade_mode="swing", leverage_suggested=1.0)
+        timestamp=now, trade_mode="swing", leverage_suggested=1.0,
+        strategy_version=_strategy_version(setup.strategy))
     # roadmap Q-9: the backtest fills at the first price after this bar's close; keep it to measure the shortfall
     sig.bar_close_price = setup.close
     sig.bar_close_ms = setup.bar_open_ms + INTERVAL_MS[setup.tf]
