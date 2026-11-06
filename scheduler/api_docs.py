@@ -43,6 +43,8 @@ ENDPOINTS: tuple[tuple[str, str, str, str, dict], ...] = (
     ("Health & speed", "GET", "/api/debug/coindcx", "What CoinDCX returns for a coin.",
      {"symbol": "btcusdt"}),
     ("Health & speed", "GET", "/health", "Liveness check.", {}),
+    ("Health & speed", "GET", "/integration/v1/health",
+     "Per-feed last success, error count, latency, and fresh/degraded/stale/erroring.", {}),
     ("Paper trading", "GET", "/api/paper", "Wallet, open positions, trade log.", {}),
     ("System", "GET", "/api/keys", "Admin: where each API key comes from (encrypted database / .env / missing); values only via reveal.", {}),
     ("System", "POST", "/api/keys/save", "Admin: store a key (encrypted) and apply it now.", {}),

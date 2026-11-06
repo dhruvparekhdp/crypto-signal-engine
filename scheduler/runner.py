@@ -439,11 +439,36 @@ class AppRunner:
         self._sync_binance_ws()
         log.info("settings_changed", keys=keys)
 
+    def _bind_source_health(self) -> None:
+        """Point the feed tracker at this process. Alerts stay off by default."""
+        from collectors.source_health import Thresholds, get_health
+        get_health().bind(
+            thresholds=Thresholds(
+                stale_after_s=settings.source_health_stale_after_seconds,
+                erroring_after_errors=settings.source_health_erroring_after,
+                degraded_latency_ms=settings.source_health_degraded_latency_ms,
+            ),
+            notify=self._notify_source_health,
+            notify_enabled=bool(settings.source_health_notify),
+        )
+
+    def _notify_source_health(self, text: str) -> None:
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            return
+        loop.create_task(self.notifier.send_text(text))
+
     async def _coindcx_job(self) -> None:
         if not self.collector_enabled.get("coindcx", True):
             return
+        before = self.coindcx._consecutive_failures
         try:
-            await self.coindcx.fetch()
+            from collectors.source_health import watch
+            await watch(
+                "coindcx", self.coindcx.fetch(),
+                failed=lambda _r: self.coindcx._consecutive_failures > before,
+            )
         except Exception:
             log.exception("coindcx_job_failed")
 
@@ -457,7 +482,11 @@ class AppRunner:
         if self.collector_enabled.get("delta") and (
                 settings.delta_only_mode or settings.delta_india_data_enabled):
             try:
-                await self.delta_market.fetch()
+                from collectors.source_health import watch
+                await watch(
+                    "delta_klines", self.delta_market.fetch(),
+                    failed=lambda updated: not updated,
+                )
             except Exception:
                 log.exception("delta_klines_job_failed")
             if settings.delta_only_mode:
@@ -469,7 +498,11 @@ class AppRunner:
         if not self.collector_enabled.get("binance_klines", settings.binance_klines_enabled):
             return
         try:
-            await self.klines.fetch()
+            from collectors.source_health import watch
+            await watch(
+                "binance_klines", self.klines.fetch(),
+                failed=lambda updated: not updated,
+            )
         except Exception:
             log.exception("klines_job_failed")
 
@@ -496,8 +529,13 @@ class AppRunner:
     async def _coingecko_job(self) -> None:
         if not self.collector_enabled.get("coingecko", True):
             return
+        before = self.coingecko._consecutive_failures
         try:
-            await self.coingecko.fetch()
+            from collectors.source_health import watch
+            await watch(
+                "coingecko", self.coingecko.fetch(),
+                failed=lambda _r: self.coingecko._consecutive_failures > before,
+            )
         except Exception:
             log.exception("coingecko_job_failed")
 
@@ -509,7 +547,12 @@ class AppRunner:
         if not settings.sentiment_feeds_enabled:
             return
         try:
-            self.fear_greed = await fetch_fear_greed()
+            from collectors.source_health import watch
+            reading = await watch(
+                "fear_greed", fetch_fear_greed(),
+                failed=lambda reading: reading is None,
+            )
+            self.fear_greed = reading
             if self.fear_greed:
                 log.info("fear_greed", value=self.fear_greed.value,
                          classification=self.fear_greed.classification)
@@ -3296,6 +3339,8 @@ class AppRunner:
         # exists to make visible.
         states = await self.crypto_store.get_all()
         priced = sum(1 for st in states if st.current_price > 0)
+        from collectors.source_health import get_health
+        get_health().log_snapshot()
         log.info(
             "heartbeat",
             symbols_tracked=len(states),
@@ -4822,6 +4867,7 @@ class AppRunner:
         await self._load_crypto_watchlist()
         # Settings saved on /settings, before anything is scheduled or started.
         await self.load_settings_overrides()
+        self._bind_source_health()
 
         # Measure before anything is scheduled, so every job is timed and a
         # stalled event loop can be traced to the job that stalled it.
