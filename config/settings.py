@@ -1,7 +1,17 @@
 from __future__ import annotations
 
+import os
+
 from pydantic import SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+def _settings_env_file() -> str | None:
+    """`.env` in production. Pytest sets CRYPTO_ENGINE_ENV_FILE empty so a
+    developer file (exchange keys, live switches) is not loaded."""
+    if "CRYPTO_ENGINE_ENV_FILE" not in os.environ:
+        return ".env"
+    return os.environ.get("CRYPTO_ENGINE_ENV_FILE") or None
 
 
 class Settings(BaseSettings):
@@ -10,7 +20,8 @@ class Settings(BaseSettings):
     Non-secret parameters and toggles are managed dynamically in the database
     via the /settings admin UI.
     """
-    model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
+    model_config = SettingsConfigDict(
+        env_file=_settings_env_file(), env_file_encoding="utf-8", extra="ignore")
 
     # Core Server & Storage
     database_url: str = "sqlite+aiosqlite:///./crypto_engine.db"

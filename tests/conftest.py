@@ -1,5 +1,13 @@
 import os
 
+from tests.offline_guard import EXCHANGE_ENV_KEYS, install
+
+# Must run before config.settings is imported. An empty value skips `.env`,
+# so a developer file cannot supply exchange keys or turn live trading on.
+# Only os.environ writes sit between imports: ruff E402 allows that, and a
+# loop or function call here would flag the imports below.
+os.environ["CRYPTO_ENGINE_ENV_FILE"] = ""
+
 # Default to in-memory SQLite during automated test runs so tests do not attempt
 # to connect to remote VPC databases like AWS RDS when running locally.
 os.environ.setdefault("DATABASE_URL", "sqlite+aiosqlite:///:memory:")
@@ -10,6 +18,15 @@ import tempfile as _tempfile
 os.environ.setdefault("LLM_BUDGET_PATH", os.path.join(_tempfile.mkdtemp(prefix="llm_budget_"), "budget.json"))
 
 import pytest as _pytest
+
+for _exchange_key in EXCHANGE_ENV_KEYS:
+    os.environ.pop(_exchange_key, None)
+# Safe even if the parent shell exported a live switch. Tests that need
+# another mode set it on the settings object, not via the environment.
+os.environ["LIVE_TRADING_MODE"] = "off"
+os.environ["DELTA_INDIA_MODE"] = "off"
+os.environ["DELTA_INDIA_LIVE_ORDERS"] = "false"
+install()
 
 
 @_pytest.fixture(autouse=True)
