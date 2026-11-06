@@ -224,3 +224,83 @@ async def test_2h_candidates_are_scored_in_paper_and_never_queued_for_a_trade(tm
     await r._candidate_book_job(now)
     book = json.loads((tmp_path / "c.json").read_text())
     assert sorted((t["track"], t["side"]) for t in book["open"]) == [("swing_2h", 1), ("swing_2h_mirror", -1)]
+
+
+def _open_swing(side=-1, entry=100.0, stop=105.0, sym="ETHUSDT"):
+    tr = cb.open_trade("swing", 11, sym, side, entry, stop, entry + side * 15, datetime(2026, 11, 1, 0, 0))
+    tr.update(entry=entry, entry_ts="2026-11-01T00:01:00", risk=abs(entry - stop), init_stop=stop, stop=stop,
+              target=entry + side * 15, best=entry, status="open")
+    return tr
+
+
+def test_a_flip_needs_a_losing_swing_trade_on_the_other_side_of_the_same_coin():
+    short = _open_swing()
+    assert cb.flip_candidates([short], "ethusdt", 1, 102.0) == [short]        # short, price up: losing
+    assert cb.flip_candidates([short], "ethusdt", 1, 98.0) == []              # winning: keep it
+    assert cb.flip_candidates([short], "ethusdt", -1, 102.0) == []            # same side: no flip
+    assert cb.flip_candidates([short], "btcusdt", 1, 102.0) == []             # another coin
+    cb.mark_flip(short, 102.0, datetime(2026, 11, 2), 99)
+    assert short["flip"]["r"] == pytest.approx(-0.4)
+    assert cb.flip_candidates([short], "ethusdt", 1, 103.0) == []             # flipped once only
+    mirror = {**_open_swing(), "track": "swing_mirror"}
+    assert cb.flip_candidates([mirror], "ethusdt", 1, 102.0) == []            # the control track never flips
+
+
+def test_the_hold_control_is_what_the_old_trade_made_after_the_flip():
+    tr = _open_swing()
+    cb.mark_flip(tr, 102.0, datetime(2026, 11, 2), 99)
+    cb._close(tr, 105.0, datetime(2026, 11, 3), "stop")                       # stopped at -1R after flipping at -0.4R
+    row = cb.hold_row(tr)
+    assert row["track"] == "swing_flip_hold" and row["r_net"] == pytest.approx(-0.6)
+    assert row["entry_ts"] == "2026-11-02T00:00:00"
+    assert cb.hold_row(_open_swing()) is None
+
+
+async def test_a_signal_against_a_losing_trade_opens_the_flip_and_stays_paper(tmp_path, monkeypatch):
+    import json
+
+    from sqlalchemy import update
+    from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+
+    from scheduler.runner import AppRunner
+    from storage.database import Base
+    from storage.models import CryptoSignalLog
+    from storage.repository import Repository
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+    sm = async_sessionmaker(engine, expire_on_commit=False)
+    monkeypatch.setattr("scheduler.runner.AsyncSessionFactory", sm)
+    now = datetime(2026, 11, 6, 12, 0)
+    async with sm() as s:
+        await Repository(s).log_crypto_signal(symbol="ethusdt", direction="long", signal_type="swing_donchian",
+                                              trigger_description="x", confidence=0.7, current_price=102.0,
+                                              target_price=111, stop_loss=99, edge_pct=0, stake_pct=0, timeframe="4h")
+        await s.execute(update(CryptoSignalLog).where(CryptoSignalLog.id == 1).values(
+            timestamp=now - timedelta(minutes=20), trade_mode="swing"))
+        await s.commit()
+    r = AppRunner()
+    r._CAND_OPEN, r._CAND_CLOSED = str(tmp_path / "c.json"), str(tmp_path / "c.jsonl")
+    (tmp_path / "c.json").write_text(json.dumps({"last_id": 0, "open": [{**_open_swing(), "last_ts": "2026-11-06T11:00:00"}], "started": now.isoformat(),
+                                                 "parents": {}, "btc_days": {}}))
+    calls = []
+
+    async def no_bars(*a):
+        return []
+
+    async def delta(*a, **k):
+        calls.append(a)
+    r._signal_bars, r._delta_call = no_bars, delta
+    await r._candidate_book_job(now)
+    book = json.loads((tmp_path / "c.json").read_text())
+    flip = [t for t in book["open"] if t["track"] == "swing_flip"]
+    assert len(flip) == 1 and flip[0]["side"] == 1 and flip[0]["label"] == "swing:11"
+    old = next(t for t in book["open"] if t["id"] == "swing:11")
+    assert old["flip"]["by"] == 1 and old["flip"]["r"] == pytest.approx(-0.4)
+    assert not calls                                                          # nothing reaches Delta
+
+
+def test_the_flip_has_a_name_and_a_control_on_the_scorecard():
+    from scheduler.candidates_api import NAMES
+    assert cb.CONTROL["swing_flip"] == "swing_flip_hold" and "swing_flip_hold" not in cb.CONTROL
+    assert "swing_flip" in NAMES and "swing_flip_hold" in NAMES

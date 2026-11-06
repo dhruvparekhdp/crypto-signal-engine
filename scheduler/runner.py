@@ -2150,6 +2150,14 @@ class AppRunner:
                          ("swing_ratchet", side, r.stop_loss, r.target_price, label),
                          ("swing_mirror", -side, 2 * r.current_price - r.stop_loss,
                           2 * r.current_price - r.target_price, label)]
+                # the flip (owner 6 Nov 2026, paper only): this signal is against a losing swing trade on the coin
+                for old in cb.flip_candidates(book["open"], r.symbol, side, r.current_price):
+                    cb.mark_flip(old, r.current_price, r.timestamp, r.id)
+                    tr = cb.open_trade("swing_flip", f"{r.id}~{old['sig_id']}", r.symbol, side, r.current_price,
+                                       r.stop_loss or 0.0, r.target_price or 0.0, label=old["id"], **args)
+                    if tr:
+                        book["open"].append(tr)
+                        opened += 1
             elif mode == "intraday":
                 if role == "primary":
                     plans = [("intraday_pick", side, r.stop_loss, r.target_price, "")]
@@ -2202,6 +2210,9 @@ class AppRunner:
             with open(self._CAND_CLOSED, "a") as fh:
                 for tr in closed:
                     fh.write(json.dumps(tr) + "\n")
+                    hold = cb.hold_row(tr)
+                    if hold:
+                        fh.write(json.dumps(hold) + "\n")
         tmp = path.with_suffix(".tmp")
         tmp.write_text(json.dumps(book))
         tmp.replace(path)

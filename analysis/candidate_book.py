@@ -17,6 +17,10 @@ Tracks
                        live news and must beat plain following
   swing_2h             paper-only 2h swing specs (settings.swing_candidate_strategies, 28 Oct 2026) with the live exit;
                        swing_2h_mirror is their control
+  swing_flip           owner 6 Nov 2026: a swing signal fires against a losing swing trade on the same coin: paper closes
+                       the old trade and takes the new side (signal's stop and target, live exit). Lab, family
+                       opposite_exit: +0.218 / +0.263R vs hold +0.213 / +0.255R, ~20 such trades a year, unproven.
+                       swing_flip_hold is its control: what the old trade made from that moment if simply held
   intraday_pick        intraday primary signals: their own stop and target, 24 h limit
   counter_trend        the engine's held-back counter-trend shorts ("mirror_shadow"): same exit
   intraday_mirror      mirrors of the picks: the control;  counter_trend_mirror: mirrors of the counter-trend shorts
@@ -38,12 +42,13 @@ IMPULSE_HOLD = timedelta(hours=72)        # analysis/impulse.HOLD_H: the lab's b
 RATCHET_FROM_R, RATCHET_STEP_R, RATCHET_TARGET_GAP_R, RATCHET_LOCK_GAP_R = 2.8, 0.25, 0.45, 0.5
 CONTROL = {"swing": "swing_mirror", "swing_2h": "swing_2h_mirror", "impulse_follow": "impulse_fade",
            "impulse_ai": "impulse_follow", "swing_ratchet": "swing", "intraday_pick": "intraday_mirror",
-           "counter_trend": "counter_trend_mirror",
+           "counter_trend": "counter_trend_mirror", "swing_flip": "swing_flip_hold",
            "stop_reverse_2r": "stop_same_side_2r", "stop_reverse_15r": "stop_same_side_2r",
            "fed_reaction": "fed_fade", "news_event_template": "news_event_template_ctrl",
            "risk_radar_paper": "risk_radar_paper_ctrl"}
 GATE = {"days": 28, "n": 100, "n_each_week_kind": 20}
 EXIT_OF = {"swing": "swing", "swing_mirror": "swing", "swing_2h": "swing", "swing_2h_mirror": "swing",
+           "swing_flip": "swing", "swing_flip_hold": "swing",
            "impulse_follow": "fixed", "impulse_fade": "fixed", "impulse_ai": "fixed", "swing_ratchet": "ratchet", "intraday_pick": "fixed",
            "counter_trend": "fixed", "intraday_mirror": "fixed", "counter_trend_mirror": "fixed",
            "stop_reverse_2r": "fixed", "stop_reverse_15r": "fixed", "stop_same_side_2r": "fixed",
@@ -139,6 +144,29 @@ def advance(tr: dict, bars) -> dict:
             _close(tr, c, ts, "time")
             break
     return tr
+
+
+def flip_candidates(open_trades: list[dict], symbol: str, side: int, price: float) -> list[dict]:
+    """Open 'swing' trades on this coin, on the other side, losing at this price, not flipped yet."""
+    sym = symbol.upper()
+    return [t for t in open_trades
+            if t.get("track") == "swing" and t.get("symbol") == sym and t.get("side") == -side and t.get("entry")
+            and not t.get("flip") and _r(t, price) < 0]
+
+
+def mark_flip(tr: dict, price: float, ts: datetime, by_signal) -> None:
+    tr["flip"] = {"ts": _naive(ts).isoformat(), "r": round(_r(tr, price), 4), "by": by_signal}
+
+
+def hold_row(tr: dict) -> dict | None:
+    """The control row for a flipped trade once it has closed: the R it made from the flip to its end. Costs are left
+    out because the old trade pays its round trip whether it closes at the flip or later."""
+    flip = tr.get("flip")
+    if not flip or tr.get("r_net") is None or not tr.get("risk"):
+        return None
+    gross = tr["r_net"] + COST * tr["entry"] / tr["risk"]
+    return {**tr, "id": f"swing_flip_hold:{tr['sig_id']}:{flip['by']}", "track": "swing_flip_hold", "label": "-",
+            "entry_ts": flip["ts"], "r_net": round(gross - flip["r"], 4)}
 
 
 def mark(tr: dict, price: float) -> dict | None:
