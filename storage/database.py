@@ -289,6 +289,21 @@ _COLUMN_MIGRATIONS: list[str] = [
         # meantime was destroy the evidence: the exact rows worth studying were
         # gone before anyone could read them, on a schedule nobody remembered.
         # Bad rows are a diagnosis problem, not a startup chore.
+        # Strategy declarations (CRY-005). Operational status is unchanged.
+        "ALTER TABLE strategy_registry ADD COLUMN IF NOT EXISTS name VARCHAR DEFAULT ''",
+        "ALTER TABLE strategy_registry ADD COLUMN IF NOT EXISTS version VARCHAR DEFAULT ''",
+        "ALTER TABLE strategy_registry ADD COLUMN IF NOT EXISTS "
+        "lifecycle VARCHAR DEFAULT 'research'",
+        "ALTER TABLE strategy_registry ADD COLUMN IF NOT EXISTS description TEXT DEFAULT ''",
+        "ALTER TABLE strategy_registry ADD COLUMN IF NOT EXISTS "
+        "parameter_schema TEXT DEFAULT '{}'",
+        "ALTER TABLE strategy_registry ADD COLUMN IF NOT EXISTS owner_notes TEXT DEFAULT ''",
+        "ALTER TABLE crypto_signal_log ADD COLUMN IF NOT EXISTS "
+        "strategy_version VARCHAR DEFAULT ''",
+        "ALTER TABLE paper_positions ADD COLUMN IF NOT EXISTS "
+        "strategy_version VARCHAR DEFAULT ''",
+        "ALTER TABLE paper_trades ADD COLUMN IF NOT EXISTS "
+        "strategy_version VARCHAR DEFAULT ''",
 ]
 
 

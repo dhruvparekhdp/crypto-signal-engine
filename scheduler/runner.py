@@ -576,6 +576,7 @@ class AppRunner:
         pos.locked_roe = getattr(row, "locked_roe", None)
         pos.stop_moved_by_profit_lock = getattr(row, "stop_moved_by_profit_lock", False)
         pos.trade_mode = getattr(row, "trade_mode", "intraday")
+        pos.strategy_version = getattr(row, "strategy_version", "") or ""
         pos.tp1_price = getattr(row, "tp1_price", 0.0)
         pos.tp2_price = getattr(row, "tp2_price", 0.0)
         pos.partial_closed = getattr(row, "partial_closed", False)

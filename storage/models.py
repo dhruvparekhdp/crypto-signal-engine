@@ -238,6 +238,9 @@ class CryptoSignalLog(Base):
     # a REJECT verdict's summary, and so on. Empty if it is still tracking
     # or it opened as a paper trade.
     rejection_reason: Mapped[str] = mapped_column(String, default="")
+    # Semver of the strategy declaration that produced this row. Empty when
+    # the signal is not one of the declared strategies.
+    strategy_version: Mapped[str] = mapped_column(String, default="")
     timestamp: Mapped[datetime] = mapped_column(DateTime, index=True)
 
 
@@ -728,6 +731,7 @@ class PaperPosition(Base):
     signal_type: Mapped[str] = mapped_column(String, default="")
     timeframe: Mapped[str] = mapped_column(String, default="")
     confidence: Mapped[float] = mapped_column(Float, default=0.0)
+    strategy_version: Mapped[str] = mapped_column(String, default="")
 
     opened_at: Mapped[datetime] = mapped_column(DateTime, index=True)
     expires_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
@@ -778,6 +782,7 @@ class PaperTrade(Base):
     signal_type: Mapped[str] = mapped_column(String, default="")
     timeframe: Mapped[str] = mapped_column(String, default="")
     confidence: Mapped[float] = mapped_column(Float, default=0.0)
+    strategy_version: Mapped[str] = mapped_column(String, default="")
     entry_slippage_pct: Mapped[float] = mapped_column(Float, default=0.0)
     hours_held: Mapped[float] = mapped_column(Float, default=0.0)
 
@@ -835,6 +840,15 @@ class StrategyRegistry(Base):
     params: Mapped[str] = mapped_column(String, default="")
     digest: Mapped[str] = mapped_column(String, default="")
     status: Mapped[str] = mapped_column(String, default="incubating")
+    # Declaration (analysis/strategy_catalog.py). `status` above stays the
+    # operational gate (incubating / trusted / paused). `lifecycle` is
+    # research / paper / retired.
+    name: Mapped[str] = mapped_column(String, default="")
+    version: Mapped[str] = mapped_column(String, default="")
+    lifecycle: Mapped[str] = mapped_column(String, default="research")
+    description: Mapped[str] = mapped_column(Text, default="")
+    parameter_schema: Mapped[str] = mapped_column(Text, default="{}")
+    owner_notes: Mapped[str] = mapped_column(Text, default="")
     live_from: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     note: Mapped[str] = mapped_column(Text, default="")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_now_utc)

@@ -17,6 +17,7 @@ from datetime import UTC, datetime
 
 from sqlalchemy import select
 
+from analysis.strategy_catalog import apply_declaration
 from storage.models import StrategyRegistry
 
 TRADING = ("incubating", "trusted")
@@ -92,13 +93,20 @@ async def sync(session, specs: list[tuple[str, str, dict]]) -> list[str]:
         p = ",".join(f"{k}={v}" for k, v in sorted(params.items()))
         row = rows.get(key)
         if row is None:
-            session.add(StrategyRegistry(spec_key=key, params=p, digest=dig, status="incubating", live_from=None,
-                                         note="registered", created_at=_now(), updated_at=_now()))
+            row = StrategyRegistry(
+                spec_key=key, params=p, digest=dig, status="incubating", live_from=None,
+                note="registered", created_at=_now(), updated_at=_now(),
+            )
+            apply_declaration(row, sid)
+            session.add(row)
             notes.append(f"{key}: registered (incubating)")
         elif row.digest != dig:
             row.digest, row.params, row.live_from, row.updated_at = dig, p, None, _now()
             row.note = "code or params changed: forward clock restarts at the next trade"
+            apply_declaration(row, sid)
             notes.append(f"{key}: changed, live_from reset")
+        else:
+            apply_declaration(row, sid)
     await session.commit()
     return notes
 

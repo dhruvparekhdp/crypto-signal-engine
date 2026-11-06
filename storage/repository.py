@@ -271,7 +271,11 @@ class Repository:
         rejection_reason: str = "",
         trade_mode: str = "intraday",
         veto_reason: str = "",
+        strategy_version: str = "",
     ) -> int:
+        if not strategy_version:
+            from analysis.strategy_catalog import version_for
+            strategy_version = version_for(signal_type, timeframe)
         row = CryptoSignalLog(
             symbol=symbol,
             signal_type=signal_type,
@@ -296,6 +300,7 @@ class Repository:
             rejection_reason=rejection_reason,
             trade_mode=trade_mode,
             veto_reason=veto_reason,
+            strategy_version=strategy_version,
             timestamp=_now_utc(),
         )
         self.session.add(row)
@@ -495,6 +500,7 @@ class Repository:
             signal_type=pos.signal_type,
             timeframe=pos.timeframe,
             confidence=pos.confidence,
+            strategy_version=getattr(pos, "strategy_version", "") or "",
             opened_at=pos.opened_at.replace(tzinfo=None),
             expires_at=pos.expires_at.replace(tzinfo=None) if pos.expires_at else None,
         )
@@ -588,6 +594,7 @@ class Repository:
             signal_type=pos.signal_type,
             timeframe=pos.timeframe,
             confidence=pos.confidence,
+            strategy_version=getattr(pos, "strategy_version", "") or "",
             entry_slippage_pct=trade.entry_slippage_pct,
             hours_held=trade.hours_held,
             opened_at=pos.opened_at.replace(tzinfo=None),
