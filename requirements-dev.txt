@@ -4,3 +4,4 @@ pytest-asyncio>=0.23
 ruff>=0.4
 mypy>=1.10
 scipy>=1.11
+pip-audit>=2.7

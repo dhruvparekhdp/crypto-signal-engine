@@ -1,0 +1,11 @@
+# Advisories whose only fixes are cryptography>=46.
+# requirements.txt pins cryptography>=43,<46. CRY-001 does not upgrade
+# dependencies, so these IDs stay ignored until that pin is raised on purpose.
+# Any other advisory fails `make audit`.
+PYSEC-2026-2141
+PYSEC-2026-35
+PYSEC-2026-36
+PYSEC-2026-3552
+PYSEC-2026-3553
+PYSEC-2026-3554
+GHSA-537c-gmf6-5ccf

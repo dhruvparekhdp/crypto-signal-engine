@@ -177,20 +177,25 @@ toolchain as of the last commit that touched it.
 ## Running locally
 
 ```bash
-python -m venv .venv
-source .venv/bin/activate
-pip install -r requirements.txt -r requirements-dev.txt
-cp .env.example .env   # fill in what you need — see Configuration below
-python main.py
+make setup
+make check          # lint, typecheck, tests
+# or, one at a time: make lint, make typecheck, make test, make audit, make secrets
 ```
+
+`make setup` creates `.venv` and installs `requirements.txt` and `requirements-dev.txt`.
+`make test` does not use the network or exchange keys. `.env.example` lists variable
+names only; copy the names you need into a private `.env` and set them there.
+
+The same checks run in GitHub Actions on every push and pull request
+(`.github/workflows/ci.yml`).
 
 Health check: `curl http://localhost:8080/health`
 Dashboard: `http://localhost:8080/`
 
-Run the tests:
+Run the app:
 
 ```bash
-.venv/bin/pytest tests/
+python main.py
 ```
 
 ## Deployment

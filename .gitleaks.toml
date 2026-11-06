@@ -1,0 +1,14 @@
+title = "crypto-signal-engine"
+
+[extend]
+useDefault = true
+
+[[allowlists]]
+description = "Published API-doc signature vectors and obvious unit-test placeholders. Not account credentials."
+paths = [
+  '''(^|/)tests/test_delta_india\.py$''',
+  '''(^|/)tests/test_live_book\.py$''',
+  '''(^|/)tests/test_finetune_pipeline\.py$''',
+  '''(^|/)tests/test_keys_page\.py$''',
+  '''(^|/)scripts/dev_server\.sh$''',
+]
