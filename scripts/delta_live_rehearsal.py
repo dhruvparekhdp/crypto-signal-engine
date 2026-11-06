@@ -21,6 +21,7 @@ import httpx
 async def main() -> int:
     from config.overrides import apply
     from config.settings import settings
+    from execution import live_guard
     from execution.delta_book import DeltaBook, leverage_for
     from execution.delta_india import USER_AGENT, DeltaIndia, binance_to_delta_symbol
     from scheduler.keys_page import _stored
@@ -118,7 +119,7 @@ async def main() -> int:
                 ev = await b.reconcile()
                 step(f"{side}: 12 reconcile clean", ev == [], ev)
                 sid = b._load_state()["positions"][dsym]["stop_order_id"]
-                await c.cancel_order(sid, p.id)                              # simulate a stop that vanished
+                await live_guard.delta_cancel_order(c, sid, p.id)            # simulate a stop that vanished
                 ev = await b.reconcile()
                 orders = await exchange_orders()
                 has_sl = any(o.get("stop_order_type") == "stop_loss_order" for o in orders)
@@ -131,12 +132,14 @@ async def main() -> int:
         except Exception as e:  # noqa: BLE001
             step("unexpected error", False, repr(e))
         finally:
+            # Cleanup is an order path too: it raises without the live-trading flags.
             try:
                 size = await c.position_size(p.id)
                 if size:
-                    await c.place_market(p.id, "buy" if size < 0 else "sell", abs(size), reduce_only=True)
-                await c.cancel_all(p.id)
-                await c._request("POST", f"/v2/products/{p.id}/orders/leverage", body={"leverage": str(lev_before)})
+                    await live_guard.delta_place_market(
+                        c, p.id, "buy" if size < 0 else "sell", abs(size), reduce_only=True)
+                await live_guard.delta_cancel_all(c, p.id)
+                await live_guard.delta_set_leverage(c, p.id, int(float(lev_before)))
                 print("cleanup: size", await c.position_size(p.id), "| leverage restored to", lev_before)
             except Exception as e:  # noqa: BLE001
                 print("cleanup warning:", repr(e)[:160])

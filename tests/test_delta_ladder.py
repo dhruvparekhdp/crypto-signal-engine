@@ -28,17 +28,23 @@ class FakeDelta:
             self.size = 0
         return self._order("market", side=side, size=size, reduce_only=reduce_only, average_fill_price="1.4")
 
-    async def place_stop_market(self, product_id, side, size, stop_price):
+    async def _record_stop(self, product_id, side, size, stop_price):
         return self._order("stop", side=side, size=size, stop_price=stop_price)
+
+    async def place_stop_market(self, product_id, side, size, stop_price):
+        return await self._record_stop(product_id, side, size, stop_price)
 
     async def place_take_profit_market(self, product_id, side, size, stop_price):
         return self._order("tp", side=side, size=size, stop_price=stop_price)
 
-    async def edit_stop(self, order_id, product_id, size, stop_price):
+    async def _record_edit(self, order_id, product_id, size, stop_price):
         if self.fail_edit:
             raise DeltaError(400, {"error": "edit_failed"})
         self.calls.append(("edit", {"id": order_id, "stop_price": stop_price}))
         return {"id": order_id, "stop_price": stop_price}
+
+    async def edit_stop(self, order_id, product_id, size, stop_price):
+        return await self._record_edit(order_id, product_id, size, stop_price)
 
     async def cancel_order(self, order_id, product_id):
         self.calls.append(("cancel", {"id": order_id}))
@@ -185,7 +191,8 @@ async def test_cancel_all_sends_the_product_in_the_body():
         async def _request(self, method, path, *, params=None, body=None, signed=True):
             sent.update(method=method, path=path, params=params, body=body)
             return {}
-    await Fake().cancel_all(93723)
+    from execution import live_guard
+    await live_guard.delta_cancel_all(Fake(), 93723)
     assert sent["method"] == "DELETE" and sent["params"] is None and sent["body"]["product_id"] == 93723
 
 
@@ -199,7 +206,7 @@ class FlakyEdit(FakeDelta):
         self.edits += 1
         if self.edits == 1:
             raise DeltaError(400, {"error": "order_not_found"})
-        return await super().edit_stop(order_id, product_id, size, stop_price)
+        return await self._record_edit(order_id, product_id, size, stop_price)
 
 
 @pytest.mark.asyncio
@@ -233,7 +240,7 @@ class ImmediateStop(FakeDelta):
     async def place_stop_market(self, product_id, side, size, stop_price):
         if self.calls and self.calls[-1][0] == "stop" or len([c for c in self.calls if c[0] == "stop"]) >= 1:
             raise DeltaError(400, {"error": {"code": "immediate_execution_stop_order"}})
-        return await super().place_stop_market(product_id, side, size, stop_price)
+        return await self._record_stop(product_id, side, size, stop_price)
 
 
 @pytest.mark.asyncio

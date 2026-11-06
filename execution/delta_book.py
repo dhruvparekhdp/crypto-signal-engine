@@ -8,6 +8,7 @@ Modes (settings.delta_india_mode):
   live    — place market + stop + take-profit on Delta. Requires:
               * delta_india_mode == "live"
               * delta_india_live_orders == True   (second gate)
+              * LIVE_TRADING_ENABLED and LIVE_TRADING_CONFIRM (execution/live_guard.py)
               * API key with Trading permission + IP whitelist
 
 Paper book stays the source of signals. This module never opens a Delta trade
@@ -24,6 +25,7 @@ from pathlib import Path
 
 import httpx
 
+from execution import live_guard
 from execution.delta_india import DeltaError, DeltaIndia, Product, binance_to_delta_symbol, round_to_tick
 
 SHADOW_PATH = Path("data/delta_shadow.jsonl")
@@ -433,7 +435,7 @@ class DeltaBook:
                                   plan.risk_inr, plan.inr_available, plan.leverage)
         if hasattr(self.client, "set_leverage"):
             try:
-                await self.client.set_leverage(plan.product_id, plan.leverage)
+                await live_guard.delta_set_leverage(self.client, plan.product_id, plan.leverage)
                 record["leverage"] = plan.leverage
             except DeltaError as e:
                 row.update(placed=False, error=f"leverage_not_set: {str(e)[:160]}")
@@ -450,14 +452,15 @@ class DeltaBook:
         positions[key] = record
         self._save_state(state)
         try:
-            entry_order = await self.client.place_market(plan.product_id, plan.side, plan.size)
+            entry_order = await live_guard.delta_place_market(self.client, plan.product_id, plan.side, plan.size)
             record.update(entry_fill=(entry_order or {}).get("average_fill_price") or "filled")
             self._update_record(key, record)
             close_side = "sell" if plan.side == "buy" else "buy"
             stop_order = None
             for attempt in range(2):                         # the stop is not optional: retry once, else go flat
                 try:
-                    stop_order = await self.client.place_stop_market(plan.product_id, close_side, plan.size, plan.stop)
+                    stop_order = await live_guard.delta_place_stop_market(
+                        self.client, plan.product_id, close_side, plan.size, plan.stop)
                     break
                 except DeltaError as e:
                     stop_err = e
@@ -473,8 +476,8 @@ class DeltaBook:
             tp_order = None
             if self.place_target:
                 try:
-                    tp_order = await self.client.place_take_profit_market(plan.product_id, close_side, plan.size,
-                                                                          plan.target)
+                    tp_order = await live_guard.delta_place_take_profit_market(
+                        self.client, plan.product_id, close_side, plan.size, plan.target)
                 except DeltaError as e:                      # the stop protects it; the engine still closes at target
                     row["tp_error"] = str(e)[:150]
             row.update({
@@ -568,20 +571,23 @@ class DeltaBook:
         if self.live:
             try:
                 try:
-                    await self.client.edit_stop(pos["stop_order_id"], pos["product_id"], pos["size"], want)
+                    await live_guard.delta_edit_stop(
+                        self.client, pos["stop_order_id"], pos["product_id"], pos["size"], want)
                 except DeltaError as first:
                     row["edit_error"] = str(first)[:160]
                     await asyncio.sleep(self.retry_delay_s)            # testnet 14 Oct: an amend right after the
                     try:                                                # stop was created failed once, then worked
-                        await self.client.edit_stop(pos["stop_order_id"], pos["product_id"], pos["size"], want)
+                        await live_guard.delta_edit_stop(
+                        self.client, pos["stop_order_id"], pos["product_id"], pos["size"], want)
                     except DeltaError:
                         # fallback: place the NEW stop first, then cancel the old one. Both are reduce-only, so two
                         # stops for a moment is harmless; zero stops (the old cancel-first order) was not.
                         close_side = "sell" if side > 0 else "buy"
-                        new = await self.client.place_stop_market(pos["product_id"], close_side, pos["size"], want)
+                        new = await live_guard.delta_place_stop_market(
+                            self.client, pos["product_id"], close_side, pos["size"], want)
                         old_id, pos["stop_order_id"] = pos["stop_order_id"], _oid(new)
                         try:
-                            await self.client.cancel_order(old_id, pos["product_id"])
+                            await live_guard.delta_cancel_order(self.client, old_id, pos["product_id"])
                         except DeltaError as e:
                             row["old_stop_cancel_error"] = str(e)[:160]
                 row["placed"] = True
@@ -622,19 +628,20 @@ class DeltaBook:
             close_side = "sell" if side > 0 else "buy"
             try:
                 if cur is None:
-                    pos["tp_order_id"] = _oid(await self.client.place_take_profit_market(
-                        pos["product_id"], close_side, pos["size"], want))
+                    pos["tp_order_id"] = _oid(await live_guard.delta_place_take_profit_market(
+                        self.client, pos["product_id"], close_side, pos["size"], want))
                 else:
                     try:
-                        await self.client.edit_stop(pos["tp_order_id"], pos["product_id"], pos["size"], want)
+                        await live_guard.delta_edit_stop(
+                            self.client, pos["tp_order_id"], pos["product_id"], pos["size"], want)
                     except DeltaError as first:
                         # new target first, then cancel the old one (both reduce-only, so two for a moment is harmless)
                         row["edit_error"] = str(first)[:160]
-                        new = await self.client.place_take_profit_market(pos["product_id"], close_side, pos["size"],
-                                                                         want)
+                        new = await live_guard.delta_place_take_profit_market(
+                            self.client, pos["product_id"], close_side, pos["size"], want)
                         old_id, pos["tp_order_id"] = pos["tp_order_id"], _oid(new)
                         try:
-                            await self.client.cancel_order(old_id, pos["product_id"])
+                            await live_guard.delta_cancel_order(self.client, old_id, pos["product_id"])
                         except DeltaError as e:
                             row["old_target_cancel_error"] = str(e)[:160]
                 row["placed"] = True
@@ -672,21 +679,21 @@ class DeltaBook:
                     theirs = sum(int(r.get("size") or 0) for _, r in others)
                     n = max(0, min(abs(size) - theirs, int(pos.get("size") or 0)))
                     if n:
-                        await self.client.place_market(pos["product_id"], "sell" if size > 0 else "buy", n,
-                                                       reduce_only=True)
+                        await live_guard.delta_place_market(
+                            self.client, pos["product_id"], "sell" if size > 0 else "buy", n, reduce_only=True)
                         row["closed_contracts"] = n
                     for oid in (pos.get("stop_order_id"), pos.get("tp_order_id")):
                         if oid:
                             try:
-                                await self.client.cancel_order(oid, pos["product_id"])
+                                await live_guard.delta_cancel_order(self.client, oid, pos["product_id"])
                             except DeltaError:
                                 pass                  # already filled or gone
                 elif size:
-                    await self.client.place_market(pos["product_id"], "sell" if size > 0 else "buy", abs(size),
-                                                   reduce_only=True)
+                    await live_guard.delta_place_market(
+                        self.client, pos["product_id"], "sell" if size > 0 else "buy", abs(size), reduce_only=True)
                     row["closed_contracts"] = abs(size)
                 if not others:
-                    await self.client.cancel_all(pos["product_id"])
+                    await live_guard.delta_cancel_all(self.client, pos["product_id"])
                 row["placed"] = True
             except DeltaError as e:
                 row["error"] = str(e)[:200]
@@ -738,7 +745,7 @@ class DeltaBook:
                     continue
             if size == 0:
                 try:
-                    await self.client.cancel_all(pos["product_id"])
+                    await live_guard.delta_cancel_all(self.client, pos["product_id"])
                 except DeltaError:
                     pass
                 state["positions"].pop(delta_sym, None)
@@ -757,8 +764,9 @@ class DeltaBook:
                     orders = await self.client.open_orders(pos["product_id"])
                     if not any(o.get("stop_order_type") == "stop_loss_order" for o in orders):
                         side = 1 if pos["side"] == "buy" else -1
-                        new = await self.client.place_stop_market(pos["product_id"], "sell" if side > 0 else "buy",
-                                                                  abs(size), pos["exchange_stop"])
+                        new = await live_guard.delta_place_stop_market(
+                            self.client, pos["product_id"], "sell" if side > 0 else "buy", abs(size),
+                            pos["exchange_stop"])
                         pos["stop_order_id"] = _oid(new)
                         events.append({"delta_symbol": delta_sym, "event": "stop_restored",
                                        "stop": pos["exchange_stop"]})
@@ -787,7 +795,7 @@ class DeltaBook:
         events = []
         if size == 0:
             try:
-                await self.client.cancel_all(pid)
+                await live_guard.delta_cancel_all(self.client, pid)
             except DeltaError:
                 pass
             for k, r in recs:
@@ -805,7 +813,7 @@ class DeltaBook:
                 for oid in (r.get("stop_order_id"), r.get("tp_order_id")):
                     if oid and oid in open_ids:
                         try:
-                            await self.client.cancel_order(oid, pid)
+                            await live_guard.delta_cancel_order(self.client, oid, pid)
                         except DeltaError:
                             pass
                 positions.pop(k, None)
@@ -822,8 +830,8 @@ class DeltaBook:
                 continue
             try:
                 side = 1 if r["side"] == "buy" else -1
-                new = await self.client.place_stop_market(pid, "sell" if side > 0 else "buy", int(r["size"]),
-                                                          r["exchange_stop"])
+                new = await live_guard.delta_place_stop_market(
+                    self.client, pid, "sell" if side > 0 else "buy", int(r["size"]), r["exchange_stop"])
                 r["stop_order_id"] = _oid(new)
                 events.append({"delta_symbol": delta_sym, "key": k, "event": "stop_restored",
                                "stop": r["exchange_stop"]})

@@ -22,6 +22,7 @@ import time
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
+from execution import live_guard
 from execution.binance_futures import BinanceError, SymbolRules
 
 DAY_MS = 86_400_000
@@ -173,9 +174,10 @@ class LiveBook:
                               paper_entry, paper_entry - sgn * stop_dist, rules, cfg.live_max_leverage)
             if not plan.ok:
                 return self._skip(sym, plan.reason, notional=round(plan.notional, 2), risk=round(plan.risk_usdt, 3))
-            await self.client.prepare(sym, plan.leverage)
-            fill = await self.client.market(sym, "BUY" if sgn > 0 else "SELL", plan.qty,
-                                            client_id=f"swing{now_ms // 1000}{sym[:4].lower()}")
+            await live_guard.binance_prepare(self.client, sym, plan.leverage)
+            fill = await live_guard.binance_market(
+                self.client, sym, "BUY" if sgn > 0 else "SELL", plan.qty,
+                client_id=f"swing{now_ms // 1000}{sym[:4].lower()}")
             entry = fill["avg_price"] or paper_entry
             qty = fill["qty"] or plan.qty
             stop = rules.round_price(entry - sgn * stop_dist)
@@ -186,8 +188,10 @@ class LiveBook:
             st.positions[sym] = lp
             st.save()
             try:
-                lp.protection.append(await self.client.protect(sym, close_side, "STOP_MARKET", stop))
-                lp.protection.append(await self.client.protect(sym, close_side, "TAKE_PROFIT_MARKET", target))
+                lp.protection.append(await live_guard.binance_protect(
+                    self.client, sym, close_side, "STOP_MARKET", stop))
+                lp.protection.append(await live_guard.binance_protect(
+                    self.client, sym, close_side, "TAKE_PROFIT_MARKET", target))
             except BinanceError as e:
                 # never leave an unprotected position: close it straight away
                 st.note("error", symbol=sym, where="protect", msg=str(e))
@@ -204,8 +208,9 @@ class LiveBook:
         try:
             pos = await self.client.position(sym)
             if abs(pos["amt"]) > 0:
-                await self.client.market(sym, "SELL" if pos["amt"] > 0 else "BUY", abs(pos["amt"]), reduce_only=True)
-            await self.client.cancel_all(sym)
+                await live_guard.binance_market(
+                    self.client, sym, "SELL" if pos["amt"] > 0 else "BUY", abs(pos["amt"]), reduce_only=True)
+            await live_guard.binance_cancel_all(self.client, sym)
         except BinanceError as e:
             self.state.note("error", symbol=sym, where="close", msg=str(e))
             return
@@ -239,7 +244,7 @@ class LiveBook:
                 continue
             if abs(pos["amt"]) == 0:
                 try:
-                    await self.client.cancel_all(sym)          # the other leg of stop/target is still resting
+                    await live_guard.binance_cancel_all(self.client, sym)  # other stop/target leg still resting
                 except BinanceError:
                     pass
                 await self._finish(lp, now_ms, "exchange_closed")
@@ -253,9 +258,13 @@ class LiveBook:
                     if await self.client.open_protection(sym) < 2:
                         close_side = "SELL" if lp.side == "long" else "BUY"
                         self.state.note("error", symbol=sym, where="monitor", msg="protection missing: re-armed")
-                        await self.client.cancel_all(sym)
-                        lp.protection = [await self.client.protect(sym, close_side, "STOP_MARKET", lp.stop),
-                                         await self.client.protect(sym, close_side, "TAKE_PROFIT_MARKET", lp.target)]
+                        await live_guard.binance_cancel_all(self.client, sym)
+                        lp.protection = [
+                            await live_guard.binance_protect(
+                                self.client, sym, close_side, "STOP_MARKET", lp.stop),
+                            await live_guard.binance_protect(
+                                self.client, sym, close_side, "TAKE_PROFIT_MARKET", lp.target),
+                        ]
                         self.state.save()
                 except BinanceError as e:
                     self.state.note("error", symbol=sym, where="rearm", msg=str(e))

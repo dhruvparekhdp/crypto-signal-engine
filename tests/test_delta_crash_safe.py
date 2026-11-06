@@ -18,7 +18,7 @@ class RejectStop(FakeDelta):
         if self.fails > 0:
             self.fails -= 1
             raise DeltaError(400, {"code": "invalid_stop"})
-        return await super().place_stop_market(product_id, side, size, stop_price)
+        return await self._record_stop(product_id, side, size, stop_price)
 
 
 @pytest.mark.asyncio

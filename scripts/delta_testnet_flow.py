@@ -20,6 +20,7 @@ SYMBOL = "xrpusdt"
 async def main() -> int:
     from config.overrides import apply
     from config.settings import settings
+    from execution import live_guard
     from execution.delta_book import DeltaBook
     from execution.delta_india import USER_AGENT, DeltaIndia
     try:
@@ -87,12 +88,14 @@ async def main() -> int:
         except Exception as e:  # noqa: BLE001
             step("unexpected error", False, str(e)[:200])
         finally:
+            # Cleanup is an order path too: it raises without the live-trading flags.
             if product is not None:
                 try:
                     size = await client.position_size(product.id)
                     if size:
-                        await client.place_market(product.id, "buy" if size < 0 else "sell", abs(size), reduce_only=True)
-                    await client.cancel_all(product.id)
+                        await live_guard.delta_place_market(
+                            client, product.id, "buy" if size < 0 else "sell", abs(size), reduce_only=True)
+                    await live_guard.delta_cancel_all(client, product.id)
                 except Exception as e:  # noqa: BLE001
                     print("cleanup warning:", str(e)[:120])
     passed = sum(ok for _, ok, _ in results)

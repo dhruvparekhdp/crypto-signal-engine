@@ -51,6 +51,22 @@ def _ai_ledger_in_tmp(tmp_path, monkeypatch):
 
 
 @_pytest.fixture(autouse=True)
+def _block_live_orders_except_guard_tests(request, monkeypatch):
+    """Existing fakes record orders in memory. They are not live.
+
+    tests.test_live_trading_guard is the only module that runs the real
+    assert_live_trading_allowed, and it clears both flags. Every other test
+    keeps the historical no-network fakes working without setting the flags.
+    """
+    if getattr(request.module, "__name__", "") == "tests.test_live_trading_guard":
+        monkeypatch.delenv("LIVE_TRADING_ENABLED", raising=False)
+        monkeypatch.delenv("LIVE_TRADING_CONFIRM", raising=False)
+        return
+    import execution.live_guard as live_guard
+    monkeypatch.setattr(live_guard, "assert_live_trading_allowed", lambda: None)
+
+
+@_pytest.fixture(autouse=True)
 def _no_live_perp_prices(monkeypatch):
     """Swing pricing fetches Binance futures prices live; tests must not touch the network (one test opts in)."""
     try:
